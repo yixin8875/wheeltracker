@@ -1,0 +1,9 @@
+[package]
+name = "wheel-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wheel strategy cost-basis engine: event-sourced accounting for US options."
+
+[dependencies]
+time.workspace = true
