@@ -89,3 +89,13 @@
 - **SHA-256**：`16e8aaa1cd77e02b384ad2e452b536b183b3081a6ab6fc1e8d5205711d1274ec`；`dist/release/` 下 sidecar 与 manifest 一致。
 - **验证**：101 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 41 项。
 - **兼容性**：数据库 schema 仍为 3；可从 0.4.0 覆盖安装，账本、备份与设置保留。
+
+## 0.5.0 发布记录（2026-11-04）
+
+- **内容**：美东交易日统一；导入行内编辑、批次 ID / 整批撤销、费用与调整金额去重、同日先平后开提示、AI 上传前确认；交易记录迁入台账并支持筛选 / 金额 / 单笔撤销；指派与拆股录入预览；恢复按钮与版本兜底修正；常见后端错误中文化。
+- **版本**：workspace、`Cargo.lock`、`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.5.0`。
+- **产物**：`target/release/bundle/nsis/Wheel Tracker_0.5.0_x64-setup.exe`，4,661,931 字节（4.45 MiB）。
+- **SHA-256**：`10decf04fac9bf5396bb3ccd8d5c9e4f70d49c0211d2f1513a683c7d7c75317a`；`dist/release/` 下 sidecar 与 manifest 一致。
+- **验证**：107 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 46 项。
+- **构建提交**：`d22bb96`；manifest `builtAt` 为 `2026-11-04T09:06:08Z`，target `x86_64-pc-windows-msvc`。
+- **兼容性**：数据库 schema 仍为 3；可从 0.4.1 覆盖安装，账本、备份与设置保留。
