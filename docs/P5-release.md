@@ -80,3 +80,12 @@
 - **验证**：116 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 42 项。
 - **脚本修复**：Windows 下 `npm` 为 `.cmd` shim，`release.py` 通过 `cmd /c` 启动，避免 `FileNotFoundError`。
 - **兼容性**：0.4.0 数据库 schema 为 3，已发布的 0.3.0（schema 2）无法打开新库；升级请使用 0.4.0 安装包覆盖。
+
+## 0.4.1 发布记录（2026-11-04）
+
+- **内容**：移除邮件导入（「邮件」模式、`text_import_preview` 与 MIME / 券商文本解析）；导入方式保留 CSV 与 AI 截图。
+- **版本**：workspace、`Cargo.lock`、`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.4.1`。
+- **产物**：`target/release/bundle/nsis/Wheel Tracker_0.4.1_x64-setup.exe`，4,631,289 字节（4.42 MiB）。
+- **SHA-256**：`16e8aaa1cd77e02b384ad2e452b536b183b3081a6ab6fc1e8d5205711d1274ec`；`dist/release/` 下 sidecar 与 manifest 一致。
+- **验证**：101 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 41 项。
+- **兼容性**：数据库 schema 仍为 3；可从 0.4.0 覆盖安装，账本、备份与设置保留。
