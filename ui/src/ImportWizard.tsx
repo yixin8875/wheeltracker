@@ -51,7 +51,7 @@ const MAPPING_SOURCE = {
   manual: '手动映射'
 } as const;
 
-export function ImportWizard({ onCommitted }: { onCommitted: (message: string) => void }) {
+export function ImportWizard({ accountId, onCommitted }: { accountId: string; onCommitted: (message: string) => void }) {
   const [step, setStep] = useState<Step>('source');
   const [paste, setPaste] = useState('');
   const [fileName, setFileName] = useState('');
@@ -88,7 +88,7 @@ export function ImportWizard({ onCommitted }: { onCommitted: (message: string) =
     setInfo('');
     try {
       const result = await api<ImportPreview>('import_preview', {
-        req: { text, mapping: nextMapping ?? undefined }
+        req: { text, mapping: nextMapping ?? undefined, accountId }
       });
       const initial: Record<number, boolean> = {};
       for (const row of result.rows) {
@@ -178,6 +178,7 @@ export function ImportWizard({ onCommitted }: { onCommitted: (message: string) =
     try {
       const summary = await api<ImportSummary>('import_commit', {
         req: {
+          accountId,
           origin: fileName || '粘贴文本',
           allowDuplicates,
           rows: selectedRows.map(row => ({ rowNumber: row.rowNumber, event: row.event! }))

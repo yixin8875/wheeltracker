@@ -32,8 +32,9 @@ export interface Price { symbol: string; date: string; close: number; source: st
 export interface SymbolMatch { symbol: string; name: string; exchange: string }
 export interface MarketQuote { symbol: string; name: string; price: number; previousClose: number | null; changePercent: number | null; quotedAt: string; source: string; currency: string }
 export interface QuoteRefresh { updated: Price[]; failed: { symbol: string; error: string }[] }
-export interface AppInfo { version: string; dbPath: string; accountId: string }
-export interface NewEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry?: string; strike?: number; right?: string; note?: string }
+export interface Account { id: string; name: string; broker: string | null; currency: string; createdAt: string }
+export interface AppInfo { version: string; dbPath: string }
+export interface NewEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry?: string; strike?: number; right?: string; note?: string; accountId?: string }
 export interface EventRow { id: string; date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; note: string; expiry: string | null; strike: number | null; right: string | null }
 
 export type ImportField = 'date' | 'kind' | 'action' | 'symbol' | 'optionSymbol' | 'qty' | 'price' | 'fees' | 'amount' | 'expiry' | 'strike' | 'right' | 'note';

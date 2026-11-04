@@ -617,7 +617,10 @@ optiontrader/
 ```rust
 list_campaigns(account_id) -> Vec<CampaignView>
 get_dashboard(account_id) -> DashboardView
-get_campaign(campaign_id) -> CampaignDetail
+get_campaign(campaign_id, account_id) -> CampaignDetail
+list_accounts() -> Vec<AccountView>
+create_account(name) -> AccountView            // 名称唯一，≤50 个账户
+rename_account(account_id, name) -> AccountView
 add_event(req: NewEventReq) -> EventId
 delete_event(event_id) -> ()          // 软删除 + 重建
 rebuild_all(account_id) -> RebuildReport
@@ -646,6 +649,13 @@ restore_status() -> RestoreStatus
 - **自动备份**：应用启动及后台线程每 30 分钟读取 UTC 日期，`lastAutoBackupDay` 相同则跳过；恢复 marker 存在时跳过。成功生成 `auto-*.sqlite` 后更新日期，再按 `autoBackupKeep` 清理旧自动备份；手动备份与 `pre-restore-*` 不受影响。
 - **恢复协议**：`restore/pending.json` 只存文件名、安全快照名与请求时间。暂存时先只读校验备份，再用 `VACUUM INTO` 生成 `pre-restore-*.sqlite`，最后原子写 marker。下次启动在 `store::open` 之前执行 `apply_pending`：重新校验 → 归档 `wheel.db` 与 WAL/SHM/journal → 复制为临时文件并校验 → 替换 `wheel.db`；任一步失败回滚并隔离 marker，回滚失败则中止启动，绝不静默新建空库。成功保留最近 3 组归档。marker 存在期间所有写入命令返回「已安排恢复，请重启应用」。
 - **偏好**：`reminderLeadDays`（0–60，默认 7）、`autoBackupEnabled`（默认开）、`autoBackupKeep`（1–100，默认 7）存于 `settings` 键值表，严格解析，非法值不会部分写入。
+
+### 8.6 P4 多账户
+
+- **模型**：沿用既有 `accounts` 表；事件带 `account_id`，重放与不变量按账户独立执行。`main` / 默认账户在首次启动时创建，旧账本无需迁移。
+- **选择**：当前账户存于前端 `localStorage`（`wheel.account`）；读取 `list_accounts` 后若该 ID 不存在则回退到最早创建的账户。切换账户会清除战役详情并刷新仪表盘、持仓、台账与事件。
+- **隔离范围**：仪表盘、持仓、台账、事件日志、战役详情、录入与 CSV 导入均传 `accountId`；行情报价、成本口径、备份与恢复为全局资源。
+- **管理**：设置 → 账户显示币种与建立日期，支持新建与重命名；名称去首尾空白、1–40 字符、不含控制字符、不区分大小写唯一，最多 50 个账户。暂存恢复期间拒绝新建与重命名。
 
 ---
 
@@ -704,7 +714,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
 | **P2 导入** 🟡 | CSV 映射向导 + 去重（已完成）；截图 OCR + 邮件文本解析（未做） | 历史数据可批量补录 | CSV 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** | 多账户 + SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 按需 |
+| **P4 扩展** 🟡 | 多账户（已完成）+ SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

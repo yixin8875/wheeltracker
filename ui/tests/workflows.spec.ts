@@ -9,6 +9,7 @@ async function setup(page: Page) {
     const entry = { id: 'entry', campaignId: 'campaign', symbol: 'TEST', contract: position.contract, right: 'P', qty: 1, openQty: 0, openedAt: '2026-01-02', closedAt: '2026-02-20', status: 'closed', premiumGross: 200, fees: 1, closeCost: 324.5, netPremium: -125.5, collateral: 15000, daysHeld: 49, annualizedReturn: -.0623 };
     const state = window as any;
     state.isTauri = true; state.testCalls = []; state.testReject = false;
+    state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }];
     state.testRejectSettings = false; state.testPartial = false;
     state.testRejectMetadata = false; state.testRejectDashboard = false;
     const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 };
@@ -27,6 +28,7 @@ async function setup(page: Page) {
       switch (command) {
         case 'dashboard':
           if (state.testRejectDashboard) throw new Error('dashboard read failed');
+          if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
           return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
         case 'positions': return [position];
@@ -51,7 +53,21 @@ async function setup(page: Page) {
         case 'set_price': state.testPrices = [{ symbol: args.symbol, date: args.date, close: args.close, source: '手动', quotedAt: null }]; return null;
         case 'app_info':
           if (state.testRejectMetadata) throw new Error('metadata read failed');
-          return { version: '0.2.0', dbPath: 'test-only/wheel.db', accountId: 'main' };
+          return { version: '0.2.0', dbPath: 'test-only/wheel.db' };
+        case 'list_accounts': return [...state.testAccounts];
+        case 'create_account': {
+          if (state.testAccounts.some((account: any) => account.name === args.name)) throw new Error('账户名称已存在。');
+          const created = { id: `acct-${state.testAccounts.length + 1}`, name: String(args.name), broker: null, currency: 'USD', createdAt: '2026-11-03' };
+          state.testAccounts.push(created);
+          return created;
+        }
+        case 'rename_account': {
+          const account = state.testAccounts.find((item: any) => item.id === args.accountId);
+          if (!account) throw new Error('账户不存在。');
+          if (state.testAccounts.some((item: any) => item.id !== args.accountId && item.name === args.name)) throw new Error('账户名称已存在。');
+          account.name = String(args.name);
+          return { ...account };
+        }
         case 'get_settings': return { ...preferences };
         case 'set_settings':
           if (state.testRejectSettings) throw new Error('settings write failed');
@@ -520,4 +536,39 @@ test('cost chart overlays saved price and the next call strike', async ({ page }
   const header = page.getByRole('row').filter({ hasText: '日期' }).first();
   await expect(header).toContainText('参考价');
   await expect(header).toContainText('成本变化 B');
+});
+
+test('creating and switching an account scopes reads and new entries', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByLabel('切换账户')).toHaveValue('main');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '账户', exact: true }).click();
+  await page.getByLabel('新账户名称').fill('长期账户');
+  await page.getByRole('button', { name: '创建并切换' }).click();
+  await expect(page.getByLabel('切换账户')).toHaveValue('acct-2');
+  await expect(page.locator('header')).toContainText('长期账户');
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1).args.accountId)).toBe('acct-2');
+  expect(await page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await page.getByLabel('交易类型').selectOption('shares_buy');
+  await page.getByLabel('标的代码').fill('OTHER');
+  await page.getByLabel('股数', { exact: true }).fill('100');
+  await page.getByLabel('每股成交价', { exact: true }).fill('20');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req.accountId)).toBe('acct-2');
+  await page.getByLabel('切换账户').selectOption('main');
+  await expect(page.locator('header')).toContainText('默认账户');
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1).args.accountId)).toBe('main');
+});
+
+test('renaming the current account updates the switcher and header', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '账户', exact: true }).click();
+  await page.getByRole('button', { name: '重命名 默认账户' }).click();
+  await page.getByLabel('重命名 默认账户').fill('主账户');
+  await page.getByRole('button', { name: '保存名称' }).click();
+  await expect(page.getByLabel('切换账户')).toContainText('主账户');
+  await expect(page.locator('header')).toContainText('主账户');
+  await expect(page.getByRole('status')).toContainText('重命名为「主账户」');
 });

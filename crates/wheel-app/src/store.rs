@@ -254,6 +254,72 @@ pub fn ensure_account(conn: &Connection, id: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRecord {
+    pub id: String,
+    pub name: String,
+    pub broker: Option<String>,
+    pub currency: String,
+    pub created_at: String,
+}
+
+pub fn list_accounts(conn: &Connection) -> Result<Vec<AccountRecord>> {
+    let mut statement = conn.prepare(
+        "SELECT id, name, broker, currency, created_at
+         FROM accounts ORDER BY created_at, name, id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(AccountRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            broker: row.get(2)?,
+            currency: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .context("cannot list accounts")
+}
+
+pub fn insert_account(conn: &Connection, id: &str, name: &str, created_at: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO accounts (id, name, broker, currency, created_at)
+         VALUES (?1, ?2, NULL, 'USD', ?3)",
+        params![id, name, created_at],
+    )
+    .with_context(|| format!("cannot create account `{id}`"))?;
+    Ok(())
+}
+
+pub fn rename_account(conn: &Connection, id: &str, name: &str) -> Result<bool> {
+    let changed = conn
+        .execute(
+            "UPDATE accounts SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )
+        .with_context(|| format!("cannot rename account `{id}`"))?;
+    Ok(changed > 0)
+}
+
+pub fn account_exists(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
+        params![id],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+pub fn account_name_taken(conn: &Connection, name: &str, exclude_id: Option<&str>) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM accounts
+            WHERE lower(name) = lower(?1) AND (?2 IS NULL OR id <> ?2)
+         )",
+        params![name.trim(), exclude_id],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
 /// The desktop UI runs in the user's timezone but the log stores plain dates;
 /// UTC keeps the default deterministic when no timezone data is available.
 pub fn today() -> Date {
@@ -1076,6 +1142,34 @@ mod tests {
         assert_eq!(
             get_last_auto_backup_day(&conn).unwrap().as_deref(),
             Some("2026-01-02")
+        );
+    }
+
+    #[test]
+    fn accounts_can_be_listed_created_and_renamed_without_duplicate_names() {
+        let conn = db();
+        ensure_account(&conn, "main", "默认账户").unwrap();
+        conn.execute("UPDATE accounts SET created_at = '2000-01-01' WHERE id = 'main'", [])
+            .unwrap();
+        let accounts = list_accounts(&conn).unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].name, "默认账户");
+        assert_eq!(accounts[0].currency, "USD");
+
+        insert_account(&conn, "second", "第二个账户", "2026-11-04").unwrap();
+        assert!(insert_account(&conn, "second", "重复 ID", "2026-11-04").is_err());
+        assert!(account_exists(&conn, "second").unwrap());
+        assert!(!account_exists(&conn, "missing").unwrap());
+        assert!(account_name_taken(&conn, " 第二个账户 ", None).unwrap());
+        assert!(!account_name_taken(&conn, "第二个账户", Some("second")).unwrap());
+        assert!(!account_name_taken(&conn, "全新账户", None).unwrap());
+
+        assert!(rename_account(&conn, "second", "长期账户").unwrap());
+        assert!(!rename_account(&conn, "missing", "无此账户").unwrap());
+        let accounts = list_accounts(&conn).unwrap();
+        assert_eq!(
+            accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
+            vec!["默认账户", "长期账户"]
         );
     }
 }

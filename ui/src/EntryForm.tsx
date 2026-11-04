@@ -3,7 +3,7 @@ import { api, labels, money, percent, today } from './lib';
 import type { NewEvent, Position } from './types';
 import { SymbolPicker } from './SymbolPicker';
 import { QuoteReference } from './MarketData';
-export function EntryForm({ initial, positions, onSaved }: { initial?: Partial<NewEvent>; positions: Position[]; onSaved: (message: string) => void }) {
+export function EntryForm({ initial, positions, accountId, onSaved }: { initial?: Partial<NewEvent>; positions: Position[]; accountId: string; onSaved: (message: string) => void }) {
   const defaults: NewEvent = { date: today(), kind: 'option_open_short', symbol: '', qty: 1, price: 0, fees: 0, amount: 0, expiry: '', strike: 0, right: 'P', note: '' };
   const [form, setForm] = useState<NewEvent>({ ...defaults, ...initial }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [keep, setKeep] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -22,7 +22,7 @@ export function EntryForm({ initial, positions, onSaved }: { initial?: Partial<N
     if (busy || submitted) return;
     setError(''); setBusy(true);
     try {
-      const req = { ...form, symbol: form.symbol.trim().toUpperCase(), ...(!option ? { expiry: undefined, strike: undefined, right: undefined } : {}), ...(!hasPrice ? { price: 0 } : {}), ...(!hasFees ? { fees: 0 } : {}) };
+      const req = { ...form, accountId, symbol: form.symbol.trim().toUpperCase(), ...(!option ? { expiry: undefined, strike: undefined, right: undefined } : {}), ...(!hasPrice ? { price: 0 } : {}), ...(!hasFees ? { fees: 0 } : {}) };
       if (rolling) {
         await api<string[]>('add_events', { reqs: [req, { ...req, kind: 'option_open_short', ...next }] });
       } else {

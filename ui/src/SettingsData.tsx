@@ -12,8 +12,8 @@ function sizeLabel(bytes: number) {
   return `${bytes} B`;
 }
 
-export function SettingsData({ info, events, campaigns, entries, positions, settings, restoreStatus, onRestoreStatus, onNotice, onError, onPreferencesSaved }: {
-  info: AppInfo | null; events: EventRow[]; campaigns: Campaign[]; entries: Entry[]; positions: Position[];
+export function SettingsData({ accountId, info, events, campaigns, entries, positions, settings, restoreStatus, onRestoreStatus, onNotice, onError, onPreferencesSaved }: {
+  accountId: string; info: AppInfo | null; events: EventRow[]; campaigns: Campaign[]; entries: Entry[]; positions: Position[];
   settings: AccountingSettings | null; restoreStatus: RestoreStatus | null;
   onRestoreStatus: (status: RestoreStatus) => void; onNotice: (message: string) => void; onError: (message: string) => void;
   onPreferencesSaved: (settings: AccountingSettings) => void;
@@ -47,7 +47,7 @@ export function SettingsData({ info, events, campaigns, entries, positions, sett
     if (working) return;
     setWorking('rebuild');
     try {
-      const result = await api<{ events: number; campaigns: number; entries: number; issues: string[] }>('rebuild');
+      const result = await api<{ events: number; campaigns: number; entries: number; issues: string[] }>('rebuild', { accountId });
       if (result.issues.length) onError(result.issues.join('；'));
       else onNotice(`检查通过：${result.events} 笔交易、${result.campaigns} 个战役、${result.entries} 条台账。`);
     } catch (failure) { onError(String(failure)); }

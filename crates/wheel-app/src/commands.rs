@@ -175,18 +175,21 @@ pub fn dashboard(
 pub fn campaign_detail(
     state: State<'_, AppState>,
     campaign_id: String,
+    account_id: Option<String>,
 ) -> Result<views::CampaignDetailView, String> {
-    campaign_detail_for(&state.conn(), &campaign_id)
+    let account_id = account_or_default(account_id);
+    campaign_detail_for(&state.conn(), &account_id, &campaign_id)
 }
 
 fn campaign_detail_for(
     conn: &rusqlite::Connection,
+    account_id: &str,
     campaign_id: &str,
 ) -> Result<views::CampaignDetailView, String> {
-    let events = store::list_events(conn, "main").map_err(|error| error.to_string())?;
+    let events = store::list_events(conn, account_id).map_err(|error| error.to_string())?;
     let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
-    let derived =
-        store::replay_checked("main", &events, settings).map_err(|error| format!("{error:#}"))?;
+    let derived = store::replay_checked(account_id, &events, settings)
+        .map_err(|error| format!("{error:#}"))?;
     let today = store::today();
     let prices = store::latest_prices(conn).map_err(|error| error.to_string())?;
     let campaign = derived
@@ -747,8 +750,112 @@ pub fn app_info(state: State<'_, AppState>) -> views::AppInfoView {
     views::AppInfoView {
         version: env!("CARGO_PKG_VERSION").to_string(),
         db_path: state.db_path.clone(),
-        account_id: "main".to_string(),
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    pub id: String,
+    pub name: String,
+    pub broker: Option<String>,
+    pub currency: String,
+    pub created_at: String,
+}
+
+impl From<store::AccountRecord> for AccountView {
+    fn from(account: store::AccountRecord) -> Self {
+        Self {
+            id: account.id,
+            name: account.name,
+            broker: account.broker,
+            currency: account.currency,
+            created_at: account.created_at,
+        }
+    }
+}
+
+fn valid_account_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("账户名称不能为空。".to_string());
+    }
+    if name.chars().count() > 40 {
+        return Err("账户名称不能超过 40 个字符。".to_string());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("账户名称不能包含换行或控制字符。".to_string());
+    }
+    Ok(name.to_string())
+}
+
+#[tauri::command]
+pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountView>, String> {
+    let conn = state.conn();
+    store::list_accounts(&conn)
+        .map(|accounts| accounts.into_iter().map(AccountView::from).collect())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn create_account(state: State<'_, AppState>, name: String) -> Result<AccountView, String> {
+    ensure_no_pending_restore(&state)?;
+    let name = valid_account_name(&name)?;
+    let conn = state.conn();
+    if store::account_name_taken(&conn, &name, None).map_err(|error| error.to_string())? {
+        return Err("已存在同名账户，请换一个名称。".to_string());
+    }
+    let count = store::list_accounts(&conn)
+        .map_err(|error| error.to_string())?
+        .len();
+    if count >= 50 {
+        return Err("账户数量已达上限 50 个。".to_string());
+    }
+    let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let mut id = format!("acct-{stamp}");
+    let mut attempt = 0;
+    while store::account_exists(&conn, &id).map_err(|error| error.to_string())? {
+        attempt += 1;
+        id = format!("acct-{stamp}-{attempt}");
+    }
+    let created_at = store::today().to_string();
+    store::insert_account(&conn, &id, &name, &created_at)
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(AccountView {
+        id,
+        name,
+        broker: None,
+        currency: "USD".to_string(),
+        created_at,
+    })
+}
+
+#[tauri::command]
+pub fn rename_account(
+    state: State<'_, AppState>,
+    account_id: String,
+    name: String,
+) -> Result<AccountView, String> {
+    ensure_no_pending_restore(&state)?;
+    let name = valid_account_name(&name)?;
+    let conn = state.conn();
+    if !store::account_exists(&conn, &account_id).map_err(|error| error.to_string())? {
+        return Err("账户不存在。".to_string());
+    }
+    if store::account_name_taken(&conn, &name, Some(&account_id))
+        .map_err(|error| error.to_string())?
+    {
+        return Err("已存在同名账户，请换一个名称。".to_string());
+    }
+    if !store::rename_account(&conn, &account_id, &name).map_err(|error| error.to_string())? {
+        return Err("账户不存在。".to_string());
+    }
+    let account = store::list_accounts(&conn)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|account| account.id == account_id)
+        .ok_or_else(|| "账户不存在。".to_string())?;
+    Ok(account.into())
 }
 
 #[derive(Deserialize)]
@@ -992,6 +1099,15 @@ mod tests {
     }
 
     #[test]
+    fn account_names_are_trimmed_and_validated() {
+        assert_eq!(valid_account_name("  长期账户 ").unwrap(), "长期账户");
+        assert!(valid_account_name("   ").is_err());
+        assert!(valid_account_name(&"x".repeat(41)).is_err());
+        assert!(valid_account_name("line\nbreak").is_err());
+        assert!(valid_account_name(&"账".repeat(41)).is_err());
+    }
+
+    #[test]
     fn pending_restore_blocks_every_write_path_guard() {
         let data_dir = std::env::temp_dir().join(format!(
             "wheel-commands-pending-{}",
@@ -1090,12 +1206,12 @@ mod tests {
             ],
         )
         .unwrap();
-        let before = campaign_detail_for(&conn, "main#c0").unwrap().campaign;
+        let before = campaign_detail_for(&conn, "main", "main#c0").unwrap().campaign;
         assert_eq!(before.cost_a, Some(150.0));
         assert_eq!(before.cost_b, Some(150.0));
         assert_eq!(before.cost_c, Some(150.0));
         store::set_settings(&conn, true).unwrap();
-        let after = campaign_detail_for(&conn, "main#c0").unwrap().campaign;
+        let after = campaign_detail_for(&conn, "main", "main#c0").unwrap().campaign;
         assert_eq!(after.cost_a, before.cost_a);
         assert_eq!(after.cost_b, Some(148.0));
         assert_eq!(after.cost_c, Some(148.0));
@@ -1150,8 +1266,8 @@ mod tests {
             Event::adjustment("main", "adjust-new", 9, date(), "AAPL", -3.0),
         ];
         store::insert_events(&conn, &events).unwrap();
-        let old = campaign_detail_for(&conn, "main#c0").unwrap();
-        let new = campaign_detail_for(&conn, "main#c1").unwrap();
+        let old = campaign_detail_for(&conn, "main", "main#c0").unwrap();
+        let new = campaign_detail_for(&conn, "main", "main#c1").unwrap();
         assert_eq!(
             old.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
             vec!["buy-old", "div-old", "fee-old", "adjust-old", "close-old"]
@@ -1208,7 +1324,7 @@ mod tests {
             let before = store::list_events(&conn, "main").unwrap();
             let changes = conn.total_changes();
             let next_seq = store::next_seq(&conn, "main").unwrap();
-            let detail = campaign_detail_for(&conn, "main#c0").unwrap();
+            let detail = campaign_detail_for(&conn, "main", "main#c0").unwrap();
             assert_eq!(detail.call_scenarios.len(), if partial { 2 } else { 1 });
             assert_eq!(conn.total_changes(), changes);
             assert_eq!(store::next_seq(&conn, "main").unwrap(), next_seq);
@@ -1311,7 +1427,7 @@ mod tests {
         )
         .unwrap();
         let changes = conn.total_changes();
-        assert!(campaign_detail_for(&conn, "main#c0")
+        assert!(campaign_detail_for(&conn, "main", "main#c0")
             .err()
             .unwrap()
             .contains("only 100 held"));

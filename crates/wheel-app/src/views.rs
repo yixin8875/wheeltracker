@@ -215,7 +215,6 @@ pub struct RefreshQuotesView {
 pub struct AppInfoView {
     pub version: String,
     pub db_path: String,
-    pub account_id: String,
 }
 
 pub fn campaign_card(
