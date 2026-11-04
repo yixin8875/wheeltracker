@@ -54,7 +54,10 @@
 
 ## 8. 已知限制
 
-- [ ] 安装包未签名，首次运行可能出现 SmartScreen 提示；发布说明需注明。
-- [ ] 不提供自动更新；升级需手动下载新安装包覆盖。
+- [ ] GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY` 已配置（使用无密码密钥时无需 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）；不要提交私钥。
+- [ ] GitHub Release 包含安装包、`.exe.sig`、`release-manifest.json` 与 `latest.json`。
+- [ ] `latest.json` 的 `platforms.windows-x86_64.url` 指向本版本安装包，`signature` 与 `.exe.sig` 内容一致。
+- [ ] 安装包未做 Authenticode 签名，首次运行可能出现 SmartScreen 提示；发布说明需注明。
+- [ ] 自动更新：从上一版本启动应用，能发现新版本并完成下载、验签与安装；更新后重启显示新版本。
 - [ ] 不提供单实例、日志上传或崩溃上报插件。
 - [ ] 旧版应用拒绝打开新版数据库；回滚需先恢复旧版备份。

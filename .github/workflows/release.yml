@@ -51,6 +51,9 @@ jobs:
         run: cargo fetch
 
       - name: Build installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: python -I scripts/release.py
 
       - name: Tag release
@@ -71,5 +74,7 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             target/release/bundle/nsis/Wheel Tracker_${{ steps.bump.outputs.version }}_x64-setup.exe
+            target/release/bundle/nsis/Wheel Tracker_${{ steps.bump.outputs.version }}_x64-setup.exe.sig
             dist/release/Wheel Tracker_${{ steps.bump.outputs.version }}_x64-setup.exe.sha256
             dist/release/release-manifest.json
+            dist/release/latest.json

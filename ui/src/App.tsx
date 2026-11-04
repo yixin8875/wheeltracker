@@ -18,6 +18,7 @@ import { VisionSettings } from './VisionSettings';
 import { AccountsPanel } from './Accounts';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
+import { Updater } from './Updater';
 
 const ACCOUNT_KEY = 'wheel.account';
 type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
@@ -159,6 +160,7 @@ export default function App() {
     </div>)}</nav><div className="sidebar-bottom"><div className="connection-line"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}</div><label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small><button className={`sidebar-settings ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Settings size={16}/>设置</button></div></aside>
     <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
+    <Updater/>
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
     {notice && <div className="alert success" role="status">{notice}</div>}
     {restoreStatus?.pending && <div className="alert error" role="alert">已安排从 {restoreStatus.pending.backupFile} 恢复账本，将在下次启动时替换当前数据库。请完全退出并重新启动应用；在重启前账本只读。安全快照：{restoreStatus.pending.safetyFile}</div>}

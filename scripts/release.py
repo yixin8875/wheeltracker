@@ -163,19 +163,56 @@ def rust_target() -> str:
     return "unknown"
 
 
+def updater_manifest(version: str, path: Path, built_at: str) -> Path | None:
+    signature_path = path.with_name(path.name + ".sig")
+    if not signature_path.exists():
+        print(f"warning: {signature_path.name} missing; updater manifest not written")
+        return None
+
+    signature = signature_path.read_text(encoding="utf-8").strip()
+    if not signature:
+        fail(f"{signature_path} is empty")
+
+    # GitHub replaces spaces in asset names with dots; the updater downloads
+    # through the release asset URL, so mirror that name exactly.
+    asset_name = path.name.replace(" ", ".")
+    url = (
+        f"https://github.com/yixin8875/wheeltracker/releases/download/"
+        f"v{version}/{asset_name}"
+    )
+    document = {
+        "version": version,
+        "notes": f"Wheel Tracker v{version}",
+        "pub_date": built_at,
+        "platforms": {
+            "windows-x86_64": {
+                "signature": signature,
+                "url": url,
+            }
+        },
+    }
+    path_out = DIST / "latest.json"
+    path_out.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return path_out
+
+
 def package(version: str) -> None:
     path = installer(version)
     digest = sha256(path)
+    built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     DIST.mkdir(parents=True, exist_ok=True)
 
     sidecar = DIST / f"{path.name}.sha256"
     sidecar.write_text(f"{digest}  {path.name}\n", encoding="utf-8")
 
+    updater_path = updater_manifest(version, path, built_at)
     manifest = {
         "product": "Wheel Tracker",
         "version": version,
         "gitCommit": git_commit(),
-        "builtAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "builtAt": built_at,
         "target": rust_target(),
         "installer": {
             "fileName": path.name,
@@ -183,7 +220,7 @@ def package(version: str) -> None:
             "sha256": digest,
         },
         "signing": "unsigned",
-        "updater": "not-configured",
+        "updater": "tauri-v2-signed" if updater_path else "not-configured",
     }
     manifest_path = DIST / "release-manifest.json"
     manifest_path.write_text(
@@ -194,6 +231,8 @@ def package(version: str) -> None:
     print(f"sha256:    {digest}")
     print(f"sidecar:   {sidecar}")
     print(f"manifest:  {manifest_path}")
+    if updater_path:
+        print(f"updater:   {updater_path}")
 
 
 def main() -> None:

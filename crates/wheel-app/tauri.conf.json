@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
     "publisher": "Wheel Tracker contributors",
     "copyright": "Copyright © 2026 Wheel Tracker contributors",
@@ -43,6 +44,17 @@
         "installerIcon": "icons/icon.ico",
         "startMenuFolder": "Wheel Tracker",
         "compression": "lzma"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2N0FEMDRFMDZDQ0I0QTUKUldTbHRNd0dUdEI2NW8yUEg3UC9uQndNQmxMWGRJb0daY0JOVnBnS29qQzRabzcySW9La3AwSEUK",
+      "endpoints": [
+        "https://github.com/yixin8875/wheeltracker/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

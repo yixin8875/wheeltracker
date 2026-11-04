@@ -3,6 +3,12 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- 应用启动时检查 GitHub Release，并通过 Tauri updater 下载、验签、安装新版本，完成后可一键重启
+
 ## [0.5.1] - 2026-11-04
 
 ### Changed

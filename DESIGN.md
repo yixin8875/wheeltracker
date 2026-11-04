@@ -719,7 +719,7 @@ restore_status() -> RestoreStatus
 - **数据库保护**：当前 schema `user_version = 3`；更高版本数据库拒绝打开；备份校验同样拒绝更高版本快照并提示升级应用，避免旧版破坏新数据。
 - **发布产物**：`scripts/release.py` 依次执行版本检查、`cargo test --workspace`、clippy、前端构建与 NSIS 打包，然后在 `dist/release/` 写出 `<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（产品、版本、git 提交、UTC 构建时间、目标三元组、文件名、大小、SHA-256、`signing: "unsigned"`、`updater: "not-configured"`）。产物目录不纳入版本控制。
 - **自动化**：`.github/workflows/windows-ci.yml` 在 push / PR / 手动触发时运行 Rust 测试、clippy 与前端构建；Playwright 依赖 Edge 与开发服务器，暂为本地 / 人工门禁。安装、覆盖升级、卸载与 CSP 冒烟见 `docs/release-checklist.md`。
-- **边界**：不做代码签名、自动更新、单实例、日志上传或崩溃上报；安装包未签名，SmartScreen 提示写入发布说明。
+- **边界**：不做 Authenticode 代码签名、单实例、日志上传或崩溃上报；安装包未做代码签名，SmartScreen 提示写入发布说明。应用内自动更新已启用：启动时读取 GitHub Release 的 `latest.json`，由 Tauri updater 校验 minisign 签名后安装；公钥在配置中，私钥只存于 GitHub Actions secret。
 
 ---
 

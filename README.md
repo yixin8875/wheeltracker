@@ -132,7 +132,11 @@ python -I scripts/release.py
 python -I scripts/release.py --no-build
 ```
 
-产物在 `dist/release/`：`<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（版本、提交、UTC 构建时间、目标、文件大小、SHA-256）。安装包未签名、不包含自动更新；安装、覆盖升级、卸载与 CSP 冒烟按[发布检查清单](docs/release-checklist.md)执行。MIT 许可证见 `LICENSE`。
+产物在 `dist/release/`：`<installer>.sha256`（`<hex>  <filename>`）、`release-manifest.json`（版本、提交、UTC 构建时间、目标、文件大小、SHA-256）与 `latest.json`（更新签名与下载地址）。安装包本身未做代码签名；安装、覆盖升级、卸载与 CSP 冒烟按[发布检查清单](docs/release-checklist.md)执行。MIT 许可证见 `LICENSE`。
+
+## 自动更新
+
+桌面应用启动时检查 `https://github.com/yixin8875/wheeltracker/releases/latest/download/latest.json`。发现新版本时会在页面顶部显示更新横幅，点击「下载并安装」后自动下载、验签并运行安装器，完成后点击「重启应用」生效。更新包使用 Tauri minisign 签名；公钥写在 `crates/wheel-app/tauri.conf.json`，私钥只保存在 GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY` 中，不进入版本库。
 
 ## 数据与备份
 
