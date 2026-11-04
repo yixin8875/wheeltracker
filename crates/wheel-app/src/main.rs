@@ -89,6 +89,7 @@ fn main() {
             commands::campaign_detail,
             commands::ledger,
             commands::monthly_income,
+            commands::annual_report,
             commands::positions,
             commands::list_events,
             commands::add_events,

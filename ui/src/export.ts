@@ -1,4 +1,4 @@
-import type { Campaign, Entry, EventRow, Position } from './types';
+import type { AnnualYear, Campaign, Entry, EventRow, Position } from './types';
 import { labels, today } from './lib';
 import { downloadXlsx, type Sheet } from './xlsx';
 
@@ -72,4 +72,44 @@ export function exportWorkbook(data: { entries: Entry[]; events: EventRow[]; pos
 
 export function exportLedger(entries: Entry[], name = `wheel-ledger-${today()}.xlsx`) {
   downloadXlsx(name, [ledgerSheet(entries)]);
+}
+
+export function annualMonthSheet(year: AnnualYear): Sheet {
+  return {
+    name: '年度月度',
+    rows: [
+      ['年度', year.year],
+      ['月份', '净收租', '股票已实现盈亏', '分红', '独立费用', '现金调整', '合计', '年度累计', '了结合约', '股票事件'],
+      ...year.months.map(month => [
+        month.month, month.premium, month.sharePnl, month.dividends, month.fees,
+        month.adjustments, month.total, month.cumulative, month.closedEntries, month.shareEvents,
+      ]),
+      ['年度合计', year.total.premium, year.total.sharePnl, year.total.dividends, year.total.fees,
+        year.total.adjustments, year.total.total, '', year.total.closedEntries, year.total.shareEvents],
+    ],
+    columnWidths: [12, 14, 18, 12, 14, 14, 14, 14, 10, 10],
+    styles: ['text', 'money', 'money', 'money', 'money', 'money', 'money', 'money', 'number', 'number'],
+  };
+}
+
+export function annualSymbolSheet(year: AnnualYear): Sheet {
+  return {
+    name: '年度标的',
+    rows: [
+      ['年度', year.year],
+      ['标的', '净收租', '股票已实现盈亏', '分红', '独立费用', '现金调整', '合计'],
+      ...year.symbols.map(symbol => [
+        symbol.symbol, symbol.premium, symbol.sharePnl, symbol.dividends,
+        symbol.fees, symbol.adjustments, symbol.total,
+      ]),
+      ['合计', year.total.premium, year.total.sharePnl, year.total.dividends,
+        year.total.fees, year.total.adjustments, year.total.total],
+    ],
+    columnWidths: [12, 14, 18, 12, 14, 14, 14],
+    styles: ['text', 'money', 'money', 'money', 'money', 'money', 'money'],
+  };
+}
+
+export function exportAnnualReport(year: AnnualYear, name = `wheel-annual-${year.year}-${today()}.xlsx`) {
+  downloadXlsx(name, [annualMonthSheet(year), annualSymbolSheet(year)]);
 }

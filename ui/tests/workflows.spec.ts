@@ -44,6 +44,30 @@ async function setup(page: Page) {
           ],
           total: { premium: 198, dividends: 100, fees: 5, adjustments: 20, total: 313, closedEntries: 2, monthCount: 3 },
         };
+        case 'annual_report': return state.testAnnual ?? {
+          availableYears: [2025, 2026],
+          years: [
+            {
+              year: 2025,
+              months: [{ month: '2025-12', premium: 0, sharePnl: 100, dividends: 20, fees: 0, adjustments: 0, total: 120, cumulative: 120, closedEntries: 0, shareEvents: 1 }],
+              symbols: [{ symbol: 'MSFT', premium: 0, sharePnl: 100, dividends: 20, fees: 0, adjustments: 0, total: 120 }],
+              total: { premium: 0, sharePnl: 100, dividends: 20, fees: 0, adjustments: 0, total: 120, closedEntries: 0, shareEvents: 1 },
+            },
+            {
+              year: 2026,
+              months: [
+                { month: '2026-01', premium: 148, sharePnl: 0, dividends: 0, fees: 0, adjustments: 0, total: 148, cumulative: 148, closedEntries: 1, shareEvents: 0 },
+                { month: '2026-02', premium: 0, sharePnl: 0, dividends: 100, fees: 5, adjustments: 20, total: 115, cumulative: 263, closedEntries: 0, shareEvents: 0 },
+                { month: '2026-03', premium: 0, sharePnl: 400, dividends: 0, fees: 50, adjustments: 0, total: 350, cumulative: 613, closedEntries: 0, shareEvents: 1 },
+              ],
+              symbols: [
+                { symbol: 'AAPL', premium: 148, sharePnl: 400, dividends: 100, fees: 5, adjustments: 20, total: 663 },
+                { symbol: 'MSFT', premium: 0, sharePnl: 0, dividends: 0, fees: 50, adjustments: 0, total: -50 },
+              ],
+              total: { premium: 148, sharePnl: 400, dividends: 100, fees: 55, adjustments: 20, total: 613, closedEntries: 1, shareEvents: 1 },
+            },
+          ],
+        };
         case 'list_prices': return state.testPrices ?? [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }];
         case 'search_symbols':
           if (state.testRejectSearch) throw new Error('search offline');
@@ -849,4 +873,50 @@ test('open contract multiplier drives entry prefill and reminder premium', async
   await page.getByRole('button', { name: '当前持仓', exact: true }).click();
   await page.getByRole('button', { name: '到期作废', exact: true }).click();
   await expect(page.getByLabel('每手股数（乘数）')).toHaveValue('200');
+});
+
+test('annual report filters years and exports month and symbol sheets', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '年度报表', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '年度报表', level: 1 })).toBeVisible();
+  await expect(page.locator('.annual-summary')).toContainText('$613.00');
+  await expect(page.getByRole('img', { name: /年度已实现收益图/ })).toBeVisible();
+  const months = page.locator('.monthly-breakdown');
+  await expect(months.locator('tbody tr')).toHaveCount(3);
+  await expect(months.locator('tbody tr').first()).toContainText('2026-03');
+  await expect(months.locator('tbody tr').first()).toContainText('$350.00');
+  await expect(months.locator('tfoot')).toContainText('$613.00');
+  const symbols = page.locator('.symbol-breakdown');
+  await expect(symbols.locator('tbody tr')).toHaveCount(2);
+  await expect(symbols.locator('tbody tr').first()).toContainText('AAPL');
+  await expect(symbols.locator('tbody tr').first()).toContainText('$663.00');
+  await expect(symbols.locator('tbody tr').nth(1)).toContainText('MSFT');
+  await expect(symbols.locator('tbody tr').nth(1)).toContainText('-$50.00');
+
+  await page.getByLabel('选择年份').selectOption('2025');
+  await expect(page.locator('.annual-summary')).toContainText('$120.00');
+  await expect(months.locator('tbody tr')).toHaveCount(1);
+  await expect(months.locator('tbody tr').first()).toContainText('2025-12');
+  await expect(symbols.locator('tbody tr')).toHaveCount(1);
+  await expect(symbols.locator('tbody tr').first()).toContainText('MSFT');
+  await page.getByLabel('选择年份').selectOption('2026');
+
+  const csv = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 CSV', exact: true }).click();
+  const csvStream = await (await csv).createReadStream();
+  const csvChunks = []; for await (const chunk of csvStream!) csvChunks.push(chunk as Buffer);
+  const csvText = Buffer.concat(csvChunks).toString('utf8');
+  expect((await csv).suggestedFilename()).toBe('wheel-annual-2026.csv');
+  expect(csvText).toContain('股票已实现盈亏');
+  expect(csvText).toContain('2026-03');
+  expect(csvText).toContain('AAPL');
+
+  const workbookDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 Excel', exact: true }).click();
+  const workbook = await readZip(await workbookDownload);
+  expect([...workbook.keys()].filter(name => name.startsWith('xl/worksheets/'))).toHaveLength(2);
+  expect(workbook.get('xl/workbook.xml')!.toString('utf8')).toContain('年度月度');
+  expect(workbook.get('xl/workbook.xml')!.toString('utf8')).toContain('年度标的');
+  expect(workbook.get('xl/worksheets/sheet1.xml')!.toString('utf8')).toContain('2026-03');
+  expect(workbook.get('xl/worksheets/sheet2.xml')!.toString('utf8')).toContain('AAPL');
 });

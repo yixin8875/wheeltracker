@@ -20,6 +20,7 @@
 - 到期日历：周一起始的 UTC 月历，按日显示未平仓合约，附未来 30 天到期条与当日合约明细。
 - 战役对比：按战役聚合并绘制「持续天数 × 已实现收益率」散点图，按标的着色，进行中空心、已结束实心，并提供精确数据表。
 - 收租月报：按 UTC 月份累计已落袋净收租、分红、独立费用与现金调整；柱形为月度合计、折线为区间累计，支持按年份筛选与 CSV 导出。
+- 年度报表：按 UTC 年份汇总已实现口径的净收租、股票已实现盈亏（卖出 / Call 指派 / 拆股零股补偿）、分红、费用与现金调整；柱形为月度合计、折线为年度累计，附按标的归因表，支持 CSV 与两张工作表的 Excel 导出。
 - 台账：标的、方向、状态、开仓日期筛选，CSV 与真实 `.xlsx` 导出（当前筛选结果）。
 - Excel 工作簿：一次导出台账、交易记录、持仓、战役四张工作表；金额与百分比带数字格式，不生成公式。
 - 盯市成本图：三轨成本叠加行情页已保存参考价、现价与当前 Call 行权价，逐台阶显示 Δ，附精确数据表。
@@ -128,4 +129,4 @@ CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默�
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md) 与 [P4 拆股 / 乘数验收](docs/P4-split.md)。系统通知尚未实现。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)。系统通知尚未实现。

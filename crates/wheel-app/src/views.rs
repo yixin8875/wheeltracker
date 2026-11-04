@@ -203,6 +203,66 @@ pub struct MonthIncomeTotalView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AnnualReportView {
+    /// Years with at least one realized/income event, ascending.
+    pub available_years: Vec<i32>,
+    pub years: Vec<AnnualYearView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualYearView {
+    pub year: i32,
+    /// Only months with activity, ascending and with the year's cumulative.
+    pub months: Vec<AnnualMonthView>,
+    /// Descending by absolute total.
+    pub symbols: Vec<AnnualSymbolView>,
+    pub total: AnnualTotalView,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualMonthView {
+    /// `YYYY-MM`.
+    pub month: String,
+    pub premium: f64,
+    pub share_pnl: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub adjustments: f64,
+    pub total: f64,
+    pub cumulative: f64,
+    pub closed_entries: u32,
+    pub share_events: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualSymbolView {
+    pub symbol: String,
+    pub premium: f64,
+    pub share_pnl: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub adjustments: f64,
+    pub total: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualTotalView {
+    pub premium: f64,
+    pub share_pnl: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub adjustments: f64,
+    pub total: f64,
+    pub closed_entries: u32,
+    pub share_events: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PriceView {
     pub symbol: String,
     pub date: String,

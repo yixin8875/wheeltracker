@@ -1,7 +1,7 @@
 //! IPC commands. Each command replays the event log and returns read models;
 //! writes append events only, never derived rows.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -630,6 +630,212 @@ fn monthly_income_for(
     }
 
     Ok(views::MonthlyIncomeView { months, total })
+}
+
+#[tauri::command]
+pub fn annual_report(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<views::AnnualReportView, String> {
+    annual_report_for(&state.conn(), &account_or_default(account_id))
+}
+
+#[derive(Clone, Copy)]
+enum AnnualLine {
+    Premium,
+    SharePnl,
+    Dividends,
+    Fees,
+    Adjustments,
+}
+
+#[derive(Default, Clone, Copy)]
+struct AnnualBucket {
+    premium: f64,
+    share_pnl: f64,
+    dividends: f64,
+    fees: f64,
+    adjustments: f64,
+    closed_entries: u32,
+    share_events: u32,
+}
+
+impl AnnualBucket {
+    fn total(&self) -> f64 {
+        self.premium + self.share_pnl + self.dividends - self.fees + self.adjustments
+    }
+}
+
+#[derive(Default)]
+struct AnnualYearAccumulator {
+    months: BTreeMap<u32, AnnualBucket>,
+    symbols: BTreeMap<String, AnnualBucket>,
+    total: AnnualBucket,
+}
+
+fn annual_bucket_add(bucket: &mut AnnualBucket, line: AnnualLine, amount: f64) {
+    match line {
+        AnnualLine::Premium => {
+            bucket.premium += amount;
+            bucket.closed_entries += 1;
+        }
+        AnnualLine::SharePnl => {
+            bucket.share_pnl += amount;
+            bucket.share_events += 1;
+        }
+        AnnualLine::Dividends => bucket.dividends += amount,
+        AnnualLine::Fees => bucket.fees += amount,
+        AnnualLine::Adjustments => bucket.adjustments += amount,
+    }
+}
+
+fn annual_add(
+    year: &mut AnnualYearAccumulator,
+    month: u32,
+    symbol: &str,
+    line: AnnualLine,
+    amount: f64,
+) {
+    annual_bucket_add(year.months.entry(month).or_default(), line, amount);
+    annual_bucket_add(
+        year.symbols.entry(symbol.to_string()).or_default(),
+        line,
+        amount,
+    );
+    annual_bucket_add(&mut year.total, line, amount);
+}
+
+fn annual_total(bucket: AnnualBucket) -> views::AnnualTotalView {
+    views::AnnualTotalView {
+        premium: bucket.premium,
+        share_pnl: bucket.share_pnl,
+        dividends: bucket.dividends,
+        fees: bucket.fees,
+        adjustments: bucket.adjustments,
+        total: bucket.total(),
+        closed_entries: bucket.closed_entries,
+        share_events: bucket.share_events,
+    }
+}
+
+/// Realized annual P&L: option premium is booked on the close date, share-leg
+/// P&L on the sale / call assignment / cash-in-lieu date, and dividends, fees
+/// and cash adjustments on their event date. Open premium and share
+/// mark-to-market are excluded. Months and years without activity are omitted.
+fn annual_report_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<views::AnnualReportView, String> {
+    let events = store::list_events(conn, account_id).map_err(|error| error.to_string())?;
+    let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
+    let derived = store::replay_checked(account_id, &events, settings)
+        .map_err(|error| format!("{error:#}"))?;
+
+    let mut by_year: BTreeMap<i32, AnnualYearAccumulator> = BTreeMap::new();
+
+    for entry in &derived.premium_entries {
+        let Some(closed_at) = entry.closed_at else {
+            continue;
+        };
+        let year = by_year.entry(closed_at.year()).or_default();
+        annual_add(
+            year,
+            closed_at.month() as u32,
+            &entry.contract.underlying,
+            AnnualLine::Premium,
+            entry.net_premium,
+        );
+    }
+
+    for event in &events {
+        let share_pnl = derived.event_share_pnl.get(&event.id).copied();
+        let dividend = (event.kind == EventKind::Dividend).then(|| {
+            derived
+                .event_dividends
+                .get(&event.id)
+                .copied()
+                .unwrap_or(event.price * f64::from(event.qty))
+        });
+        let fee = (event.kind == EventKind::Fee).then_some(event.amount);
+        let adjustment = (event.kind == EventKind::Adjustment).then_some(event.amount);
+        if share_pnl.is_none()
+            && dividend.is_none()
+            && fee.is_none()
+            && adjustment.is_none()
+        {
+            continue;
+        }
+        let year = by_year.entry(event.occurred_at.year()).or_default();
+        let month = event.occurred_at.month() as u32;
+        if let Some(amount) = share_pnl {
+            annual_add(year, month, &event.symbol, AnnualLine::SharePnl, amount);
+        }
+        if let Some(amount) = dividend {
+            annual_add(year, month, &event.symbol, AnnualLine::Dividends, amount);
+        }
+        if let Some(amount) = fee {
+            annual_add(year, month, &event.symbol, AnnualLine::Fees, amount);
+        }
+        if let Some(amount) = adjustment {
+            annual_add(year, month, &event.symbol, AnnualLine::Adjustments, amount);
+        }
+    }
+
+    let mut reports = Vec::with_capacity(by_year.len());
+    for (year_number, year) in by_year {
+        let mut cumulative = 0.0;
+        let months: Vec<views::AnnualMonthView> = year
+            .months
+            .iter()
+            .map(|(&month_number, bucket)| {
+                cumulative += bucket.total();
+                views::AnnualMonthView {
+                    month: format!("{year_number}-{month_number:02}"),
+                    premium: bucket.premium,
+                    share_pnl: bucket.share_pnl,
+                    dividends: bucket.dividends,
+                    fees: bucket.fees,
+                    adjustments: bucket.adjustments,
+                    total: bucket.total(),
+                    cumulative,
+                    closed_entries: bucket.closed_entries,
+                    share_events: bucket.share_events,
+                }
+            })
+            .collect();
+        let mut symbols: Vec<views::AnnualSymbolView> = year
+            .symbols
+            .into_iter()
+            .map(|(symbol, bucket)| views::AnnualSymbolView {
+                symbol,
+                premium: bucket.premium,
+                share_pnl: bucket.share_pnl,
+                dividends: bucket.dividends,
+                fees: bucket.fees,
+                adjustments: bucket.adjustments,
+                total: bucket.total(),
+            })
+            .collect();
+        symbols.sort_by(|left, right| {
+            right
+                .total
+                .abs()
+                .total_cmp(&left.total.abs())
+                .then_with(|| left.symbol.cmp(&right.symbol))
+        });
+        reports.push(views::AnnualYearView {
+            year: year_number,
+            months,
+            symbols,
+            total: annual_total(year.total),
+        });
+    }
+
+    let available_years = reports.iter().map(|report| report.year).collect();
+    Ok(views::AnnualReportView {
+        available_years,
+        years: reports,
+    })
 }
 
 #[derive(Serialize)]
@@ -1757,6 +1963,181 @@ mod tests {
         assert_eq!(wire["months"][1]["closedEntries"], 1);
         assert_eq!(wire["months"][1]["cumulative"], 263.0);
         assert_eq!(wire["total"]["monthCount"], 2);
+    }
+
+    #[test]
+    fn annual_report_groups_realized_pnl_by_year_month_and_symbol() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "buy", 1, at("2025-12-01"), "AAPL", 100, 150.0, 0.0),
+                Event::sell_option("main", "sto", 2, at("2025-12-05"), contract.clone(), 1, 2.0, 1.0),
+                Event::close_option("main", "btc", 3, at("2026-01-10"), contract, 1, 0.5, 1.0),
+                Event::dividend("main", "div", 4, at("2026-02-15"), "AAPL", 1.0, 100),
+                Event::fee("main", "fee", 5, at("2026-02-20"), "AAPL", 5.0),
+                Event::adjustment("main", "adj", 6, at("2026-02-25"), "AAPL", 20.0),
+                Event::sell_shares("main", "sell", 7, at("2026-03-10"), "AAPL", 40, 160.0, 0.0),
+                Event::buy_shares("main", "msft-buy", 8, at("2025-12-20"), "MSFT", 10, 300.0, 0.0),
+                Event::dividend("main", "msft-div", 9, at("2025-12-28"), "MSFT", 2.0, 10),
+                Event::sell_shares("main", "msft-sell", 10, at("2025-12-30"), "MSFT", 10, 310.0, 0.0),
+                Event::buy_shares("main", "msft-buy-2", 12, at("2026-03-01"), "MSFT", 10, 300.0, 0.0),
+                Event::fee("main", "msft-fee", 11, at("2026-03-15"), "MSFT", 50.0),
+                Event::buy_shares("other", "tsla-buy", 1, at("2025-12-01"), "TSLA", 1, 100.0, 0.0),
+                Event::dividend("other", "tsla-div", 2, at("2025-12-31"), "TSLA", 7.0, 1),
+            ],
+        )
+        .unwrap();
+
+        let report = annual_report_for(&conn, "main").unwrap();
+        assert_eq!(report.available_years, vec![2025, 2026]);
+
+        let first = &report.years[0];
+        assert_eq!(first.year, 2025);
+        assert_eq!(first.months.len(), 1);
+        let december = &first.months[0];
+        assert_eq!(december.month, "2025-12");
+        assert_eq!(december.premium, 0.0);
+        assert_eq!(december.share_pnl, 100.0);
+        assert_eq!(december.dividends, 20.0);
+        assert_eq!(december.total, 120.0);
+        assert_eq!(december.cumulative, 120.0);
+        assert_eq!(december.closed_entries, 0);
+        assert_eq!(december.share_events, 1);
+        assert_eq!(first.symbols.len(), 1);
+        assert_eq!(first.symbols[0].symbol, "MSFT");
+        assert_eq!(first.symbols[0].total, 120.0);
+
+        let second = &report.years[1];
+        assert_eq!(second.year, 2026);
+        assert_eq!(
+            second.months.iter().map(|month| month.month.as_str()).collect::<Vec<_>>(),
+            vec!["2026-01", "2026-02", "2026-03"]
+        );
+        let january = &second.months[0];
+        assert_eq!(january.premium, 148.0);
+        assert_eq!(january.total, 148.0);
+        assert_eq!(january.cumulative, 148.0);
+        assert_eq!(january.closed_entries, 1);
+        let february = &second.months[1];
+        assert_eq!(february.dividends, 100.0);
+        assert_eq!(february.fees, 5.0);
+        assert_eq!(february.adjustments, 20.0);
+        assert_eq!(february.total, 115.0);
+        assert_eq!(february.cumulative, 263.0);
+        let march = &second.months[2];
+        assert_eq!(march.share_pnl, 400.0);
+        assert_eq!(march.fees, 50.0);
+        assert_eq!(march.total, 350.0);
+        assert_eq!(march.cumulative, 613.0);
+        assert_eq!(march.share_events, 1);
+
+        assert_eq!(second.total.premium, 148.0);
+        assert_eq!(second.total.share_pnl, 400.0);
+        assert_eq!(second.total.dividends, 100.0);
+        assert_eq!(second.total.fees, 55.0);
+        assert_eq!(second.total.adjustments, 20.0);
+        assert_eq!(second.total.total, 613.0);
+        assert_eq!(second.total.closed_entries, 1);
+        assert_eq!(second.total.share_events, 1);
+        assert_eq!(
+            second.symbols.iter().map(|symbol| symbol.symbol.as_str()).collect::<Vec<_>>(),
+            vec!["AAPL", "MSFT"]
+        );
+        assert_eq!(second.symbols[0].total, 663.0);
+        assert_eq!(second.symbols[1].total, -50.0);
+
+        let other = annual_report_for(&conn, "other").unwrap();
+        assert_eq!(other.available_years, vec![2025]);
+        assert_eq!(other.years[0].months[0].dividends, 7.0);
+        assert_eq!(other.years[0].symbols[0].symbol, "TSLA");
+
+        let wire = serde_json::to_value(&report).unwrap();
+        assert_eq!(wire["availableYears"], serde_json::json!([2025, 2026]));
+        assert_eq!(wire["years"][1]["total"]["sharePnl"], 400.0);
+        assert_eq!(wire["years"][1]["months"][2]["shareEvents"], 1);
+    }
+
+    #[test]
+    fn annual_report_books_call_assignment_and_excludes_put_assignment_share_pnl() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let call = OptionContract::new("AAPL", at("2026-01-16"), 160.0, Right::Call);
+        let put = OptionContract::new("MSFT", at("2027-02-19"), 50.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 100, 100.0, 0.0),
+                Event::sell_option("main", "call-sto", 2, at("2026-01-05"), call.clone(), 1, 1.0, 0.0),
+                Event::assign_option("main", "call-assign", 3, at("2026-01-20"), call, 1, 0.0),
+                Event::sell_option("main", "put-sto", 4, at("2027-02-02"), put.clone(), 1, 2.0, 0.0),
+                Event::assign_option("main", "put-assign", 5, at("2027-02-20"), put, 1, 0.0),
+            ],
+        )
+        .unwrap();
+
+        let report = annual_report_for(&conn, "main").unwrap();
+        assert_eq!(report.available_years, vec![2026, 2027]);
+        let january = &report.years[0].months[0];
+        assert_eq!(january.premium, 100.0);
+        assert_eq!(january.share_pnl, 6000.0);
+        assert_eq!(january.total, 6100.0);
+        assert_eq!(january.closed_entries, 1);
+        assert_eq!(january.share_events, 1);
+
+        let february = &report.years[1].months[0];
+        assert_eq!(february.month, "2027-02");
+        assert_eq!(february.premium, 200.0);
+        assert_eq!(february.share_pnl, 0.0);
+        assert_eq!(february.share_events, 0);
+        assert_eq!(february.total, 200.0);
+
+        let derived = derive(&conn, "main").unwrap();
+        let closed: f64 = derived.campaigns.iter().filter_map(|campaign| campaign.realized_pnl).sum();
+        assert_eq!(closed, report.years[0].total.total);
+    }
+
+    #[test]
+    fn annual_report_counts_split_cash_in_lieu_as_share_pnl() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        store::insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 101, 50.0, 0.0),
+                Event::stock_split("main", "split", 2, at("2026-02-01"), "AAPL", 1, 10, Some(12.5)),
+            ],
+        )
+        .unwrap();
+
+        let report = annual_report_for(&conn, "main").unwrap();
+        assert_eq!(report.available_years, vec![2026]);
+        let year = &report.years[0];
+        assert_eq!(year.months.len(), 1);
+        assert_eq!(year.months[0].month, "2026-02");
+        assert!((year.months[0].share_pnl + 37.5).abs() < 1e-9);
+        assert_eq!(year.months[0].share_events, 1);
+        assert!((year.months[0].total + 37.5).abs() < 1e-9);
+        assert!((year.total.share_pnl + 37.5).abs() < 1e-9);
+        assert_eq!(year.symbols[0].symbol, "AAPL");
+    }
+
+    #[test]
+    fn annual_report_is_empty_without_realized_activity() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[Event::sell_option("main", "sto", 1, at("2026-01-05"), contract, 1, 2.0, 1.0)],
+        )
+        .unwrap();
+
+        let report = annual_report_for(&conn, "main").unwrap();
+        assert!(report.available_years.is_empty());
+        assert!(report.years.is_empty());
     }
 
     #[test]

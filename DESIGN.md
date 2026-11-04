@@ -695,6 +695,14 @@ restore_status() -> RestoreStatus
 - **存储**：schema v2 增加 `split_numerator` / `split_denominator` / `split_cash_in_lieu` 并写 `PRAGMA user_version = 2`；`EventView`、JSON 导出与交易记录 CSV 均带拆股字段。
 - **前端**：交易类型新增「拆股 / 合股」，拆股模式只显示日期、标的、分子、分母、零股补偿与备注；期权表单显示「1 手 = N 股」，选择持仓时回填乘数。
 
+### 8.10 P4 年度已实现收益报表
+
+- **口径**：净收租取 `PremiumEntry.net_premium`，按 `closed_at` 的年 / 月入账；股票已实现盈亏取 `DerivedState.event_share_pnl`（卖出、Call 指派、拆股零股补偿），按事件日的年 / 月与标的入账；分红取 `event_dividends`，费用与现金调整取 `amount`，均按事件日入账。`total = premium + share_pnl + dividends - fees + adjustments`。未平仓权利金与股票浮盈亏不计入。
+- **聚合**：`annual_report(accountId)` 一次重放后按「年 → 月、标的」聚合；只返回有活动的年份与月份，月份升序并在年度内累计；标的按 `|total|` 降序。跨年战役的期权按平仓日、股票按卖出 / 指派日归属；账户之间完全隔离。
+- **DTO**：`AnnualReportView { availableYears, years }`，每年含 `months`、`symbols` 与 `total`；`AnnualMonthView` 带 `cumulative`、`closedEntries`、`shareEvents`；`AnnualTotalView` 为年度合计。
+- **前端**：导航新增「年度报表」，默认最新年份；汇总卡展示年度合计、净收租、股票盈亏、分红、费用与调整；柱形为月度合计、折线为年度累计；月度明细与按标的归因各一张表；CSV 导出含月度段、年度合计与标的段，Excel 导出「年度月度」「年度标的」两张工作表。
+- **边界**：只读报表，不替代收租月报；不是税务申报表，不做短期 / 长期分类或 wash sale。
+
 ---
 
 ## 9. 数据导入
@@ -761,7 +769,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入、拆股与合约乘数（均已完成）+ 年度已实现收益报表 | 进阶 | 进行中 |
+| **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

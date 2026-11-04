@@ -39,6 +39,11 @@ export interface Ledger { entries: Entry[]; totalNet: number; totalCollateral: n
 export interface MonthIncome { month: string; premium: number; dividends: number; fees: number; adjustments: number; total: number; cumulative: number; closedEntries: number }
 export interface MonthIncomeTotal { premium: number; dividends: number; fees: number; adjustments: number; total: number; closedEntries: number; monthCount: number }
 export interface MonthlyIncome { months: MonthIncome[]; total: MonthIncomeTotal }
+export interface AnnualMonth { month: string; premium: number; sharePnl: number; dividends: number; fees: number; adjustments: number; total: number; cumulative: number; closedEntries: number; shareEvents: number }
+export interface AnnualSymbol { symbol: string; premium: number; sharePnl: number; dividends: number; fees: number; adjustments: number; total: number }
+export interface AnnualTotal { premium: number; sharePnl: number; dividends: number; fees: number; adjustments: number; total: number; closedEntries: number; shareEvents: number }
+export interface AnnualYear { year: number; months: AnnualMonth[]; symbols: AnnualSymbol[]; total: AnnualTotal }
+export interface AnnualReport { availableYears: number[]; years: AnnualYear[] }
 export interface Price { symbol: string; date: string; close: number; source: string; quotedAt: string | null }
 export interface SymbolMatch { symbol: string; name: string; exchange: string }
 export interface MarketQuote { symbol: string; name: string; price: number; previousClose: number | null; changePercent: number | null; quotedAt: string; source: string; currency: string }
