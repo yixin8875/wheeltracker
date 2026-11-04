@@ -81,9 +81,10 @@ export default function App() {
     api<Account[]>('list_accounts').then(list => {
       if (cancelled) return;
       setAccounts(list);
-      if (list.length && !list.some(account => account.id === accountId)) {
-        try { localStorage.setItem(ACCOUNT_KEY, list[0].id); } catch { /* storage unavailable in preview */ }
-        setAccountId(list[0].id);
+      const active = list.filter(account => !account.archivedAt);
+      if (active.length && !active.some(account => account.id === accountId)) {
+        try { localStorage.setItem(ACCOUNT_KEY, active[0].id); } catch { /* storage unavailable in preview */ }
+        setAccountId(active[0].id);
       }
     }).catch(failure => { if (!cancelled) setError(`账户列表读取失败：${failure}`); });
     return () => { cancelled = true; };
@@ -107,6 +108,7 @@ export default function App() {
     if (page === 'detail') setPage('dashboard');
   }
   const currentAccount = accounts.find(account => account.id === accountId) ?? null;
+  const activeAccounts = accounts.filter(account => !account.archivedAt);
   function saved(message: string) { setNotice(message); void reload(); }
   async function settingsSaved(result: AccountingSettings) {
     generation.current++; detailGeneration.current++;
@@ -129,7 +131,7 @@ export default function App() {
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
   const asOf = data?.asOf ?? today();
   const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : navigation.find(item => item.id === page)?.label;
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><CircleDollarSign size={30}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}<label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!accounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {accounts.length ? `共 ${accounts.length} 个账户` : '美元 USD'}</small></div></aside>
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><CircleDollarSign size={30}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}<label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small></div></aside>
     <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · UTC</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}

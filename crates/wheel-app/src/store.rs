@@ -16,7 +16,7 @@ use wheel_core::{
 
 /// Bumped when the persisted event schema changes. A database written by a
 /// newer build is refused rather than silently read with missing columns.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   name          TEXT NOT NULL,
   broker        TEXT,
   currency      TEXT NOT NULL DEFAULT 'USD',
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  archived_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -116,6 +117,14 @@ fn initialize(conn: &Connection) -> Result<()> {
     }
     if !columns.iter().any(|name| name == "quoted_at") {
         tx.execute_batch("ALTER TABLE prices ADD COLUMN quoted_at TEXT;")?;
+    }
+    let account_columns = {
+        let mut stmt = tx.prepare("PRAGMA table_info(accounts)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if !account_columns.iter().any(|name| name == "archived_at") {
+        tx.execute_batch("ALTER TABLE accounts ADD COLUMN archived_at TEXT;")?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     tx.commit()?;
@@ -288,12 +297,15 @@ pub struct AccountRecord {
     pub broker: Option<String>,
     pub currency: String,
     pub created_at: String,
+    pub archived_at: Option<String>,
+    pub event_count: usize,
 }
 
 pub fn list_accounts(conn: &Connection) -> Result<Vec<AccountRecord>> {
     let mut statement = conn.prepare(
-        "SELECT id, name, broker, currency, created_at
-         FROM accounts ORDER BY created_at, name, id",
+        "SELECT a.id, a.name, a.broker, a.currency, a.created_at, a.archived_at,
+                (SELECT COUNT(*) FROM events e WHERE e.account_id = a.id)
+         FROM accounts a ORDER BY a.created_at, a.name, a.id",
     )?;
     let rows = statement.query_map([], |row| {
         Ok(AccountRecord {
@@ -302,10 +314,48 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<AccountRecord>> {
             broker: row.get(2)?,
             currency: row.get(3)?,
             created_at: row.get(4)?,
+            archived_at: row.get(5)?,
+            event_count: row.get::<_, i64>(6)? as usize,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("cannot list accounts")
+}
+
+pub fn account_record(conn: &Connection, id: &str) -> Result<Option<AccountRecord>> {
+    Ok(list_accounts(conn)?
+        .into_iter()
+        .find(|account| account.id == id))
+}
+
+pub fn count_active_accounts(conn: &Connection) -> Result<usize> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM accounts WHERE archived_at IS NULL",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as usize)
+}
+
+pub fn set_account_archived(conn: &Connection, id: &str, archived: bool) -> Result<bool> {
+    let archived_at = if archived {
+        Some(format_date(today()))
+    } else {
+        None
+    };
+    let changed = conn
+        .execute(
+            "UPDATE accounts SET archived_at = ?2 WHERE id = ?1",
+            params![id, archived_at],
+        )
+        .with_context(|| format!("cannot archive account `{id}`"))?;
+    Ok(changed > 0)
+}
+
+pub fn delete_account(conn: &Connection, id: &str) -> Result<bool> {
+    let changed = conn
+        .execute("DELETE FROM accounts WHERE id = ?1", params![id])
+        .with_context(|| format!("cannot delete account `{id}`"))?;
+    Ok(changed > 0)
 }
 
 pub fn insert_account(conn: &Connection, id: &str, name: &str, created_at: &str) -> Result<()> {
@@ -1385,5 +1435,76 @@ mod tests {
             accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
             vec!["默认账户", "长期账户"]
         );
+    }
+
+    #[test]
+    fn accounts_can_be_archived_restored_and_deleted() {
+        let conn = db();
+        ensure_account(&conn, "main", "默认账户").unwrap();
+        insert_account(&conn, "second", "长期账户", "2026-11-04").unwrap();
+        insert_event(
+            &conn,
+            &Event::buy_shares("second", "second-buy", 1, at(), "AAPL", 10, 150.0, 0.0),
+        )
+        .unwrap();
+
+        let accounts = list_accounts(&conn).unwrap();
+        assert!(accounts.iter().all(|account| account.archived_at.is_none()));
+        assert_eq!(
+            accounts.iter().find(|account| account.id == "second").unwrap().event_count,
+            1
+        );
+        assert_eq!(count_active_accounts(&conn).unwrap(), 2);
+
+        assert!(set_account_archived(&conn, "second", true).unwrap());
+        let second = account_record(&conn, "second").unwrap().unwrap();
+        assert_eq!(second.archived_at, Some(format_date(today())));
+        assert_eq!(count_active_accounts(&conn).unwrap(), 1);
+        assert!(!set_account_archived(&conn, "missing", true).unwrap());
+
+        assert!(set_account_archived(&conn, "second", false).unwrap());
+        assert!(account_record(&conn, "second").unwrap().unwrap().archived_at.is_none());
+
+        assert!(delete_account(&conn, "second").unwrap());
+        assert!(account_record(&conn, "second").unwrap().is_none());
+        assert!(!delete_account(&conn, "second").unwrap());
+    }
+
+    #[test]
+    fn version_two_accounts_table_gains_archived_column() {
+        let path = std::env::temp_dir().join(format!(
+            "wheel-accounts-v2-{}-{}.sqlite",
+            std::process::id(),
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE accounts (
+                   id TEXT PRIMARY KEY, name TEXT NOT NULL, broker TEXT,
+                   currency TEXT NOT NULL DEFAULT 'USD', created_at TEXT NOT NULL
+                 );
+                 INSERT INTO accounts (id, name, created_at) VALUES ('main', '默认账户', '2026-01-01');
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        let columns: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(accounts)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert!(columns.iter().any(|name| name == "archived_at"));
+        let record = account_record(&conn, "main").unwrap().unwrap();
+        assert!(record.archived_at.is_none());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
     }
 }

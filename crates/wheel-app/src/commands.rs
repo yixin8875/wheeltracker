@@ -1449,6 +1449,32 @@ impl From<store::AccountRecord> for AccountView {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountAdminView {
+    pub id: String,
+    pub name: String,
+    pub broker: Option<String>,
+    pub currency: String,
+    pub created_at: String,
+    pub archived_at: Option<String>,
+    pub event_count: usize,
+}
+
+impl From<store::AccountRecord> for AccountAdminView {
+    fn from(account: store::AccountRecord) -> Self {
+        Self {
+            id: account.id,
+            name: account.name,
+            broker: account.broker,
+            currency: account.currency,
+            created_at: account.created_at,
+            archived_at: account.archived_at,
+            event_count: account.event_count,
+        }
+    }
+}
+
 fn valid_account_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -1464,15 +1490,15 @@ fn valid_account_name(name: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountView>, String> {
+pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountAdminView>, String> {
     let conn = state.conn();
     store::list_accounts(&conn)
-        .map(|accounts| accounts.into_iter().map(AccountView::from).collect())
+        .map(|accounts| accounts.into_iter().map(AccountAdminView::from).collect())
         .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
-pub fn create_account(state: State<'_, AppState>, name: String) -> Result<AccountView, String> {
+pub fn create_account(state: State<'_, AppState>, name: String) -> Result<AccountAdminView, String> {
     ensure_no_pending_restore(&state)?;
     let name = valid_account_name(&name)?;
     let conn = state.conn();
@@ -1495,12 +1521,14 @@ pub fn create_account(state: State<'_, AppState>, name: String) -> Result<Accoun
     let created_at = store::today().to_string();
     store::insert_account(&conn, &id, &name, &created_at)
         .map_err(|error| format!("{error:#}"))?;
-    Ok(AccountView {
+    Ok(AccountAdminView {
         id,
         name,
         broker: None,
         currency: "USD".to_string(),
         created_at,
+        archived_at: None,
+        event_count: 0,
     })
 }
 
@@ -1509,7 +1537,7 @@ pub fn rename_account(
     state: State<'_, AppState>,
     account_id: String,
     name: String,
-) -> Result<AccountView, String> {
+) -> Result<AccountAdminView, String> {
     ensure_no_pending_restore(&state)?;
     let name = valid_account_name(&name)?;
     let conn = state.conn();
@@ -1524,12 +1552,75 @@ pub fn rename_account(
     if !store::rename_account(&conn, &account_id, &name).map_err(|error| error.to_string())? {
         return Err("账户不存在。".to_string());
     }
-    let account = store::list_accounts(&conn)
+    let account = store::account_record(&conn, &account_id)
         .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|account| account.id == account_id)
         .ok_or_else(|| "账户不存在。".to_string())?;
     Ok(account.into())
+}
+
+fn set_account_archived_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    archived: bool,
+) -> Result<AccountAdminView, String> {
+    let account = store::account_record(conn, account_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "账户不存在。".to_string())?;
+    if account.archived_at.is_some() == archived {
+        return Ok(account.into());
+    }
+    if archived {
+        let active = store::count_active_accounts(conn).map_err(|error| error.to_string())?;
+        if active <= 1 {
+            return Err("至少保留一个可用账户，不能归档最后一个账户。".to_string());
+        }
+    }
+    store::set_account_archived(conn, account_id, archived)
+        .map_err(|error| error.to_string())?;
+    store::account_record(conn, account_id)
+        .map_err(|error| error.to_string())?
+        .map(AccountAdminView::from)
+        .ok_or_else(|| "账户不存在。".to_string())
+}
+
+#[tauri::command]
+pub fn set_account_archived(
+    state: State<'_, AppState>,
+    account_id: String,
+    archived: bool,
+) -> Result<AccountAdminView, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    set_account_archived_for(&conn, &account_id, archived)
+}
+
+fn delete_account_for(conn: &rusqlite::Connection, account_id: &str) -> Result<bool, String> {
+    let account = store::account_record(conn, account_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "账户不存在。".to_string())?;
+    if account.event_count > 0 {
+        return Err(format!(
+            "账户「{}」还有 {} 笔交易（含已撤销），不能删除；可先归档保留数据。",
+            account.name, account.event_count
+        ));
+    }
+    if account.archived_at.is_none() {
+        let active = store::count_active_accounts(conn).map_err(|error| error.to_string())?;
+        if active <= 1 {
+            return Err("至少保留一个可用账户，不能删除最后一个账户。".to_string());
+        }
+    }
+    if !store::delete_account(conn, account_id).map_err(|error| format!("{error:#}"))? {
+        return Err("账户不存在。".to_string());
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn delete_account(state: State<'_, AppState>, account_id: String) -> Result<bool, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    delete_account_for(&conn, &account_id)
 }
 
 #[derive(Deserialize)]
@@ -1909,6 +2000,44 @@ mod tests {
         assert!(valid_account_name(&"x".repeat(41)).is_err());
         assert!(valid_account_name("line\nbreak").is_err());
         assert!(valid_account_name(&"账".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn accounts_archive_and_only_empty_ones_can_be_deleted() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_account(&conn, "second", "长期账户", "2026-11-04").unwrap();
+        store::insert_account(&conn, "third", "备用账户", "2026-11-04").unwrap();
+
+        let archived = set_account_archived_for(&conn, "second", true).unwrap();
+        assert!(archived.archived_at.is_some());
+        assert_eq!(archived.event_count, 0);
+        assert!(set_account_archived_for(&conn, "main", true).is_ok());
+        assert!(set_account_archived_for(&conn, "third", true).is_err());
+        assert!(set_account_archived_for(&conn, "missing", true).is_err());
+
+        let restored = set_account_archived_for(&conn, "second", false).unwrap();
+        assert!(restored.archived_at.is_none());
+        set_account_archived_for(&conn, "main", false).unwrap();
+
+        store::insert_event(
+            &conn,
+            &Event::buy_shares("second", "second-buy", 1, date(), "AAPL", 10, 150.0, 0.0),
+        )
+        .unwrap();
+        let failure = delete_account_for(&conn, "second").unwrap_err();
+        assert!(failure.contains("还有 1 笔交易"));
+        assert!(delete_account_for(&conn, "missing").is_err());
+
+        assert!(delete_account_for(&conn, "main").unwrap());
+        assert!(delete_account_for(&conn, "third").unwrap());
+        let failure = delete_account_for(&conn, "second").unwrap_err();
+        assert!(failure.contains("还有 1 笔交易"));
+
+        let only = db();
+        store::ensure_account(&only, "main", "默认账户").unwrap();
+        let failure = delete_account_for(&only, "main").unwrap_err();
+        assert!(failure.contains("至少保留一个可用账户"));
     }
 
     #[test]

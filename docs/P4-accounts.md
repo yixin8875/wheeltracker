@@ -25,3 +25,14 @@
 - [ ] 重启应用，确认仍停留在上次选择的账户。
 - [ ] 在设置 → 账户尝试重名与超过 40 字符，确认被拒绝且账户列表不变。
 - [ ] 暂存恢复期间点击「创建并切换」，确认提示需重启应用。
+
+## 后续：账户归档与删除（2026-11-04）
+
+- **归档 / 恢复**：`set_account_archived` 写入或清空 `accounts.archived_at`；归档账户从侧栏切换器隐藏，设置页「已归档」分组仍显示交易数与归档日期。至少保留一个可用账户。
+- **删除**：`delete_account` 只删空账户；事件计数包含已撤销记录，避免丢失审计历史。删除当前账户后自动切到另一个可用账户。
+- **存储**：schema v3，幂等补齐 `archived_at`；`list_accounts` 返回 `archivedAt` 与 `eventCount`。
+- **自动化**：`store::tests::accounts_can_be_archived_restored_and_deleted`、`store::tests::version_two_accounts_table_gains_archived_column`、`commands::tests::accounts_archive_and_only_empty_ones_can_be_deleted`；Playwright「archiving hides an account…」「deleting an empty account…」。
+- **手工检查**：
+  - [ ] 归档当前账户后侧栏切到另一账户，重启后仍停留在可用账户。
+  - [ ] 恢复归档账户后，其持仓、台账与报表数据完整。
+  - [ ] 有交易或已撤销交易的账户删除按钮禁用；空账户删除需二次确认。

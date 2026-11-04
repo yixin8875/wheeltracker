@@ -399,6 +399,7 @@ tr:last-child td { border-bottom: 0; }
 .account-switch { display: grid; gap: 5px; margin-top: 10px; font-size: 11px; color: var(--muted); }
 .account-switch select { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; font: inherit; color: var(--text); }
 .account-panel .badge { margin-left: 8px; }
+.account-panel .account-section-title { margin: 22px 0 6px; font-size: 14px; }
 .account-panel td:first-child { min-width: 140px; }
 .account-panel td input { min-width: 140px; }
 .account-panel .toolbar { flex-wrap: wrap; }

@@ -9,7 +9,7 @@ async function setup(page: Page) {
     const entry = { id: 'entry', campaignId: 'campaign', symbol: 'TEST', contract: position.contract, right: 'P', multiplier: 100, qty: 1, openQty: 0, openedAt: '2026-01-02', closedAt: '2026-02-20', status: 'closed', premiumGross: 200, fees: 1, closeCost: 324.5, netPremium: -125.5, collateral: 15000, daysHeld: 49, annualizedReturn: -.0623 };
     const state = window as any;
     state.isTauri = true; state.testCalls = []; state.testReject = false;
-    state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }];
+    state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01', archivedAt: null, eventCount: 1 }];
     state.testRejectSettings = false; state.testPartial = false;
     state.testRejectMetadata = false; state.testRejectDashboard = false;
     state.testVision = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', hasKey: true, keyHint: '1234', enabled: true, consent: true };
@@ -92,9 +92,24 @@ async function setup(page: Page) {
         case 'list_accounts': return [...state.testAccounts];
         case 'create_account': {
           if (state.testAccounts.some((account: any) => account.name === args.name)) throw new Error('账户名称已存在。');
-          const created = { id: `acct-${state.testAccounts.length + 1}`, name: String(args.name), broker: null, currency: 'USD', createdAt: '2026-11-03' };
+          const created = { id: `acct-${state.testAccounts.length + 1}`, name: String(args.name), broker: null, currency: 'USD', createdAt: '2026-11-03', archivedAt: null, eventCount: 0 };
           state.testAccounts.push(created);
           return created;
+        }
+        case 'set_account_archived': {
+          const account = state.testAccounts.find((item: any) => item.id === args.accountId);
+          if (!account) throw new Error('账户不存在。');
+          if (args.archived && state.testAccounts.filter((item: any) => !item.archivedAt).length <= 1) throw new Error('至少保留一个可用账户，不能归档最后一个账户。');
+          account.archivedAt = args.archived ? '2026-11-04' : null;
+          return { ...account };
+        }
+        case 'delete_account': {
+          const account = state.testAccounts.find((item: any) => item.id === args.accountId);
+          if (!account) throw new Error('账户不存在。');
+          if (account.eventCount > 0) throw new Error(`账户「${account.name}」还有 ${account.eventCount} 笔交易（含已撤销），不能删除；可先归档保留数据。`);
+          if (!account.archivedAt && state.testAccounts.filter((item: any) => !item.archivedAt).length <= 1) throw new Error('至少保留一个可用账户，不能删除最后一个账户。');
+          state.testAccounts = state.testAccounts.filter((item: any) => item.id !== args.accountId);
+          return true;
         }
         case 'rename_account': {
           const account = state.testAccounts.find((item: any) => item.id === args.accountId);
@@ -815,6 +830,49 @@ test('renaming the current account updates the switcher and header', async ({ pa
   await expect(page.getByLabel('切换账户')).toContainText('主账户');
   await expect(page.locator('header')).toContainText('主账户');
   await expect(page.getByRole('status')).toContainText('重命名为「主账户」');
+});
+
+test('archiving hides an account from the switcher and restoring brings it back', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '账户', exact: true }).click();
+  await page.getByLabel('新账户名称').fill('长期账户');
+  await page.getByRole('button', { name: '创建并切换' }).click();
+  await expect(page.getByLabel('切换账户')).toHaveValue('acct-2');
+
+  await page.getByRole('button', { name: '归档 长期账户' }).click();
+  await expect(page.getByRole('status')).toContainText('已归档账户「长期账户」');
+  await expect(page.getByLabel('切换账户')).toHaveValue('main');
+  await expect(page.getByLabel('切换账户').locator('option', { hasText: '长期账户' })).toHaveCount(0);
+  await expect(page.locator('.account-section-title')).toContainText('已归档');
+  await expect(page.getByRole('button', { name: '恢复 长期账户' })).toBeVisible();
+
+  await page.getByRole('button', { name: '恢复 长期账户' }).click();
+  await expect(page.getByRole('status')).toContainText('已恢复账户「长期账户」');
+  await expect(page.getByLabel('切换账户').locator('option', { hasText: '长期账户' })).toHaveCount(1);
+  await expect(page.locator('.account-section-title')).toHaveCount(0);
+});
+
+test('deleting an empty account requires confirmation and keeps accounts with history', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '账户', exact: true }).click();
+  await expect(page.getByRole('button', { name: '删除 默认账户' })).toBeDisabled();
+
+  await page.getByLabel('新账户名称').fill('待删除');
+  await page.getByRole('button', { name: '创建并切换' }).click();
+  await expect(page.getByLabel('切换账户')).toHaveValue('acct-2');
+
+  await page.getByRole('button', { name: '删除 待删除' }).click();
+  await expect(page.getByRole('dialog')).toContainText('确认删除空账户「待删除」');
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await page.getByRole('button', { name: '删除 待删除' }).click();
+  await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByRole('status')).toContainText('已删除空账户「待删除」');
+  await expect(page.getByLabel('切换账户')).toHaveValue('main');
+  await expect(page.getByLabel('切换账户').locator('option', { hasText: '待删除' })).toHaveCount(0);
 });
 
 test('stock split entry submits ratio and cash in lieu without trade fields', async ({ page }) => {

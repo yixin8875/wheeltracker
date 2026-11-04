@@ -16,7 +16,7 @@
 - [ ] `cargo clippy --offline -p wheel-app --no-deps -- -D warnings`
 - [ ] `npm --prefix ui run build`
 - [ ] Playwright：`ui/node_modules/.bin/playwright test --config ui/playwright.config.ts`
-- [ ] 数据库保护：旧库（`user_version = 0`）迁移后为 2；更高版本数据库与备份被拒绝。
+- [ ] 数据库保护：旧库（`user_version = 0`）迁移后为 3；更高版本数据库与备份被拒绝。
 
 ## 3. 构建与产物
 

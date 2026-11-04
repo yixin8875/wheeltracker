@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- 账户归档 / 恢复：`set_account_archived(accountId, archived)` 把账户从侧栏切换器隐藏但保留全部数据；至少保留一个可用账户
+- 删除空账户：`delete_account(accountId)` 仅允许删除没有任何事件行（含已撤销）的账户，当前账户删除后自动切到另一个可用账户
+- `AccountAdminView` 增加 `archivedAt` 与 `eventCount`；设置 → 账户分为可用 / 已归档两组，显示交易数，删除需二次确认
+- 数据库 schema v3：`accounts` 新增可空 `archived_at`，幂等迁移并写 `PRAGMA user_version = 3`
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

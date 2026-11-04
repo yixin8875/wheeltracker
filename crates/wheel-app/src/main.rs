@@ -107,6 +107,8 @@ fn main() {
             commands::list_accounts,
             commands::create_account,
             commands::rename_account,
+            commands::set_account_archived,
+            commands::delete_account,
             commands::get_settings,
             commands::set_settings,
             commands::set_preferences,

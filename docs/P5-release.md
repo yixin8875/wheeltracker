@@ -35,7 +35,7 @@
 
 ## 数据库保护
 
-- 当前 schema `user_version = 2`；打开更高版本数据库直接拒绝。
+- 0.3.0 发布时 schema `user_version = 2`（账户归档功能加入后升至 3）；打开更高版本数据库直接拒绝。
 - 备份校验新增 `user_version > 2` 检查，提示“备份由更新版本创建…请升级应用后再恢复”，不再允许旧版恢复新版快照。
 - 新增测试 `backup::tests::validation_rejects_backups_from_a_newer_schema`；Windows 下测试结束前关闭连接以释放文件句柄。
 
