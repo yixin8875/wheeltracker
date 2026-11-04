@@ -102,6 +102,17 @@ pub enum OptionAction {
     Assign,
 }
 
+/// Stock split / reverse split terms. New shares are
+/// `old_shares * numerator / denominator`; any fraction is compensated in cash
+/// and never kept as a fractional position.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplitTerms {
+    pub numerator: u32,
+    pub denominator: u32,
+    /// Cash received for the fractional share; `None` when the split is exact.
+    pub cash_in_lieu: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventKind {
     Option(OptionAction),
@@ -110,6 +121,7 @@ pub enum EventKind {
     Dividend,
     Fee,
     Adjustment,
+    Split,
 }
 
 /// An immutable fact. Everything else in the crate is derived from a stream of
@@ -131,6 +143,8 @@ pub struct Event {
     pub fees: f64,
     /// Signed cash amount for `Fee` / `Adjustment` events.
     pub amount: f64,
+    /// Split terms for `EventKind::Split`; `None` for every other kind.
+    pub split: Option<SplitTerms>,
     pub note: String,
 }
 
@@ -155,6 +169,7 @@ impl Event {
             price: 0.0,
             fees: 0.0,
             amount: 0.0,
+            split: None,
             note: String::new(),
         }
     }
@@ -345,6 +360,26 @@ impl Event {
     ) -> Self {
         Self::new(account_id, id, seq, at, EventKind::Adjustment, symbol).amount(amount)
     }
+
+    /// Apply a stock split or reverse split to every open position of `symbol`.
+    pub fn stock_split(
+        account_id: &str,
+        id: &str,
+        seq: u64,
+        at: Date,
+        symbol: &str,
+        numerator: u32,
+        denominator: u32,
+        cash_in_lieu: Option<f64>,
+    ) -> Self {
+        let mut event = Self::new(account_id, id, seq, at, EventKind::Split, symbol);
+        event.split = Some(SplitTerms {
+            numerator,
+            denominator,
+            cash_in_lieu,
+        });
+        event
+    }
 }
 
 impl fmt::Display for Event {
@@ -360,6 +395,19 @@ impl fmt::Display for Event {
                     f,
                     "{} {:?} {} x{} @{:.2}",
                     self.occurred_at, action, contract, self.qty, self.price
+                )
+            }
+            EventKind::Split => {
+                let terms = self.split.unwrap_or(SplitTerms {
+                    numerator: 1,
+                    denominator: 1,
+                    cash_in_lieu: None,
+                });
+                write!(
+                    f,
+                    "{} split {} {}:{} cash_in_lieu={:?}",
+                    self.occurred_at, self.symbol, terms.numerator, terms.denominator,
+                    terms.cash_in_lieu
                 )
             }
             other => write!(

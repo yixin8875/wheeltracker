@@ -63,6 +63,7 @@ pub struct OptionSummaryView {
     pub expiry: String,
     pub days_left: i64,
     pub open_qty: u32,
+    pub multiplier: u32,
     pub avg_credit: f64,
 }
 
@@ -86,6 +87,7 @@ pub struct EntryView {
     pub symbol: String,
     pub contract: String,
     pub right: String,
+    pub multiplier: u32,
     pub qty: u32,
     pub open_qty: u32,
     pub opened_at: String,
@@ -111,6 +113,7 @@ pub struct PositionView {
     pub expiry: String,
     pub days_left: i64,
     pub open_qty: u32,
+    pub multiplier: u32,
     pub avg_credit: f64,
     pub opened_at: String,
 }
@@ -314,6 +317,7 @@ pub fn option_summary(position: &OptionPosition, today: Date) -> OptionSummaryVi
         expiry: date_str(position.contract.expiry),
         days_left: (position.contract.expiry - today).whole_days(),
         open_qty: position.open_qty,
+        multiplier: position.contract.multiplier,
         avg_credit: position.avg_credit_per_share,
     }
 }
@@ -325,12 +329,15 @@ pub fn entry(entry: &PremiumEntry) -> EntryView {
         symbol: entry.contract.underlying.clone(),
         contract: entry.contract.display(),
         right: entry.contract.right.as_str().to_string(),
+        multiplier: entry.contract.multiplier,
         qty: entry.qty,
         open_qty: entry.open_qty,
         opened_at: date_str(entry.opened_at),
         closed_at: entry.closed_at.map(date_str),
         status: entry.status.as_str().to_string(),
-        premium_gross: entry.premium_gross_per_share * entry.qty as f64 * 100.0,
+        premium_gross: entry.premium_gross_per_share
+            * f64::from(entry.qty)
+            * f64::from(entry.contract.multiplier),
         fees: entry.fees,
         close_cost: entry.close_cost,
         net_premium: entry.net_premium,
@@ -350,6 +357,7 @@ pub fn position(position: &OptionPosition, today: Date) -> PositionView {
         expiry: date_str(position.contract.expiry),
         days_left: (position.contract.expiry - today).whole_days(),
         open_qty: position.open_qty,
+        multiplier: position.contract.multiplier,
         avg_credit: position.avg_credit_per_share,
         opened_at: date_str(position.opened_at),
     }

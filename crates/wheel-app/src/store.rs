@@ -11,7 +11,12 @@ use time::macros::format_description;
 use time::Date;
 use wheel_core::{
     replay, DerivedState, Event, EventKind, OptionAction, OptionContract, Right, Settings,
+    SplitTerms,
 };
+
+/// Bumped when the persisted event schema changes. A database written by a
+/// newer build is refused rather than silently read with missing columns.
+pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -39,6 +44,9 @@ CREATE TABLE IF NOT EXISTS events (
   strike       REAL,
   right        TEXT,
   multiplier   INTEGER,
+  split_numerator   INTEGER,
+  split_denominator INTEGER,
+  split_cash_in_lieu REAL,
   qty          INTEGER NOT NULL,
   price        REAL NOT NULL DEFAULT 0,
   fees         REAL NOT NULL DEFAULT 0,
@@ -67,6 +75,12 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 fn initialize(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        bail!(
+            "数据库由更新版本创建（schema {version}），请升级应用后再打开；当前最多支持 {SCHEMA_VERSION}"
+        );
+    }
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     tx.execute_batch(SCHEMA)?;
     let has_deleted_at = {
@@ -80,6 +94,18 @@ fn initialize(conn: &Connection) -> Result<()> {
     if !has_deleted_at {
         tx.execute_batch("ALTER TABLE events ADD COLUMN deleted_at TEXT;")?;
     }
+    let event_columns = {
+        let mut stmt = tx.prepare("PRAGMA table_info(events)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if !event_columns.iter().any(|name| name == "split_numerator") {
+        tx.execute_batch(
+            "ALTER TABLE events ADD COLUMN split_numerator INTEGER;
+             ALTER TABLE events ADD COLUMN split_denominator INTEGER;
+             ALTER TABLE events ADD COLUMN split_cash_in_lieu REAL;",
+        )?;
+    }
     let columns = {
         let mut stmt = tx.prepare("PRAGMA table_info(prices)")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -91,6 +117,7 @@ fn initialize(conn: &Connection) -> Result<()> {
     if !columns.iter().any(|name| name == "quoted_at") {
         tx.execute_batch("ALTER TABLE prices ADD COLUMN quoted_at TEXT;")?;
     }
+    tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     tx.commit()?;
     Ok(())
 }
@@ -339,7 +366,8 @@ pub fn format_date(date: Date) -> String {
 pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
     let mut stmt = conn.prepare(
         "SELECT id, seq, occurred_at, kind, symbol, expiry, strike, right, multiplier,
-                qty, price, fees, amount, note
+                qty, price, fees, amount, note,
+                split_numerator, split_denominator, split_cash_in_lieu
          FROM events
          WHERE account_id = ?1 AND deleted_at IS NULL
          ORDER BY occurred_at, seq",
@@ -361,6 +389,9 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
             row.get::<_, f64>(11)?,
             row.get::<_, f64>(12)?,
             row.get::<_, String>(13)?,
+            row.get::<_, Option<i64>>(14)?,
+            row.get::<_, Option<i64>>(15)?,
+            row.get::<_, Option<f64>>(16)?,
         ))
     })?;
 
@@ -381,7 +412,18 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
             fees,
             amount,
             note,
+            split_numerator,
+            split_denominator,
+            split_cash_in_lieu,
         ) = row?;
+        let split = match (split_numerator, split_denominator) {
+            (Some(numerator), Some(denominator)) => Some(SplitTerms {
+                numerator: u32::try_from(numerator).context("invalid split numerator")?,
+                denominator: u32::try_from(denominator).context("invalid split denominator")?,
+                cash_in_lieu: split_cash_in_lieu,
+            }),
+            _ => None,
+        };
         let contract = match (expiry, strike, right) {
             (Some(expiry), Some(strike), Some(right)) => Some(OptionContract {
                 underlying: symbol.clone(),
@@ -405,6 +447,7 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
             price,
             fees,
             amount,
+            split,
             note,
         });
     }
@@ -450,10 +493,21 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
         None => (None, None, None, None),
     };
 
+    let (split_numerator, split_denominator, split_cash_in_lieu) = match event.split {
+        Some(terms) => (
+            Some(i64::from(terms.numerator)),
+            Some(i64::from(terms.denominator)),
+            terms.cash_in_lieu,
+        ),
+        None => (None, None, None),
+    };
+
     conn.execute(
         "INSERT INTO events (id, account_id, seq, occurred_at, kind, symbol, expiry, strike,
-                             right, multiplier, qty, price, fees, amount, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                             right, multiplier, qty, price, fees, amount, note, created_at,
+                             split_numerator, split_denominator, split_cash_in_lieu)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                 ?17, ?18, ?19)",
         params![
             event.id,
             event.account_id,
@@ -471,6 +525,9 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
             event.amount,
             event.note,
             format_date(today()),
+            split_numerator,
+            split_denominator,
+            split_cash_in_lieu,
         ],
     )
     .context("insert event")?;
@@ -579,6 +636,35 @@ pub fn validate_event(event: &Event) -> Result<()> {
         || !event.amount.is_finite()
     {
         bail!("price and fees must be finite and nonnegative; amount must be finite");
+    }
+    if matches!(event.kind, EventKind::Split) {
+        if event.contract.is_some()
+            || event.qty != 0
+            || event.price != 0.0
+            || event.fees != 0.0
+            || event.amount != 0.0
+        {
+            bail!("split events cannot carry contract, quantity, price, fees or amount");
+        }
+        let Some(terms) = event.split else {
+            bail!("split events need split terms");
+        };
+        if terms.numerator == 0
+            || terms.denominator == 0
+            || terms.numerator > 1_000_000
+            || terms.denominator > 1_000_000
+        {
+            bail!("split numerator and denominator must be between 1 and 1,000,000");
+        }
+        if let Some(cash) = terms.cash_in_lieu {
+            if !cash.is_finite() || cash < 0.0 {
+                bail!("cash-in-lieu must be finite and nonnegative");
+            }
+        }
+        return Ok(());
+    }
+    if event.split.is_some() {
+        bail!("only split events may carry split terms");
     }
     if !matches!(event.kind, EventKind::Fee | EventKind::Adjustment) && event.qty == 0 {
         bail!("qty must be greater than zero");
@@ -747,6 +833,7 @@ pub fn kind_to_str(kind: EventKind) -> &'static str {
         EventKind::Dividend => "dividend",
         EventKind::Fee => "fee",
         EventKind::Adjustment => "adjustment",
+        EventKind::Split => "stock_split",
     }
 }
 
@@ -761,6 +848,7 @@ fn parse_kind(value: &str) -> Result<EventKind> {
         "dividend" => Ok(EventKind::Dividend),
         "fee" => Ok(EventKind::Fee),
         "adjustment" => Ok(EventKind::Adjustment),
+        "stock_split" => Ok(EventKind::Split),
         other => bail!("unknown event kind `{other}`"),
     }
 }
@@ -925,8 +1013,15 @@ mod tests {
     #[test]
     fn existing_schema_migration_retains_history_and_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(&SCHEMA.replace("  deleted_at   TEXT,\n", ""))
-            .unwrap();
+        conn.execute_batch(
+            &SCHEMA
+                .replace("  deleted_at   TEXT,\n", "")
+                .replace(
+                    "  split_numerator   INTEGER,\n  split_denominator INTEGER,\n  split_cash_in_lieu REAL,\n",
+                    "",
+                ),
+        )
+        .unwrap();
         conn.execute_batch("DROP TABLE settings;").unwrap();
         conn.execute(
             "INSERT INTO events (id,account_id,seq,occurred_at,kind,symbol,qty,price,created_at)
@@ -939,10 +1034,129 @@ mod tests {
         assert!(!get_settings(&conn).unwrap().include_dividends_in_cost);
         assert_eq!(count_events(&conn, "main").unwrap(), 1);
         assert_eq!(next_seq(&conn, "main").unwrap(), 8);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let split_columns: (Option<i64>, Option<i64>, Option<f64>) = conn
+            .query_row(
+                "SELECT split_numerator, split_denominator, split_cash_in_lieu
+                 FROM events WHERE id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(split_columns, (None, None, None));
+        assert!(list_events(&conn, "main").unwrap()[0].split.is_none());
         assert!(delete_event(&conn, "legacy").unwrap());
         initialize(&conn).unwrap();
         assert_eq!(count_events(&conn, "main").unwrap(), 0);
         assert_eq!(next_seq(&conn, "main").unwrap(), 8);
+    }
+
+    #[test]
+    fn split_events_round_trip_and_reject_malformed_terms() {
+        let conn = db();
+        let split = Event::stock_split("main", "split", 1, at(), "AAPL", 2, 1, Some(3.5));
+        insert_event(&conn, &split).unwrap();
+        let events = list_events(&conn, "main").unwrap();
+        assert_eq!(events, vec![split.clone()]);
+        assert_eq!(
+            events[0].split,
+            Some(SplitTerms {
+                numerator: 2,
+                denominator: 1,
+                cash_in_lieu: Some(3.5),
+            })
+        );
+        assert_eq!(kind_to_str(split.kind), "stock_split");
+        assert_eq!(parse_kind("stock_split").unwrap(), EventKind::Split);
+
+        let mut with_qty = split.clone();
+        with_qty.id = "bad-qty".into();
+        with_qty.seq = 2;
+        with_qty.qty = 1;
+        assert!(insert_event(&conn, &with_qty).is_err());
+
+        let contract = OptionContract::new(
+            "AAPL",
+            parse_date("2026-02-20").unwrap(),
+            150.0,
+            Right::Put,
+        );
+        let mut with_contract = split.clone();
+        with_contract.id = "bad-contract".into();
+        with_contract.seq = 2;
+        with_contract.contract = Some(contract);
+        assert!(insert_event(&conn, &with_contract).is_err());
+
+        let mut zero_ratio = split.clone();
+        zero_ratio.id = "zero-ratio".into();
+        zero_ratio.seq = 2;
+        zero_ratio.split = Some(SplitTerms {
+            numerator: 0,
+            denominator: 1,
+            cash_in_lieu: None,
+        });
+        assert!(insert_event(&conn, &zero_ratio).is_err());
+
+        let mut negative_cash = split.clone();
+        negative_cash.id = "negative-cash".into();
+        negative_cash.seq = 2;
+        negative_cash.split = Some(SplitTerms {
+            numerator: 2,
+            denominator: 1,
+            cash_in_lieu: Some(-1.0),
+        });
+        assert!(insert_event(&conn, &negative_cash).is_err());
+
+        let mut misplaced = buy("misplaced", 2);
+        misplaced.split = Some(SplitTerms {
+            numerator: 2,
+            denominator: 1,
+            cash_in_lieu: None,
+        });
+        assert!(insert_event(&conn, &misplaced).is_err());
+
+        assert_eq!(count_events(&conn, "main").unwrap(), 1);
+    }
+
+    #[test]
+    fn newer_schema_is_refused_without_creating_tables() {
+        let path = std::env::temp_dir().join(format!(
+            "wheel-newer-schema-{}-{}.sqlite",
+            std::process::id(),
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE marker (value INTEGER); INSERT INTO marker VALUES (7);
+                 PRAGMA user_version = {};",
+                SCHEMA_VERSION + 1
+            ))
+            .unwrap();
+        }
+        let message = match open(&path) {
+            Ok(_) => panic!("a newer schema must be refused"),
+            Err(err) => err.to_string(),
+        };
+        assert!(message.contains("请升级应用"));
+        let conn = Connection::open(&path).unwrap();
+        let marker: i64 = conn
+            .query_row("SELECT value FROM marker", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(marker, 7);
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0);
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

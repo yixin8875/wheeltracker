@@ -6,7 +6,9 @@
 
 - 仪表盘：当前战役、已落袋与未平仓净权利金、Put 资金义务。
 - 股票与期权持仓：到期倒计时、过期提示、预填平仓 / 作废 / 指派。
-- 快速录入：期权生命周期、股票买卖、分红、费用、现金调整；Ctrl+N 打开。
+- 快速录入：期权生命周期、股票买卖、拆股 / 合股、分红、费用、现金调整；Ctrl+N 打开。
+- 期权乘数：期权合约按实际每手股数录入（默认 100）；权利金、占用资金、指派预览、年化与到期提醒均使用真实乘数。
+- 拆股 / 合股：按「分子 : 分母」记录，自动调整进行中战役的持股数、未平仓期权的行权价与每手股数；零股按「整数股 + 现金补偿」入账，不保留小数股。拆股后的原合约仍可平仓、指派或作废。
 - 滚动录入：BTC + STO 一次提交，任何一条失败则整体回滚。
 - CSV 导入：选择文件或粘贴文本，自动识别中英文表头；三步确认列映射与逐行结果，重复行默认排除，任一行非法则整批不入账。
 - 邮件导入：选择 `.eml` / `.txt` 或粘贴正文，本地解码 multipart、base64、quoted-printable 与 HTML；按 Schwab、Fidelity、IBKR、富途、老虎和通用成交确认抽取，无法确定的行会说明并跳过，确认后复用 CSV 的校验与事务入账。
@@ -126,4 +128,4 @@ CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默�
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md) 与 [P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md)。拆股与系统通知尚未实现。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md) 与 [P4 拆股 / 乘数验收](docs/P4-split.md)。系统通知尚未实现。

@@ -21,7 +21,8 @@ use crate::import::{self, DateFormat, OccOption};
 /// Upper bound for email text (decoded or pasted).
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
-const CSV_HEADER: &str = "日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,备注";
+const CSV_HEADER: &str =
+    "日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,乘数,备注";
 
 /// A single extracted trade, ready to be written as one CSV row.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +36,8 @@ pub struct ExtractedTrade {
     pub expiry: Option<String>,
     pub strike: Option<f64>,
     pub right: Option<String>,
+    /// Shares per contract; 100 unless the source explicitly says otherwise.
+    pub multiplier: u32,
     pub amount: f64,
     pub note: String,
 }
@@ -665,6 +668,7 @@ fn parse_trade(text: &str, line_no: usize, context: &str, template: &str) -> Out
         expiry,
         strike,
         right,
+        multiplier: 100,
         amount: round_money(amount.abs()),
         note: format!("{template} · 第 {line_no} 行"),
     };
@@ -1259,6 +1263,7 @@ pub(crate) fn build_csv(trades: &[ExtractedTrade]) -> String {
             trade.expiry.clone().unwrap_or_default(),
             trade.strike.map(money_cell).unwrap_or_default(),
             trade.right.clone().unwrap_or_default(),
+            trade.multiplier.to_string(),
             trade.note.clone(),
         ];
         rows.push(

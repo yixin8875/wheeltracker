@@ -69,6 +69,7 @@ const FIELDS: { id: ImportField; label: string }[] = [
   { id: 'expiry', label: '到期日' },
   { id: 'strike', label: '行权价' },
   { id: 'right', label: '看涨 / 看跌' },
+  { id: 'multiplier', label: '每手股数 / 乘数' },
   { id: 'note', label: '备注' }
 ];
 
@@ -462,7 +463,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                   rows={10}
                   value={paste}
                   onChange={event => setPaste(event.target.value)}
-                  placeholder={'日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n2026-01-02,卖出开仓,AAPL,1,2.00,1.00,2026-02-20,150,P'}
+                  placeholder={'日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,乘数,备注\n2026-01-02,卖出开仓,AAPL,1,2.00,1.00,2026-02-20,150,P,100,'}
                 />
               </label>
               <div className="form-actions">
@@ -664,6 +665,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
           <div className="alert warning" role="status">
             提交时会按账本顺序整体校验；任一行不合法，整批都不会入账。
           </div>
+          <p className="muted">拆股 / 合股不会从 CSV、邮件或截图自动识别，请使用「记一笔 → 拆股 / 合股」手工录入比例与零股补偿；导入只读取券商明确给出的「乘数」列。</p>
           <div className="toolbar import-toolbar">
             <button onClick={() => selectAll(true)} disabled={busy}>全选可导入</button>
             <button onClick={() => selectAll(false)} disabled={busy}>清空选择</button>
@@ -710,6 +712,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                         <>
                           {row.event.symbol}
                           {row.event.expiry && <small className="muted"> {row.event.expiry} {row.event.strike}{row.event.right}</small>}
+                          {row.event.multiplier !== 100 && <small className="muted"> · {row.event.multiplier} 股/手</small>}
                         </>
                       ) : '—'}
                     </td>

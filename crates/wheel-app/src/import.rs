@@ -33,6 +33,7 @@ pub enum Field {
     Expiry,
     Strike,
     Right,
+    Multiplier,
     Note,
 }
 
@@ -106,8 +107,14 @@ pub struct CandidateEvent {
     pub strike: Option<f64>,
     #[serde(default)]
     pub right: Option<String>,
+    #[serde(default = "default_multiplier")]
+    pub multiplier: u32,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+fn default_multiplier() -> u32 {
+    100
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -491,6 +498,17 @@ const ALIASES: &[(Field, &[&str])] = &[
         &["strike", "strike price", "行权价", "执行价", "行使价"],
     ),
     (
+        Field::Multiplier,
+        &[
+            "multiplier",
+            "contract size",
+            "shares per contract",
+            "乘数",
+            "合约乘数",
+            "每手股数",
+        ],
+    ),
+    (
         Field::Right,
         &[
             "right",
@@ -577,6 +595,7 @@ pub fn field_label(field: Field) -> &'static str {
         Field::Expiry => "到期日",
         Field::Strike => "行权价",
         Field::Right => "看涨 / 看跌",
+        Field::Multiplier => "每手股数 / 乘数",
         Field::Note => "备注",
     }
 }
@@ -1077,6 +1096,30 @@ pub fn normalize_row(
         },
         None => 0.0,
     };
+    let parsed_multiplier = match optional_number(cells, mapping, Field::Multiplier) {
+        Some(raw) => match parse_number(&raw) {
+            Ok(value)
+                if value.fract().abs() < 1e-9
+                    && (1.0..=1_000_000.0).contains(&value) =>
+            {
+                value as u32
+            }
+            Ok(_) => {
+                errors.push("乘数必须是 1–1,000,000 的整数".to_string());
+                100
+            }
+            Err(error) => {
+                errors.push(format!("乘数：{error}"));
+                100
+            }
+        },
+        None => 100,
+    };
+    let multiplier = if kind.is_some_and(is_option_kind) {
+        parsed_multiplier
+    } else {
+        100
+    };
     let mut amount = match optional_number(cells, mapping, Field::Amount) {
         Some(raw) => match parse_number(&raw) {
             Ok(value) => Some(value),
@@ -1093,7 +1136,7 @@ pub fn normalize_row(
             if let Some(total) = amount {
                 let total = total.abs();
                 let derived = if is_option_kind(kind) {
-                    total / (f64::from(qty) * 100.0)
+                    total / (f64::from(qty) * f64::from(multiplier))
                 } else {
                     total / f64::from(qty)
                 };
@@ -1155,6 +1198,7 @@ pub fn normalize_row(
             expiry,
             strike,
             right,
+            multiplier,
             note,
         })
     } else {
@@ -1285,11 +1329,12 @@ fn fingerprint(
     expiry: Option<&str>,
     strike: Option<f64>,
     right: Option<&str>,
+    multiplier: u32,
     qty: u32,
     price: f64,
     fees: f64,
 ) -> String {
-    let payload = [
+    let mut parts = vec![
         account.to_string(),
         date.to_string(),
         kind.to_string(),
@@ -1300,8 +1345,12 @@ fn fingerprint(
         qty.to_string(),
         canonical_number(price),
         canonical_number(fees),
-    ]
-    .join("\u{1f}");
+    ];
+    // Keep fingerprints written before multiplier support identical.
+    if multiplier != 100 {
+        parts.push(format!("m{multiplier}"));
+    }
+    let payload = parts.join("\u{1f}");
     format!("{:016x}", fnv1a(payload.as_bytes()))
 }
 
@@ -1314,6 +1363,7 @@ pub fn fingerprint_candidate(event: &CandidateEvent, account: &str) -> String {
         event.expiry.as_deref(),
         event.strike,
         event.right.as_deref(),
+        event.multiplier,
         event.qty,
         event.price,
         event.fees,
@@ -1337,6 +1387,10 @@ pub fn fingerprint_existing(event: &Event) -> String {
         expiry.as_deref(),
         strike,
         right.as_deref(),
+        event
+            .contract
+            .as_ref()
+            .map_or(100, |contract| contract.multiplier),
         event.qty,
         event.price,
         event.fees,
@@ -1643,6 +1697,7 @@ mod tests {
             expiry: Some("2026-02-20".to_string()),
             strike: Some(150.0),
             right: Some("P".to_string()),
+            multiplier: 100,
             note: None,
         };
         let event = Event::sell_option(

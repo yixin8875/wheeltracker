@@ -128,12 +128,12 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
 
   return <>
     <section className="panel">
-      <div className="section-heading"><h2>备份与维护</h2><span className="muted">v{info?.version ?? '0.2.0'}</span></div>
+      <div className="section-heading"><h2>备份与维护</h2><span className="muted">v{info?.version ?? '0.3.0'}</span></div>
       <p className="muted break-path">本地数据库：{info?.dbPath ?? '请在桌面应用中查看'}</p>
       <div className="toolbar">
         <button disabled={!desktop || Boolean(working)} onClick={() => void rebuild()}>{working === 'rebuild' ? '检查中…' : '重算并检查账本'}</button>
         <button disabled={!desktop || Boolean(working)} onClick={() => void manualBackup()}><DatabaseBackup size={15}/>{working === 'backup' ? '备份中…' : '备份 SQLite'}</button>
-        <button disabled={!events.length} onClick={() => downloadCsv('wheel-events.csv', [['id', 'date', 'kind', 'symbol', 'qty', 'price', 'fees', 'amount', 'expiry', 'strike', 'right', 'note'], ...events.map(event => [event.id, event.date, event.kind, event.symbol, event.qty, event.price, event.fees, event.amount, event.expiry, event.strike, event.right, event.note])])}>导出交易 CSV</button>
+        <button disabled={!events.length} onClick={() => downloadCsv('wheel-events.csv', [['id', 'date', 'kind', 'symbol', 'qty', 'multiplier', 'split_numerator', 'split_denominator', 'split_cash_in_lieu', 'price', 'fees', 'amount', 'expiry', 'strike', 'right', 'note'], ...events.map(event => [event.id, event.date, event.kind, event.symbol, event.qty, event.multiplier, event.splitNumerator, event.splitDenominator, event.splitCashInLieu, event.price, event.fees, event.amount, event.expiry, event.strike, event.right, event.note])])}>导出交易 CSV</button>
         <button disabled={!events.length} onClick={() => { exportWorkbook({ entries, events, positions, campaigns }); onNotice(`已生成 Excel 工作簿：台账 ${entries.length} 条、交易 ${events.length} 笔、持仓 ${positions.length} 个、战役 ${campaigns.length} 个。`); }}><FileSpreadsheet size={15}/>导出 Excel 工作簿</button>
         <button disabled={!desktop || Boolean(working)} onClick={() => void exportJson()}><FileJson size={15}/>{working === 'json' ? '导出中…' : '导出 JSON'}</button>
       </div>

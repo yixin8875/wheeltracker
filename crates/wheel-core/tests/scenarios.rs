@@ -657,3 +657,307 @@ fn random_wheel_sequences_keep_invariants() {
         assert!(!state.premium_entries.is_empty(), "seed {seed}");
     }
 }
+
+#[test]
+fn split_two_for_one_adjusts_shares_and_open_contract() {
+    let p = put(date!(2026 - 03 - 20), 100.0);
+    let c = call(date!(2026 - 05 - 15), 110.0);
+    let events = vec![
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            3.0,
+            0.0,
+        ),
+        Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), p, 1, 0.0),
+        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 04 - 01), c, 1, 2.0, 0.0),
+        Event::stock_split(ACCOUNT, "e4", 4, date!(2026 - 04 - 10), "AAPL", 2, 1, None),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 200);
+    assert_close(campaign.cost_a().unwrap(), 50.0);
+    assert_close(campaign.premium_open, 200.0);
+    assert_eq!(
+        state.event_campaigns.get("e4").map(String::as_str),
+        Some(campaign.id.as_str())
+    );
+    let position = &state.positions[0];
+    assert_eq!(position.contract.strike, 55.0);
+    assert_eq!(position.contract.multiplier, 200);
+    assert_eq!(position.contract.expiry, date!(2026 - 05 - 15));
+    assert_eq!(position.open_qty, 1);
+    assert_close(position.avg_credit_per_share, 1.0);
+    assert_close(
+        position.avg_credit_per_share
+            * f64::from(position.contract.multiplier)
+            * f64::from(position.open_qty),
+        200.0,
+    );
+}
+
+#[test]
+fn split_aliases_let_the_old_contract_close() {
+    let p = put(date!(2026 - 03 - 20), 100.0);
+    let c = call(date!(2026 - 05 - 15), 110.0);
+    let events = vec![
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            3.0,
+            0.0,
+        ),
+        Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), p, 1, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e3",
+            3,
+            date!(2026 - 04 - 01),
+            c.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
+        Event::stock_split(ACCOUNT, "e4", 4, date!(2026 - 04 - 10), "AAPL", 2, 1, None),
+        Event::close_option(ACCOUNT, "e5", 5, date!(2026 - 04 - 15), c, 1, 0.5, 0.0),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 200);
+    assert_close(campaign.premium_realized, 400.0);
+    assert!(state.positions.is_empty());
+    assert_eq!(state.premium_entries[1].status, EntryStatus::Closed);
+}
+
+#[test]
+fn reverse_split_scales_strike_and_multiplier() {
+    let c = call(date!(2026 - 05 - 15), 60.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 02 - 01),
+            c.clone(),
+            1,
+            1.5,
+            0.0,
+        ),
+        Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 1, 10, None),
+        Event::assign_option(ACCOUNT, "e4", 4, date!(2026 - 03 - 15), c, 1, 0.0),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 0);
+    assert_eq!(campaign.status, CampaignStatus::Closed);
+    assert_close(campaign.share_pnl, 1000.0);
+    assert_close(campaign.premium_realized, 150.0);
+    assert_close(campaign.realized_pnl.unwrap(), 1150.0);
+}
+
+#[test]
+fn three_for_two_split_keeps_fractional_strike() {
+    let c = call(date!(2026 - 05 - 15), 30.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 10.0, 0.0),
+        Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), c, 1, 1.0, 0.0),
+        Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 3, 2, None),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 150);
+    assert_close(campaign.cost_a().unwrap(), 1000.0 / 150.0);
+    let position = &state.positions[0];
+    assert_eq!(position.contract.strike, 20.0);
+    assert_eq!(position.contract.multiplier, 150);
+    assert_close(position.avg_credit_per_share, 1.0 / 1.5);
+}
+
+#[test]
+fn non_integral_option_split_is_rejected() {
+    let c = call(date!(2026 - 05 - 15), 30.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 10.0, 0.0),
+        Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), c, 1, 1.0, 0.0),
+        Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 4, 3, None),
+    ];
+    let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        wheel_core::EngineError::NonIntegralOptionAdjustment { .. }
+    ));
+}
+
+#[test]
+fn fractional_split_needs_cash_in_lieu_and_books_it() {
+    let base = vec![Event::buy_shares(
+        ACCOUNT,
+        "e1",
+        1,
+        date!(2026 - 01 - 05),
+        "AAPL",
+        101,
+        50.0,
+        0.0,
+    )];
+    let mut missing = base.clone();
+    missing.push(Event::stock_split(
+        ACCOUNT,
+        "e2",
+        2,
+        date!(2026 - 02 - 01),
+        "AAPL",
+        1,
+        10,
+        None,
+    ));
+    let err = replay(ACCOUNT, &missing, Settings::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        wheel_core::EngineError::FractionalSplitNeedsCashInLieu { .. }
+    ));
+
+    let mut events = base;
+    events.push(Event::stock_split(
+        ACCOUNT,
+        "e2",
+        2,
+        date!(2026 - 02 - 01),
+        "AAPL",
+        1,
+        10,
+        Some(12.5),
+    ));
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 10);
+    assert_close(campaign.cost_a().unwrap(), 500.0);
+    assert_close(campaign.share_pnl, -37.5);
+    assert_close(*state.event_share_pnl.get("e2").unwrap(), -37.5);
+    let total: f64 = state.event_share_pnl.values().copied().sum();
+    assert_close(total, campaign.share_pnl);
+}
+
+#[test]
+fn consecutive_splits_follow_the_alias_chain() {
+    let c = call(date!(2026 - 06 - 19), 200.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 01 - 10),
+            c.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
+        Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 02 - 01), "AAPL", 2, 1, None),
+        Event::stock_split(ACCOUNT, "e4", 4, date!(2026 - 03 - 01), "AAPL", 2, 1, None),
+        Event::close_option(ACCOUNT, "e5", 5, date!(2026 - 04 - 01), c, 1, 0.25, 0.0),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 400);
+    assert_close(campaign.cost_a().unwrap(), 12.5);
+    assert_close(campaign.premium_realized, 100.0);
+    assert!(state.positions.is_empty());
+}
+
+#[test]
+fn backfilled_split_applies_before_a_later_dated_close() {
+    let c = call(date!(2026 - 05 - 15), 110.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 02 - 01),
+            c.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
+        Event::close_option(ACCOUNT, "e3", 3, date!(2026 - 04 - 01), c, 1, 0.5, 0.0),
+        // Recorded last but dated before the close, so replay applies it first.
+        Event::stock_split(ACCOUNT, "e4", 4, date!(2026 - 03 - 01), "AAPL", 2, 1, None),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_eq!(campaign.shares, 200);
+    assert_close(campaign.premium_realized, 100.0);
+    assert!(state.positions.is_empty());
+}
+
+#[test]
+fn one_for_one_split_is_a_no_op() {
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::stock_split(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), "AAPL", 1, 1, None),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    assert_eq!(state.campaigns[0].shares, 100);
+    assert_close(state.campaigns[0].cost_a().unwrap(), 50.0);
+}
+
+#[test]
+fn split_without_a_campaign_is_recorded_as_a_note() {
+    let events = vec![Event::stock_split(
+        ACCOUNT,
+        "e1",
+        1,
+        date!(2026 - 01 - 05),
+        "AAPL",
+        2,
+        1,
+        None,
+    )];
+    let state = run(&events);
+    assert_clean(&state);
+    assert!(state.campaigns.is_empty());
+    assert!(state.event_campaigns.is_empty());
+}
+
+#[test]
+fn opening_a_pre_split_contract_after_the_split_is_rejected() {
+    let c = call(date!(2026 - 05 - 15), 110.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 02 - 01),
+            c.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
+        Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 2, 1, None),
+        Event::sell_option(ACCOUNT, "e4", 4, date!(2026 - 04 - 01), c, 1, 2.0, 0.0),
+    ];
+    let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        wheel_core::EngineError::AdjustedContractRequired { .. }
+    ));
+}

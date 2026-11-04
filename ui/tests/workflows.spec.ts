@@ -4,9 +4,9 @@ import { test, expect, type Page } from '@playwright/test';
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const campaign = { id: 'campaign', symbol: 'TEST', status: 'active', shares: 100, costA: 150, costB: 148, costC: 147, premiumRealized: 200, premiumOpen: 100, dividends: 0, adjustments: 0, price: 160, safetyMargin: 12 / 148, nextOption: null, realizedPnl: null, sharePnl: 0, startedAt: '2026-01-02', endedAt: null, cycles: 1, costPoints: [{ at: '2026-01-02', shares: 100, premiumRealized: 0, premiumOpen: 0, costA: 150, costB: 150, costC: 150 }, { at: '2026-02-20', shares: 100, premiumRealized: 200, premiumOpen: 0, costA: 150, costB: 148, costC: 148 }] };
-    const position = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-02-20 150P', right: 'P', strike: 150, expiry: '2026-02-20', daysLeft: -256, openQty: 1, avgCredit: 2, openedAt: '2026-01-02' };
-    const callPosition = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, avgCredit: 1, openedAt: '2026-02-20' };
-    const entry = { id: 'entry', campaignId: 'campaign', symbol: 'TEST', contract: position.contract, right: 'P', qty: 1, openQty: 0, openedAt: '2026-01-02', closedAt: '2026-02-20', status: 'closed', premiumGross: 200, fees: 1, closeCost: 324.5, netPremium: -125.5, collateral: 15000, daysHeld: 49, annualizedReturn: -.0623 };
+    const position = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-02-20 150P', right: 'P', strike: 150, expiry: '2026-02-20', daysLeft: -256, openQty: 1, multiplier: 100, avgCredit: 2, openedAt: '2026-01-02' };
+    const callPosition = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20' };
+    const entry = { id: 'entry', campaignId: 'campaign', symbol: 'TEST', contract: position.contract, right: 'P', multiplier: 100, qty: 1, openQty: 0, openedAt: '2026-01-02', closedAt: '2026-02-20', status: 'closed', premiumGross: 200, fees: 1, closeCost: 324.5, netPremium: -125.5, collateral: 15000, daysHeld: 49, annualizedReturn: -.0623 };
     const state = window as any;
     state.isTauri = true; state.testCalls = []; state.testReject = false;
     state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }];
@@ -21,10 +21,11 @@ async function setup(page: Page) {
       costPoints: campaign.costPoints.map((point, index) => index === 0 || !preferences.includeDividendsInCost ? point : { ...point, costB: point.costB - 1, costC: point.costC - 1 }),
     });
     const history = [
-      { id: 'buy', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入', expiry: null, strike: null, right: null },
-      { id: 'dividend', date: '2026-01-10', kind: 'dividend', symbol: 'TEST', qty: 100, price: 1, fees: 0, amount: 0, note: '本轮分红', expiry: null, strike: null, right: null },
-      { id: 'call', date: '2026-02-20', kind: 'option_open_short', symbol: 'TEST', qty: 1, price: 1, fees: 0, amount: 0, note: '本轮 Call', expiry: '2026-12-18', strike: 160, right: 'C' },
+      { id: 'buy', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null },
+      { id: 'dividend', date: '2026-01-10', kind: 'dividend', symbol: 'TEST', qty: 100, price: 1, fees: 0, amount: 0, note: '本轮分红', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null },
+      { id: 'call', date: '2026-02-20', kind: 'option_open_short', symbol: 'TEST', qty: 1, price: 1, fees: 0, amount: 0, note: '本轮 Call', expiry: '2026-12-18', strike: 160, right: 'C', multiplier: 100, splitNumerator: null, splitDenominator: null, splitCashInLieu: null },
     ];
+    const splitEvent = { id: 'split', date: '2026-03-01', kind: 'stock_split', symbol: 'TEST', qty: 0, price: 0, fees: 0, amount: 0, note: '本轮拆股', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: 2, splitDenominator: 1, splitCashInLieu: 3.25 };
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: Record<string, unknown>) => {
       state.testCalls.push({ command, args });
       switch (command) {
@@ -33,8 +34,8 @@ async function setup(page: Page) {
           if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
           return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
-        case 'positions': return [position];
-        case 'list_events': return [{ id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null }];
+        case 'positions': return [{ ...position, multiplier: state.testMultiplier ?? position.multiplier }];
+        case 'list_events': return [...(state.testSplit ? [splitEvent] : []), { id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
         case 'monthly_income': return state.testMonthly ?? {
           months: [
             { month: '2025-12', premium: 50, dividends: 0, fees: 0, adjustments: 0, total: 50, cumulative: 50, closedEntries: 1 },
@@ -104,12 +105,17 @@ async function setup(page: Page) {
           state.testPending = { version: String(args.fileName).endsWith('.enc') ? 2 : 1, backupFile: String(args.fileName), safetyFile: 'pre-restore-1767225600000000000-2.sqlite', requestedAt: '2026-01-02 10:05:00', stagedFile: String(args.fileName).endsWith('.enc') ? 'staged-1.sqlite' : null };
           return state.testPending;
         case 'campaign_detail': return {
-          campaign: { ...currentCampaign(), shares: state.testPartial ? 200 : 100 }, entries: [entry], positions: [position, callPosition], lots: [], events: history,
+          campaign: { ...currentCampaign(), shares: state.testPartial ? 200 : 100 }, entries: [entry], positions: [position, callPosition], lots: [], events: state.testSplit ? [...history, splitEvent] : history,
           callScenarios: [{ contract: 'TEST 2026-12-18 160C', qty: 1, sharesSold: 100, strike: 160, assignmentFees: 0,
             saleProceeds: 16000, sharePnl: 1000, premiumRealized: 300, dividends: 100, adjustments: 0, realizedTotal: 1400,
             remainingShares: state.testPartial ? 100 : 0, remainingContracts: state.testPartial ? 1 : 0, closesCampaign: !state.testPartial }],
         };
-        case 'add_event': if (state.testReject) throw new Error('insufficient shares'); return 'saved';
+        case 'add_event': {
+          if (state.testReject) throw new Error('insufficient shares');
+          const req = args.req as any;
+          if (req.kind === 'stock_split' && req.splitNumerator === 4 && req.splitDenominator === 3) throw new Error('拆股比例 4:3 会使未平仓期权的每手股数不是整数');
+          return 'saved';
+        }
         case 'add_events': return ['close', 'open'];
         case 'backup_now': return args.password ? 'test-only/backups/snapshot.sqlite.enc' : 'test-only/backups/snapshot.sqlite';
         case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.2.0', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
@@ -785,4 +791,62 @@ test('renaming the current account updates the switcher and header', async ({ pa
   await expect(page.getByLabel('切换账户')).toContainText('主账户');
   await expect(page.locator('header')).toContainText('主账户');
   await expect(page.getByRole('status')).toContainText('重命名为「主账户」');
+});
+
+test('stock split entry submits ratio and cash in lieu without trade fields', async ({ page }) => {
+  await setup(page);
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await page.getByLabel('交易类型').selectOption('stock_split');
+  await expect(page.getByLabel('比例 · 分子')).toHaveValue('2');
+  await expect(page.getByLabel('比例 · 分母')).toHaveValue('1');
+  await expect(page.getByLabel('股数', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('每股成交价', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('费用总额')).toHaveCount(0);
+  await page.getByLabel('标的代码').fill('TEST');
+  await page.getByLabel('零股现金补偿（USD，选填）').fill('3.25');
+  await expect(page.locator('.entry-preview')).toContainText('2 : 1');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
+  const req = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req);
+  expect(req).toMatchObject({ kind: 'stock_split', symbol: 'TEST', qty: 0, amount: 0, splitNumerator: 2, splitDenominator: 1, splitCashInLieu: 3.25 });
+});
+
+test('non-integral split ratio surfaces a readable error and keeps the form', async ({ page }) => {
+  await setup(page);
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await page.getByLabel('交易类型').selectOption('stock_split');
+  await page.getByLabel('标的代码').fill('TEST');
+  await page.getByLabel('比例 · 分子').fill('4');
+  await page.getByLabel('比例 · 分母').fill('3');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('4:3');
+  await expect(page.getByLabel('比例 · 分子')).toHaveValue('4');
+  await expect(page.getByRole('button', { name: '保存交易', exact: true })).toBeEnabled();
+});
+
+test('split ratio appears in the event log and campaign timeline', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).testSplit = true; });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '交易记录', exact: true }).click();
+  const row = page.getByRole('row').filter({ hasText: '拆股 / 合股' });
+  await expect(row).toContainText('2 : 1');
+  await expect(row).toContainText('零股补偿 $3.25');
+  await page.getByRole('button', { name: '仪表盘', exact: true }).click();
+  await page.getByRole('button', { name: '查看战役' }).click();
+  const timeline = page.locator('section').filter({ has: page.getByRole('heading', { name: '战役事件时间轴' }) });
+  await expect(timeline.getByRole('listitem')).toHaveCount(4);
+  await expect(timeline).toContainText('2 : 1');
+  await expect(timeline).toContainText('零股补偿 $3.25');
+});
+
+test('open contract multiplier drives entry prefill and reminder premium', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).testMultiplier = 200; });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await expect(page.locator('.reminder-card')).toContainText('净权利金 $400.00');
+  await page.getByRole('button', { name: '当前持仓', exact: true }).click();
+  await page.getByRole('button', { name: '到期作废', exact: true }).click();
+  await expect(page.getByLabel('每手股数（乘数）')).toHaveValue('200');
 });

@@ -278,9 +278,15 @@ pub fn dashboard(
     account_id: Option<String>,
 ) -> Result<views::DashboardView, String> {
     let account_id = account_or_default(account_id);
-    let conn = state.conn();
-    let derived = derive(&conn, &account_id)?;
-    let prices = store::latest_prices(&conn).map_err(|error| error.to_string())?;
+    dashboard_for(&state.conn(), &account_id)
+}
+
+fn dashboard_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<views::DashboardView, String> {
+    let derived = derive(conn, account_id)?;
+    let prices = store::latest_prices(conn).map_err(|error| error.to_string())?;
     let today = store::today();
 
     let mut campaigns: Vec<views::CampaignCardView> = derived
@@ -311,7 +317,11 @@ pub fn dashboard(
         .positions
         .iter()
         .filter(|position| position.contract.right == Right::Put)
-        .map(|position| position.contract.strike * 100.0 * position.open_qty as f64)
+        .map(|position| {
+            position.contract.strike
+                * f64::from(position.contract.multiplier)
+                * f64::from(position.open_qty)
+        })
         .sum();
     let shares_held = derived
         .campaigns
@@ -335,7 +345,7 @@ pub fn dashboard(
     };
 
     Ok(views::DashboardView {
-        account_id,
+        account_id: account_id.to_string(),
         as_of: today.to_string(),
         summary,
         campaigns,
@@ -639,6 +649,9 @@ pub struct EventView {
     pub strike: Option<f64>,
     pub right: Option<String>,
     pub multiplier: Option<u32>,
+    pub split_numerator: Option<u32>,
+    pub split_denominator: Option<u32>,
+    pub split_cash_in_lieu: Option<f64>,
     pub note: String,
 }
 
@@ -651,6 +664,9 @@ fn event_view(event: Event) -> EventView {
             .as_ref()
             .map(|c| c.right.as_str().to_string()),
         multiplier: event.contract.as_ref().map(|c| c.multiplier),
+        split_numerator: event.split.map(|terms| terms.numerator),
+        split_denominator: event.split.map(|terms| terms.denominator),
+        split_cash_in_lieu: event.split.and_then(|terms| terms.cash_in_lieu),
         date: event.occurred_at.to_string(),
         kind: store::kind_to_str(event.kind).to_string(),
         id: event.id,
@@ -713,6 +729,14 @@ pub struct NewEventReq {
     pub strike: Option<f64>,
     #[serde(default)]
     pub right: Option<String>,
+    #[serde(default)]
+    pub multiplier: Option<u32>,
+    #[serde(default)]
+    pub split_numerator: Option<u32>,
+    #[serde(default)]
+    pub split_denominator: Option<u32>,
+    #[serde(default)]
+    pub split_cash_in_lieu: Option<f64>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -794,12 +818,16 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
                 "C" => Right::Call,
                 _ => return Err("right must be P or C".to_string()),
             };
+            let multiplier = req.multiplier.unwrap_or(100);
+            if multiplier == 0 {
+                return Err("multiplier must be greater than zero".to_string());
+            }
             Some(OptionContract {
                 underlying: symbol.clone(),
                 expiry: store::parse_date(expiry).map_err(|error| error.to_string())?,
                 strike,
                 right,
-                multiplier: 100,
+                multiplier,
             })
         }
         _ => return Err("option contract needs expiry, strike and right together".to_string()),
@@ -852,6 +880,24 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
         "dividend" => Event::dividend(account_id, id, seq, at, &symbol, req.price, req.qty),
         "fee" => Event::fee(account_id, id, seq, at, &symbol, req.amount),
         "adjustment" => Event::adjustment(account_id, id, seq, at, &symbol, req.amount),
+        "stock_split" => {
+            let numerator = req
+                .split_numerator
+                .ok_or_else(|| "split numerator is required".to_string())?;
+            let denominator = req
+                .split_denominator
+                .ok_or_else(|| "split denominator is required".to_string())?;
+            Event::stock_split(
+                account_id,
+                id,
+                seq,
+                at,
+                &symbol,
+                numerator,
+                denominator,
+                req.split_cash_in_lieu,
+            )
+        }
         other => return Err(format!("unknown event kind `{other}`")),
     };
 
@@ -1058,6 +1104,9 @@ struct ExportEvent {
     strike: Option<f64>,
     right: Option<&'static str>,
     multiplier: Option<u32>,
+    split_numerator: Option<u32>,
+    split_denominator: Option<u32>,
+    split_cash_in_lieu: Option<f64>,
     qty: u32,
     price: f64,
     fees: f64,
@@ -1084,6 +1133,9 @@ impl ExportEvent {
                 Right::Call => "call",
             }),
             multiplier: contract.as_ref().map(|contract| contract.multiplier),
+            split_numerator: event.split.map(|terms| terms.numerator),
+            split_denominator: event.split.map(|terms| terms.denominator),
+            split_cash_in_lieu: event.split.and_then(|terms| terms.cash_in_lieu),
             qty: event.qty,
             price: event.price,
             fees: event.fees,
@@ -1450,6 +1502,10 @@ fn commit_for(
             expiry: row.event.expiry,
             strike: row.event.strike,
             right: row.event.right,
+            multiplier: Some(row.event.multiplier),
+            split_numerator: None,
+            split_denominator: None,
+            split_cash_in_lieu: None,
             note: Some(note),
         });
     }
@@ -1611,7 +1667,8 @@ fn text_mapping() -> crate::import::ColumnMapping {
         (Field::Expiry, 6),
         (Field::Strike, 7),
         (Field::Right, 8),
-        (Field::Note, 9),
+        (Field::Multiplier, 9),
+        (Field::Note, 10),
     ]);
     ColumnMapping {
         fields,
@@ -2429,5 +2486,61 @@ Fees: 1.00
         assert_eq!(preview.rows.len(), 1);
         assert!(preview.warnings[0].contains("云端视觉（gpt-4o）"));
         assert_eq!(preview.rows[0].event.as_ref().unwrap().note.as_deref(), Some("云端视觉 · gpt-4o"));
+    }
+
+    #[test]
+    fn dashboard_uses_the_contract_multiplier_for_collateral() {
+        let conn = db();
+        let expiry = store::parse_date("2026-02-20").unwrap();
+        let mut contract = OptionContract::new("AAPL", expiry, 100.0, Right::Put);
+        contract.multiplier = 50;
+        store::insert_event(
+            &conn,
+            &Event::sell_option("main", "e1", 1, date(), contract, 2, 1.0, 0.0),
+        )
+        .unwrap();
+        let dashboard = dashboard_for(&conn, "main").unwrap();
+        assert_eq!(dashboard.summary.collateral, 10_000.0);
+        assert_eq!(dashboard.summary.open_contracts, 2);
+        assert_eq!(dashboard.summary.premium_open, 100.0);
+    }
+
+    #[test]
+    fn build_event_accepts_splits_and_requires_both_terms() {
+        let req: NewEventReq = serde_json::from_value(serde_json::json!({
+            "date": "2026-03-01", "kind": "stock_split", "symbol": " aapl ",
+            "qty": 0, "price": 0, "fees": 0, "amount": 0,
+            "splitNumerator": 2, "splitDenominator": 1, "splitCashInLieu": null
+        }))
+        .unwrap();
+        let event = build_event(&req, "main", "e1", 1).unwrap();
+        assert_eq!(event.kind, EventKind::Split);
+        assert_eq!(event.symbol, "AAPL");
+        assert!(event.contract.is_none());
+        assert_eq!(event.qty, 0);
+        assert_eq!(
+            event.split,
+            Some(wheel_core::SplitTerms {
+                numerator: 2,
+                denominator: 1,
+                cash_in_lieu: None,
+            })
+        );
+
+        let missing_denominator: NewEventReq = serde_json::from_value(serde_json::json!({
+            "date": "2026-03-01", "kind": "stock_split", "symbol": "AAPL",
+            "qty": 0, "price": 0, "fees": 0, "amount": 0, "splitNumerator": 2
+        }))
+        .unwrap();
+        assert!(build_event(&missing_denominator, "main", "e2", 2).is_err());
+
+        let with_cash: NewEventReq = serde_json::from_value(serde_json::json!({
+            "date": "2026-03-01", "kind": "stock_split", "symbol": "AAPL",
+            "qty": 0, "price": 0, "fees": 0, "amount": 0,
+            "splitNumerator": 1, "splitDenominator": 10, "splitCashInLieu": 3.25
+        }))
+        .unwrap();
+        let event = build_event(&with_cash, "main", "e3", 3).unwrap();
+        assert_eq!(event.split.unwrap().cash_in_lieu, Some(3.25));
     }
 }

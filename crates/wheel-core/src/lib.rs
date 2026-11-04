@@ -27,5 +27,5 @@ pub mod premium;
 
 pub use campaign::{Campaign, CampaignStatus, CostPoint};
 pub use engine::{replay, DerivedState, EngineError, Settings};
-pub use model::{Event, EventId, EventKind, OptionAction, OptionContract, Right};
+pub use model::{Event, EventId, EventKind, OptionAction, OptionContract, Right, SplitTerms};
 pub use premium::{EntryStatus, OptionPosition, PremiumEntry, ShareLot};

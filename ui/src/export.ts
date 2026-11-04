@@ -6,15 +6,15 @@ export function ledgerSheet(entries: Entry[]): Sheet {
   return {
     name: '台账',
     rows: [
-      ['开仓日期', '平仓日期', '标的', '合约', '方向', '手数', '状态', '毛权利金', '平仓成本', '费用', '净权利金', '占用资金', '持有天数', '年化收益率', '战役'],
+      ['开仓日期', '平仓日期', '标的', '合约', '方向', '手数', '每手股数', '状态', '毛权利金', '平仓成本', '费用', '净权利金', '占用资金', '持有天数', '年化收益率', '战役'],
       ...entries.map(entry => [
         entry.openedAt, entry.closedAt ?? '', entry.symbol, entry.contract, entry.right === 'P' ? 'Put' : 'Call',
-        entry.qty, labels[entry.status] ?? entry.status, entry.premiumGross, entry.closeCost, entry.fees,
+        entry.qty, entry.multiplier, labels[entry.status] ?? entry.status, entry.premiumGross, entry.closeCost, entry.fees,
         entry.netPremium, entry.collateral, entry.daysHeld ?? '', entry.annualizedReturn ?? '', entry.campaignId,
       ]),
     ],
-    columnWidths: [12, 12, 10, 26, 8, 8, 10, 14, 14, 10, 14, 14, 10, 12, 14],
-    styles: ['text', 'text', 'text', 'text', 'text', 'number', 'text', 'money', 'money', 'money', 'money', 'money', 'number', 'percent', 'text'],
+    columnWidths: [12, 12, 10, 26, 8, 8, 10, 10, 14, 14, 10, 14, 14, 10, 12, 14],
+    styles: ['text', 'text', 'text', 'text', 'text', 'number', 'number', 'text', 'money', 'money', 'money', 'money', 'money', 'number', 'percent', 'text'],
   };
 }
 
@@ -22,14 +22,16 @@ export function eventsSheet(events: EventRow[]): Sheet {
   return {
     name: '交易记录',
     rows: [
-      ['记录 ID', '日期', '类型', '标的', '数量', '每股价格', '费用', '金额', '到期日', '行权价', '看涨/看跌', '备注'],
+      ['记录 ID', '日期', '类型', '标的', '数量', '拆股比例', '零股补偿', '每手股数', '每股价格', '费用', '金额', '到期日', '行权价', '看涨/看跌', '备注'],
       ...events.map(event => [
-        event.id, event.date, labels[event.kind] ?? event.kind, event.symbol, event.qty, event.price, event.fees,
+        event.id, event.date, labels[event.kind] ?? event.kind, event.symbol, event.qty,
+        event.splitNumerator != null && event.splitDenominator != null ? `${event.splitNumerator}:${event.splitDenominator}` : '',
+        event.splitCashInLieu ?? '', event.multiplier ?? '', event.price, event.fees,
         event.amount, event.expiry ?? '', event.strike ?? '', event.right ?? '', event.note,
       ]),
     ],
-    columnWidths: [24, 12, 14, 10, 8, 12, 10, 12, 12, 10, 10, 36],
-    styles: ['text', 'text', 'text', 'text', 'number', 'money', 'money', 'money', 'text', 'money', 'text', 'text'],
+    columnWidths: [24, 12, 14, 10, 8, 10, 10, 10, 12, 10, 12, 12, 10, 10, 36],
+    styles: ['text', 'text', 'text', 'text', 'number', 'text', 'money', 'number', 'money', 'money', 'money', 'text', 'money', 'text', 'text'],
   };
 }
 
@@ -37,14 +39,14 @@ export function positionsSheet(positions: Position[]): Sheet {
   return {
     name: '持仓',
     rows: [
-      ['标的', '合约', '方向', '行权价', '到期日', '剩余天数', '手数', '每股净权利金', '开仓日期', '战役'],
+      ['标的', '合约', '方向', '行权价', '到期日', '剩余天数', '手数', '每手股数', '每股净权利金', '开仓日期', '战役'],
       ...positions.map(position => [
         position.symbol, position.contract, position.right === 'P' ? 'Put' : 'Call', position.strike, position.expiry,
-        position.daysLeft, position.openQty, position.avgCredit, position.openedAt, position.campaignId,
+        position.daysLeft, position.openQty, position.multiplier, position.avgCredit, position.openedAt, position.campaignId,
       ]),
     ],
-    columnWidths: [10, 26, 8, 10, 12, 10, 8, 14, 12, 14],
-    styles: ['text', 'text', 'text', 'money', 'text', 'number', 'number', 'money', 'text', 'text'],
+    columnWidths: [10, 26, 8, 10, 12, 10, 8, 10, 14, 12, 14],
+    styles: ['text', 'text', 'text', 'money', 'text', 'number', 'number', 'number', 'money', 'text', 'text'],
   };
 }
 

@@ -1,5 +1,5 @@
 export interface CostPoint { at: string; shares: number; premiumRealized: number; premiumOpen: number; costA: number; costB: number; costC: number }
-export interface OptionSummary { contract: string; right: string; strike: number; expiry: string; daysLeft: number; openQty: number; avgCredit: number }
+export interface OptionSummary { contract: string; right: string; strike: number; expiry: string; daysLeft: number; openQty: number; multiplier: number; avgCredit: number }
 export interface Campaign {
   id: string; symbol: string; status: string; shares: number;
   costA: number | null; costB: number | null; costC: number | null;
@@ -10,7 +10,7 @@ export interface Campaign {
 }
 export interface Summary { premiumRealized: number; premiumOpen: number; activeCampaigns: number; openPositions: number; openContracts: number; collateral: number; sharesHeld: number }
 export interface Dashboard { accountId: string; asOf: string; summary: Summary; campaigns: Campaign[] }
-export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
+export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
 export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number }
@@ -45,10 +45,10 @@ export interface MarketQuote { symbol: string; name: string; price: number; prev
 export interface QuoteRefresh { updated: Price[]; failed: { symbol: string; error: string }[] }
 export interface Account { id: string; name: string; broker: string | null; currency: string; createdAt: string }
 export interface AppInfo { version: string; dbPath: string }
-export interface NewEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry?: string; strike?: number; right?: string; note?: string; accountId?: string }
-export interface EventRow { id: string; date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; note: string; expiry: string | null; strike: number | null; right: string | null }
+export interface NewEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry?: string; strike?: number; right?: string; multiplier?: number; splitNumerator?: number; splitDenominator?: number; splitCashInLieu?: number; note?: string; accountId?: string }
+export interface EventRow { id: string; date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; note: string; expiry: string | null; strike: number | null; right: string | null; multiplier: number | null; splitNumerator: number | null; splitDenominator: number | null; splitCashInLieu: number | null }
 
-export type ImportField = 'date' | 'kind' | 'action' | 'symbol' | 'optionSymbol' | 'qty' | 'price' | 'fees' | 'amount' | 'expiry' | 'strike' | 'right' | 'note';
+export type ImportField = 'date' | 'kind' | 'action' | 'symbol' | 'optionSymbol' | 'qty' | 'price' | 'fees' | 'amount' | 'expiry' | 'strike' | 'right' | 'multiplier' | 'note';
 export type ImportDelimiter = 'comma' | 'semicolon' | 'tab';
 export type ImportDateFormat = 'auto' | 'yearMonthDay' | 'monthDayYear' | 'chinese';
 export interface ColumnMapping {
@@ -57,7 +57,7 @@ export interface ColumnMapping {
   delimiter: ImportDelimiter | null;
   hasHeader: boolean | null;
 }
-export interface CandidateEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry: string | null; strike: number | null; right: string | null; note: string | null }
+export interface CandidateEvent { date: string; kind: string; symbol: string; qty: number; price: number; fees: number; amount: number; expiry: string | null; strike: number | null; right: string | null; multiplier: number; note: string | null }
 export type RowStatus = 'ok' | 'warning' | 'duplicate' | 'error';
 export interface CandidateRow { rowNumber: number; line: number; status: RowStatus; messages: string[]; cells: string[]; raw: string; event: CandidateEvent | null; selectedByDefault: boolean }
 export interface ImportCounts { total: number; ok: number; warning: number; duplicate: number; error: number; selected: number }

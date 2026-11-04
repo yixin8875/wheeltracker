@@ -39,7 +39,7 @@ export function ReminderCard({ positions, leadDays, onOpenPositions, onOpenCalen
       {reminders.slice(0, 5).map(position => {
         const severity = reminderSeverity(position.daysLeft, leadDays);
         return <button key={position.contract} className={`reminder-row ${severity}`} onClick={() => onOpenCampaign(position.campaignId)}>
-          <span className="reminder-contract"><strong>{position.contract}</strong><small>{position.symbol} · {position.openQty} 手 · 净权利金 {money(position.avgCredit * position.openQty * 100)}</small></span>
+          <span className="reminder-contract"><strong>{position.contract}</strong><small>{position.symbol} · {position.openQty} 手 · 净权利金 {money(position.avgCredit * position.openQty * position.multiplier)}</small></span>
           <span className="reminder-day">{dayLabel(position.daysLeft)}<small>{position.expiry}</small></span>
           <ChevronRight size={16}/>
         </button>;

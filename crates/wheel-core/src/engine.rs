@@ -8,7 +8,7 @@ use std::fmt;
 use time::Date;
 
 use crate::campaign::{Campaign, CampaignStatus, CostPoint};
-use crate::model::{Event, EventId, EventKind, OptionAction, OptionContract, Right};
+use crate::model::{Event, EventId, EventKind, OptionAction, OptionContract, Right, SplitTerms};
 use crate::premium::{EntryStatus, OptionPosition, PremiumEntry, ShareLot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +25,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EngineError {
     MissingContract {
         event: EventId,
@@ -55,6 +55,33 @@ pub enum EngineError {
     NoActiveCampaign {
         event: EventId,
         symbol: String,
+    },
+    MissingSplitTerms {
+        event: EventId,
+    },
+    InvalidSplitTerms {
+        event: EventId,
+    },
+    NonIntegralOptionAdjustment {
+        event: EventId,
+        contract: String,
+        numerator: u32,
+        denominator: u32,
+    },
+    FractionalSplitNeedsCashInLieu {
+        event: EventId,
+        symbol: String,
+        exact_shares: f64,
+    },
+    UnexpectedCashInLieu {
+        event: EventId,
+    },
+    SplitOverflow {
+        event: EventId,
+    },
+    AdjustedContractRequired {
+        event: EventId,
+        contract: String,
     },
 }
 
@@ -95,6 +122,43 @@ impl fmt::Display for EngineError {
             EngineError::NoActiveCampaign { event, symbol } => {
                 write!(f, "event {event} needs an active campaign for {symbol}")
             }
+            EngineError::MissingSplitTerms { event } => {
+                write!(f, "event {event} is a split but has no split terms")
+            }
+            EngineError::InvalidSplitTerms { event } => {
+                write!(f, "event {event} has invalid split terms")
+            }
+            EngineError::NonIntegralOptionAdjustment {
+                event,
+                contract,
+                numerator,
+                denominator,
+            } => write!(
+                f,
+                "event {event} cannot adjust {contract} by {numerator}:{denominator}: \
+                 the per-contract multiplier would not be a whole number"
+            ),
+            EngineError::FractionalSplitNeedsCashInLieu {
+                event,
+                symbol,
+                exact_shares,
+            } => write!(
+                f,
+                "event {event} leaves {exact_shares} {symbol} shares; enter the broker's \
+                 cash-in-lieu amount to record the fractional share"
+            ),
+            EngineError::UnexpectedCashInLieu { event } => write!(
+                f,
+                "event {event} has a cash-in-lieu amount but the split produces no fraction"
+            ),
+            EngineError::SplitOverflow { event } => {
+                write!(f, "event {event} produces shares outside the supported range")
+            }
+            EngineError::AdjustedContractRequired { event, contract } => write!(
+                f,
+                "event {event} opens {contract} with a pre-split contract; use the adjusted \
+                 strike and multiplier"
+            ),
         }
     }
 }
@@ -116,6 +180,9 @@ pub struct DerivedState {
     /// the holding at that point, so reports must use this amount rather than
     /// re-multiplying the rate.
     pub event_dividends: HashMap<EventId, f64>,
+    /// Realized share-leg P&L attributed to each sale, call assignment, or
+    /// cash-in-lieu event. The sum per campaign equals `Campaign.share_pnl`.
+    pub event_share_pnl: HashMap<EventId, f64>,
 }
 
 impl DerivedState {
@@ -180,6 +247,18 @@ impl DerivedState {
                 issues.push(format!(
                     "campaign {} premium_realized mismatch: entries={closed_sum}, state={}",
                     c.id, c.premium_realized
+                ));
+            }
+            let share_pnl_sum: f64 = self
+                .event_share_pnl
+                .iter()
+                .filter(|(event_id, _)| self.event_campaigns.get(*event_id) == Some(&c.id))
+                .map(|(_, pnl)| *pnl)
+                .sum();
+            if (share_pnl_sum - c.share_pnl).abs() > eps {
+                issues.push(format!(
+                    "campaign {} share_pnl mismatch: events={share_pnl_sum}, state={}",
+                    c.id, c.share_pnl
                 ));
             }
             if c.shares == 0 && c.cost_total.abs() > eps {
@@ -295,6 +374,11 @@ struct Builder {
     seen_ids: HashSet<String>,
     event_campaigns: HashMap<EventId, String>,
     event_dividends: HashMap<EventId, f64>,
+    event_share_pnl: HashMap<EventId, f64>,
+    /// Pre-split contract id -> current adjusted contract. Used so a later
+    /// close/expire/assign that still references the old contract resolves to
+    /// the adjusted open position.
+    split_aliases: HashMap<String, OptionContract>,
 }
 
 impl Builder {
@@ -311,6 +395,8 @@ impl Builder {
             seen_ids: HashSet::new(),
             event_campaigns: HashMap::new(),
             event_dividends: HashMap::new(),
+            event_share_pnl: HashMap::new(),
+            split_aliases: HashMap::new(),
         }
     }
 
@@ -335,6 +421,7 @@ impl Builder {
             EventKind::Dividend => self.dividend(event),
             EventKind::Fee => self.adjust_cash(event, -event.amount),
             EventKind::Adjustment => self.adjust_cash(event, event.amount),
+            EventKind::Split => self.split(event),
         }?;
         if let Some(idx) = before.or_else(|| self.active_campaign_idx(&event.symbol)) {
             self.event_campaigns
@@ -347,6 +434,12 @@ impl Builder {
         let contract = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
+        if self.canonical_contract(&contract).id() != contract.id() {
+            return Err(EngineError::AdjustedContractRequired {
+                event: event.id.clone(),
+                contract: contract.display(),
+            });
+        }
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -397,9 +490,10 @@ impl Builder {
     }
 
     fn close_position(&mut self, event: &Event, status: EntryStatus) -> Result<(), EngineError> {
-        let contract = event.contract.clone().ok_or(EngineError::MissingContract {
+        let requested = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
+        let contract = self.canonical_contract(&requested);
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -451,9 +545,10 @@ impl Builder {
     }
 
     fn assign(&mut self, event: &Event) -> Result<(), EngineError> {
-        let contract = event.contract.clone().ok_or(EngineError::MissingContract {
+        let requested = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
+        let contract = self.canonical_contract(&requested);
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -541,6 +636,8 @@ impl Builder {
                         campaign.cost_total = 0.0;
                     }
                 }
+                self.event_share_pnl
+                    .insert(event.id.clone(), proceeds - allocated);
                 self.consume_lots(&campaign_id, shares_qty);
             }
         }
@@ -617,6 +714,8 @@ impl Builder {
                 campaign.cost_total = 0.0;
             }
         }
+        self.event_share_pnl
+            .insert(event.id.clone(), proceeds - allocated);
         self.consume_lots(&campaign_id, event.qty);
         self.record_cost_point(campaign_idx, event.occurred_at);
         self.maybe_close_campaign(campaign_idx, event.occurred_at);
@@ -640,6 +739,154 @@ impl Builder {
         self.campaigns[campaign_idx].cash_flow += amount;
         self.event_dividends.insert(event.id.clone(), amount);
         self.record_cost_point(campaign_idx, event.occurred_at);
+        Ok(())
+    }
+
+    fn split(&mut self, event: &Event) -> Result<(), EngineError> {
+        let terms = event.split.ok_or(EngineError::MissingSplitTerms {
+            event: event.id.clone(),
+        })?;
+        if terms.numerator == 0
+            || terms.denominator == 0
+            || terms.numerator > 1_000_000
+            || terms.denominator > 1_000_000
+            || terms
+                .cash_in_lieu
+                .is_some_and(|cash| !cash.is_finite() || cash < 0.0)
+        {
+            return Err(EngineError::InvalidSplitTerms {
+                event: event.id.clone(),
+            });
+        }
+        let Some(campaign_idx) = self.active_campaign_idx(&event.symbol) else {
+            // A split far from any position is a harmless historical note.
+            return Ok(());
+        };
+        let campaign_id = self.campaigns[campaign_idx].id.clone();
+        let ratio = f64::from(terms.numerator) / f64::from(terms.denominator);
+
+        // Adjust every open contract first, so one non-integral multiplier
+        // rejects the whole split before any state changes.
+        let mut adjusted: HashMap<String, OptionContract> = HashMap::new();
+        for contract in self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.campaign_id == campaign_id && entry.status.is_open() && entry.open_qty > 0
+            })
+            .map(|entry| &entry.contract)
+            .chain(
+                self.positions
+                    .iter()
+                    .filter(|position| position.campaign_id == campaign_id && position.open_qty > 0)
+                    .map(|position| &position.contract),
+            )
+        {
+            let next =
+                adjusted_contract(contract, terms).ok_or_else(|| {
+                    EngineError::NonIntegralOptionAdjustment {
+                        event: event.id.clone(),
+                        contract: contract.display(),
+                        numerator: terms.numerator,
+                        denominator: terms.denominator,
+                    }
+                })?;
+            adjusted.insert(contract.id(), next);
+        }
+
+        let exact = f64::from(self.campaigns[campaign_idx].shares) * ratio;
+        if !exact.is_finite() || exact > f64::from(u32::MAX) {
+            return Err(EngineError::SplitOverflow {
+                event: event.id.clone(),
+            });
+        }
+        let new_shares = exact.floor();
+        let fractional = exact - new_shares;
+        let has_fraction = fractional > 1e-9;
+        if has_fraction && terms.cash_in_lieu.is_none() {
+            return Err(EngineError::FractionalSplitNeedsCashInLieu {
+                event: event.id.clone(),
+                symbol: event.symbol.clone(),
+                exact_shares: exact,
+            });
+        }
+        if !has_fraction && terms.cash_in_lieu.is_some_and(|cash| cash.abs() > 1e-9) {
+            return Err(EngineError::UnexpectedCashInLieu {
+                event: event.id.clone(),
+            });
+        }
+        let cash_in_lieu = terms.cash_in_lieu.unwrap_or(0.0);
+
+        let campaign = &mut self.campaigns[campaign_idx];
+        let allocated = if has_fraction && exact > 0.0 {
+            campaign.cost_total * fractional / exact
+        } else {
+            0.0
+        };
+        campaign.shares = new_shares as u32;
+        campaign.cost_total -= allocated;
+        if campaign.shares == 0 {
+            campaign.cost_total = 0.0;
+        }
+        if has_fraction {
+            campaign.cash_flow += cash_in_lieu;
+            campaign.share_pnl += cash_in_lieu - allocated;
+        }
+
+        for lot in self
+            .lots
+            .iter_mut()
+            .filter(|lot| lot.campaign_id == campaign_id && lot.remaining_qty > 0)
+        {
+            let old_remaining = f64::from(lot.remaining_qty);
+            let new_remaining = (old_remaining * ratio).floor();
+            let new_qty = (f64::from(lot.qty) * ratio).floor();
+            lot.qty = new_qty as u32;
+            lot.remaining_qty = new_remaining as u32;
+            lot.cost_per_share = if new_remaining > 0.0 {
+                lot.cost_per_share * old_remaining / new_remaining
+            } else {
+                0.0
+            };
+        }
+
+        for entry in self.entries.iter_mut().filter(|entry| {
+            entry.campaign_id == campaign_id && entry.status.is_open() && entry.open_qty > 0
+        }) {
+            if let Some(next) = adjusted.get(&entry.contract.id()).cloned() {
+                entry.premium_gross_per_share /= ratio;
+                entry.credit_per_share /= ratio;
+                entry.contract = next;
+            }
+        }
+        for position in self
+            .positions
+            .iter_mut()
+            .filter(|position| position.campaign_id == campaign_id && position.open_qty > 0)
+        {
+            if let Some(next) = adjusted.get(&position.contract.id()).cloned() {
+                position.avg_credit_per_share /= ratio;
+                position.contract = next;
+            }
+        }
+
+        for (old_id, next) in adjusted {
+            for alias in self.split_aliases.values_mut() {
+                if alias.id() == old_id {
+                    *alias = next.clone();
+                }
+            }
+            if next.id() != old_id {
+                self.split_aliases.insert(old_id, next);
+            }
+        }
+
+        if has_fraction {
+            self.event_share_pnl
+                .insert(event.id.clone(), cash_in_lieu - allocated);
+        }
+        self.record_cost_point(campaign_idx, event.occurred_at);
+        self.maybe_close_campaign(campaign_idx, event.occurred_at);
         Ok(())
     }
 
@@ -701,6 +948,20 @@ impl Builder {
         self.campaigns
             .iter()
             .position(|c| c.id == campaign_id && c.status == CampaignStatus::Active)
+    }
+
+    /// Resolve a pre-split contract to the currently adjusted contract.
+    /// Exact current contracts have no alias and are returned unchanged.
+    fn canonical_contract(&self, contract: &OptionContract) -> OptionContract {
+        let mut current = contract.clone();
+        let mut seen = HashSet::new();
+        while let Some(next) = self.split_aliases.get(&current.id()) {
+            if !seen.insert(current.id()) {
+                break;
+            }
+            current = next.clone();
+        }
+        current
     }
 
     fn open_qty(&self, campaign_id: &str, contract_key: &str) -> u32 {
@@ -943,8 +1204,43 @@ impl Builder {
             premium_entries: self.entries,
             event_campaigns: self.event_campaigns,
             event_dividends: self.event_dividends,
+            event_share_pnl: self.event_share_pnl,
         }
     }
+}
+
+/// Apply split terms to one option contract. Returns `None` when the adjusted
+/// multiplier would not be a whole number or the strike cannot be represented.
+fn adjusted_contract(contract: &OptionContract, terms: SplitTerms) -> Option<OptionContract> {
+    let numerator = u64::from(terms.numerator);
+    let denominator = u64::from(terms.denominator);
+    if numerator == 0 || denominator == 0 {
+        return None;
+    }
+    let scaled = u64::from(contract.multiplier).checked_mul(numerator)?;
+    if scaled % denominator != 0 {
+        return None;
+    }
+    let multiplier = u32::try_from(scaled / denominator).ok()?;
+    if multiplier == 0 {
+        return None;
+    }
+    let strike = contract.strike * denominator as f64 / numerator as f64;
+    if !strike.is_finite() {
+        return None;
+    }
+    // Match OptionContract::id(), which formats the strike to four decimals.
+    let strike = (strike * 10_000.0).round() / 10_000.0;
+    if strike <= 0.0 {
+        return None;
+    }
+    Some(OptionContract {
+        underlying: contract.underlying.clone(),
+        expiry: contract.expiry,
+        strike,
+        right: contract.right,
+        multiplier,
+    })
 }
 
 #[cfg(test)]

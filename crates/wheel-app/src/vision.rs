@@ -226,7 +226,7 @@ pub fn request_body(config: &VisionConfig, image: &DecodedImage) -> Value {
 const SYSTEM_PROMPT: &str = r#"You extract executed trades from a broker confirmation screenshot.
 
 Return ONLY one JSON object with this exact shape:
-{"trades":[{"date":"YYYY-MM-DD","kind":"option_open_short|option_close|option_expire|option_assign|shares_buy|shares_sell|dividend","symbol":"AAPL","qty":1,"price":2.0,"fees":1.0,"expiry":"YYYY-MM-DD","strike":150.0,"right":"P","amount":0}],"warnings":["..."]}
+{"trades":[{"date":"YYYY-MM-DD","kind":"option_open_short|option_close|option_expire|option_assign|shares_buy|shares_sell|dividend","symbol":"AAPL","qty":1,"price":2.0,"fees":1.0,"expiry":"YYYY-MM-DD","strike":150.0,"right":"P","multiplier":100,"amount":0}],"warnings":["..."]}
 
 Rules:
 - Only include executed trades. Ignore quotes, open orders, position summaries, balances, headers and footers.
@@ -237,6 +237,7 @@ Rules:
 - fees is the total positive fee for that trade.
 - For a dividend, amount is the total cash amount and price is the per-share amount when shown.
 - Every option row must include expiry, strike and right (C or P). Non-option rows must not include them.
+- multiplier is the shares per contract (normally 100). Only include it when the confirmation explicitly shows an adjusted contract size after a split; otherwise omit it. Never infer a split ratio.
 - If a required field is unreadable, omit that row and explain it in warnings. Never guess.
 - If there are no executed trades, return {"trades":[],"warnings":["..."]}.
 - Do not use Markdown and do not write any text outside the JSON object."#;
@@ -489,6 +490,8 @@ struct ModelTrade {
     #[serde(default)]
     right: Value,
     #[serde(default)]
+    multiplier: Value,
+    #[serde(default)]
     amount: Value,
 }
 
@@ -551,6 +554,10 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
         if !fees.is_finite() || fees > 1_000_000_000.0 {
             return Err("费用无效".to_string());
         }
+        let multiplier = value_u32(&trade.multiplier).unwrap_or(100);
+        if !(1..=1_000_000).contains(&multiplier) {
+            return Err("每手股数必须是 1 到 1,000,000 之间的整数".to_string());
+        }
         return Ok(ExtractedTrade {
             date,
             kind: kind.to_string(),
@@ -561,6 +568,7 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
             expiry: Some(expiry),
             strike: Some(round6(strike)),
             right: Some(right.to_string()),
+            multiplier,
             amount: 0.0,
             note: note_for(model),
         });
@@ -602,6 +610,7 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
             expiry: None,
             strike: None,
             right: None,
+            multiplier: 100,
             amount: round6(amount),
             note: note_for(model),
         });
@@ -628,6 +637,7 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
         expiry: None,
         strike: None,
         right: None,
+        multiplier: 100,
         amount: 0.0,
         note: note_for(model),
     })
@@ -895,9 +905,12 @@ mod tests {
         assert_eq!(trade.fees, 1.0);
         assert_eq!(trade.note, "云端视觉 · gpt-4o");
         assert_eq!(extraction.template, "云端视觉（gpt-4o）");
-        assert!(extraction.csv.starts_with("日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,备注"));
+        assert!(extraction
+            .csv
+            .starts_with("日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,乘数,备注"));
+        assert_eq!(trade.multiplier, 100);
         assert!(extraction.csv.contains(
-            "2026-01-02,option_open_short,AAPL,1,2.05,1,2026-02-20,150,P,云端视觉 · gpt-4o"
+            "2026-01-02,option_open_short,AAPL,1,2.05,1,2026-02-20,150,P,100,云端视觉 · gpt-4o"
         ));
     }
 

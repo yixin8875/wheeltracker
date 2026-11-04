@@ -34,11 +34,12 @@ export function CampaignTimeline({ events }: { events: EventRow[] }) {
     <div className="section-heading"><h2>战役事件时间轴</h2><span className="muted">{events.length} 笔交易 · 按交易日期排序</span></div>
     {!events.length ? <p className="empty">本轮暂无交易事件。</p> : <ol className="event-timeline">{events.map(event => {
       const option = event.kind.startsWith('option_');
+      const split = event.kind === 'stock_split';
       const priced = ['option_open_short', 'option_close', 'shares_buy', 'shares_sell', 'dividend'].includes(event.kind);
       return <li key={event.id}>
         <time dateTime={event.date}>{event.date}</time>
         <div className="timeline-event"><strong>{labels[event.kind] ?? event.kind}</strong><span>{event.symbol}{option && ` ${event.expiry} ${event.strike}${event.right}`}</span>
-          <p className="muted">{['fee', 'adjustment'].includes(event.kind) ? money(event.amount) : `${event.qty} ${option ? '手' : '股'}`}{priced && ` · 每股 ${money(event.price)}`}{event.fees > 0 && ` · 费用 ${money(event.fees)}`}</p>
+          <p className="muted">{split ? `${event.splitNumerator} : ${event.splitDenominator}${event.splitCashInLieu != null ? ` · 零股补偿 ${money(event.splitCashInLieu)}` : ''}` : ['fee', 'adjustment'].includes(event.kind) ? money(event.amount) : `${event.qty} ${option ? '手' : '股'}`}{priced && ` · 每股 ${money(event.price)}`}{event.fees > 0 && ` · 费用 ${money(event.fees)}`}</p>
           {event.note && <p className="timeline-note">{event.note}</p>}
         </div>
       </li>;

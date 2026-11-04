@@ -92,6 +92,7 @@
 | `DIVIDEND` | 分红（可选计入成本） | 标的、金额 |
 | `FEE` | 独立费用调整 | 标的、金额 |
 | `ADJUSTMENT` | 手工修正 | 标的、备注、覆盖值 |
+| `SPLIT` | 拆股 / 合股 | 标的、分子、分母、零股现金补偿 |
 
 **滚动（Roll）不新增事件类型**：一次 roll 就是 `OPTION_CLOSE` + `OPTION_OPEN_SHORT` 两笔，天然把净现金流算对。UI 层可提供「滚动录入」把两个表单合并，落库仍是两条事件。
 
@@ -192,7 +193,7 @@
 | 提前指派（Put 在到期前被行权） | 事件日期用实际指派日；状态标记 `assigned_early` |
 | B 变为负数 | 正常显示负成本，UI 显示 `成本已归零 · 剩余 $X/股 安全垫` |
 | 空头 Call 股数不足 | 校验报错，要求先有对应股票 |
-| 拆股/合股 | MVP 拒绝入库并提示走 `ADJUSTMENT`；Phase 3 支持 `CORPORATE_ACTION` |
+| 拆股/合股 | 记录 `SPLIT` 事件，自动调整持股数、未平仓期权的行权价与每手股数；零股以现金补偿入账，不保留小数股 |
 | 同一标的重复战役 | 持股清空且无持仓后自动开新战役，旧战役归档 |
 | 纯卖 Put 从未被指派 | 战役保持 active，权利金持续累积，等待指派 |
 | 手工改历史 | 生成 `ADJUSTMENT` 事件，不直接改原事件（保留审计链） |
@@ -307,6 +308,9 @@ CREATE TABLE events (
   source_ref   TEXT,
   note         TEXT,
   payload      TEXT,                        -- JSON 扩展
+  split_numerator   INTEGER,                -- 拆股分子（仅 SPLIT）
+  split_denominator INTEGER,                -- 拆股分母
+  split_cash_in_lieu REAL,                  -- 零股现金补偿
   created_at   TEXT NOT NULL,
   UNIQUE (account_id, seq)
 );
@@ -409,6 +413,7 @@ CREATE TABLE settings (
 - `events` 是唯一可写表；其余派生表均可删除重建。
 - 每次写入事件后，在**同一事务**内增量重算受影响的战役；同时提供 `rebuild_all()` 全量重建。
 - `schema_meta(engine_version)` 记录算法版本，升级时触发重建。
+- 持久化 schema 版本写入 `PRAGMA user_version`（当前为 2）。打开数据库前若版本高于应用支持的版本，拒绝并提示升级应用，不执行任何 DDL；旧库通过幂等 `ALTER TABLE` 补齐拆股列。
 
 ---
 
@@ -679,6 +684,17 @@ restore_status() -> RestoreStatus
 - **恢复**：暂存时解密到 `restore/staged-<stamp>.sqlite` 并校验，marker 升级为 version 2 并记录 `stagedFile`；下次启动 `apply_pending` 直接使用该副本，替换成功或失败后都删除明文副本，加密备份本身保留。version 1 marker 继续按原路径恢复。
 - **JSON 导出**：`export_json` 输出 `wheel-export` version 1 文档，包含所有账户（含仅存在于事件表的账户 ID）、全部未删除事件（`occurredAt` 为 `YYYY-MM-DD` UTC）、报价与设置；事件按日期、账户、seq 排序。JSON 仅供查看与迁移，不能替代 SQLite 快照恢复。
 
+### 8.9 P4 拆股与合约乘数
+
+- **乘数**：`OptionContract.multiplier` 默认 100，录入时可填实际每手股数；毛权利金、占用资金、指派预览、年化、到期提醒与仪表盘资金义务均按乘数计算。CSV / 邮件 / 视觉导入新增可选「乘数」列，默认 100。
+- **事件**：`EventKind::Split` 无载荷，比例与零股补偿存于 `Event.split: Option<SplitTerms>`；`kind == Split` 当且仅当 `split.is_some()`。拆股事件不得携带合约、数量、价格、费用或金额；分子 / 分母为 1–1,000,000 的整数，`cash_in_lieu` 有限且非负。
+- **重放顺序**：拆股只作用于该标的当前进行中的战役；没有持仓时记录为无害历史事件。先预检全部未平仓合约与持股，任一失败则整笔拆股不入账、状态不变。
+- **期权调整**：行权价 `new = old_strike × denominator ÷ numerator`，四舍五入到 4 位小数；每手股数 `new_multiplier = old_multiplier × numerator ÷ denominator` 必须精确整除且为正整数，否则返回 `NonIntegralOptionAdjustment`。未平仓台账与持仓的合约直接替换，`premium_gross_per_share` / `credit_per_share` 除以比例；`net_premium`、手数与占用资金总额不变。
+- **股票调整**：`exact = shares × numerator ÷ denominator`，`new_shares = floor(exact)`；有零股时必须提供现金补偿（可为 0），无零股时补偿必须为 0。零股对应成本 `cost_total × fractional ÷ exact` 从战役成本中扣除，现金补偿计入 `cash_flow` 与已实现股票盈亏；批次股数与每股成本按比例缩放，财务总额以战役为准。
+- **合约 alias**：保留旧合约 id → 调整后合约的映射，连续拆股沿链解析；平仓、指派、作废先 canonicalize 再匹配，拆股后用旧合约新开仓被 `AdjustedContractRequired` 拒绝。
+- **存储**：schema v2 增加 `split_numerator` / `split_denominator` / `split_cash_in_lieu` 并写 `PRAGMA user_version = 2`；`EventView`、JSON 导出与交易记录 CSV 均带拆股字段。
+- **前端**：交易类型新增「拆股 / 合股」，拆股模式只显示日期、标的、分子、分母、零股补偿与备注；期权表单显示「1 手 = N 股」，选择持仓时回填乘数。
+
 ---
 
 ## 9. 数据导入
@@ -745,7 +761,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入（已完成）+ 拆股支持 + 云端同步 | 进阶 | 进行中 |
+| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入、拆股与合约乘数（均已完成）+ 年度已实现收益报表 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 
@@ -759,7 +775,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | 手工录入出错 | 成本越算越偏 | 实时预览、录入校验、事件可删可重建、每日核对提醒 |
 | 指派日期与到期日混淆 | 时间轴错乱 | 分开存 `occurred_at` 与 `effective_at`，指派默认用到期日 |
 | 视觉模型误识别 | 脏数据 | 严格字段校验、跳过可疑行、永远人工确认，不自动入账 |
-| 券商改名/拆股 | 历史数据失真 | MVP 明确不支持，`ADJUSTMENT` 兜底 |
+| 券商改名/拆股 | 历史数据失真 | 拆股用 `SPLIT` 事件调整持股、行权价与乘数，零股现金补偿；更名走 `ADJUSTMENT` |
 | 滚动记账复杂 | 用户漏记一半 | 「滚动」合并表单，一次生成两条事件 |
 | 数据丢失 | 灾难 | WAL + 每日自动备份（保留 7 份）+ 一键导出 JSON |
 
