@@ -99,3 +99,13 @@
 - **验证**：107 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 46 项。
 - **构建提交**：`d22bb96`；manifest `builtAt` 为 `2026-11-04T09:06:08Z`，target `x86_64-pc-windows-msvc`。
 - **兼容性**：数据库 schema 仍为 3；可从 0.4.1 覆盖安装，账本、备份与设置保留。
+
+## 0.5.1 发布记录（2026-11-04）
+
+- **内容**：侧栏导航按「日常 / 账本 / 复盘」分组，设置移至底部账户区；收租月报、年度报表、战役对比合并为「报告」页签，一级入口从 11 项降至 8 项。
+- **版本**：workspace、`Cargo.lock`、`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.5.1`。
+- **产物**：`target/release/bundle/nsis/Wheel Tracker_0.5.1_x64-setup.exe`，4,660,765 字节（4.44 MiB）。
+- **SHA-256**：`0183a35a9dc47ed8e4a1872d2aa94907c3dae43d42db8e4105e9b0a687b73312`；`dist/release/` 下 sidecar 与 manifest 一致。
+- **验证**：107 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 46 项。
+- **构建提交**：`e03e8e1`（工作树含未提交的 0.5.1 改动）；manifest `builtAt` 为 `2026-11-04T11:18:56Z`，target `x86_64-pc-windows-msvc`。
+- **兼容性**：数据库 schema 仍为 3；可从 0.5.0 覆盖安装，账本、备份与设置保留。

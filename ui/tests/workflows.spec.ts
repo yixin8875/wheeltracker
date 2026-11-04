@@ -697,7 +697,8 @@ test('expiry reminders and calendar surface overdue contracts', async ({ page })
 
 test('campaign comparison reports exact days, return and peak capital', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '战役对比', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '报告', exact: true }).click();
+  await page.getByRole('button', { name: '战役对比', exact: true }).click();
   await page.getByRole('button', { name: '查看数据', exact: true }).click();
   const row = page.getByRole('row').filter({ hasText: 'TEST' }).first();
   await expect(row).toContainText('305');
@@ -856,8 +857,10 @@ test('creating and switching an account scopes reads and new entries', async ({ 
 
 test('monthly income report accumulates rent by month and filters by year', async ({ page }) => {
   await setup(page);
+  await page.locator('nav').getByRole('button', { name: '报告', exact: true }).click();
   await page.getByRole('button', { name: '收租月报', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '收租月报', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '报告', level: 1 })).toBeVisible();
+  await expect(page.getByRole('button', { name: '收租月报', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.income-summary')).toContainText('$313.00');
   await expect(page.locator('tbody tr')).toHaveCount(3);
   const latest = page.locator('tbody tr').first();
@@ -1019,8 +1022,10 @@ test('open contract multiplier drives entry prefill and reminder premium', async
 
 test('annual report filters years and exports month and symbol sheets', async ({ page }) => {
   await setup(page);
+  await page.locator('nav').getByRole('button', { name: '报告', exact: true }).click();
   await page.getByRole('button', { name: '年度报表', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '年度报表', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '报告', level: 1 })).toBeVisible();
+  await expect(page.getByRole('button', { name: '年度报表', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.annual-summary')).toContainText('$613.00');
   await expect(page.getByRole('img', { name: /年度已实现收益图/ })).toBeVisible();
   const months = page.locator('.monthly-breakdown');

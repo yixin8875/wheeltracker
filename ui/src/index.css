@@ -50,17 +50,24 @@ kbd { font-size: 10px; color: #767b84; border: 1px solid #d9dce1; background: #f
   width: 238px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid #e1e2e6;
   padding: 26px 12px 20px; display: flex; flex-direction: column; position: fixed; height: 100vh;
 }
-.brand { display: flex; gap: 10px; align-items: center; padding: 0 10px 30px; font-weight: 650; font-size: 16px; letter-spacing: -.3px; }
+.brand { display: flex; gap: 10px; align-items: center; padding: 0 10px 24px; font-weight: 650; font-size: 16px; letter-spacing: -.3px; }
 .brand > svg { color: #ffffff; background: #17649c; border-radius: 9px; padding: 5px; width: 36px; height: 36px; }
 .brand small { display: block; font-weight: 400; letter-spacing: 0; font-size: 11px; margin-top: 5px; }
-.sidebar nav { display: grid; gap: 5px; }
-.sidebar nav button { justify-content: flex-start; border-color: transparent; background: transparent; color: #45484e; padding: 12px 11px; border-radius: 5px; }
+.sidebar nav { display: grid; gap: 18px; overflow-y: auto; padding-right: 2px; }
+.nav-group { display: grid; gap: 2px; }
+.nav-group-title { margin: 0 11px 5px; font-size: 10px; font-weight: 650; letter-spacing: .12em; color: #8b929b; }
+.sidebar nav button { justify-content: flex-start; border-color: transparent; background: transparent; color: #45484e; padding: 9px 11px; border-radius: 5px; font-size: 13px; }
 .sidebar nav button svg { color: #7c8a98; }
 .sidebar nav button:hover { background: #e9e9ec; }
 .sidebar nav button.selected { background: #dedee0; color: #25272b; border-color: transparent; }
 .sidebar nav button.selected svg { color: #176ca9; }
 .sidebar-bottom { margin-top: auto; border-top: 1px solid var(--border); padding: 18px 10px 0; font-size: 12px; color: #555b63; }
 .sidebar-bottom small { display: block; margin-top: 8px; }
+.sidebar-settings { display: flex; align-items: center; justify-content: flex-start; gap: 9px; width: 100%; margin-top: 14px; padding: 9px 8px; border: 0; background: transparent; color: #45484e; border-radius: 5px; font-size: 13px; }
+.sidebar-settings svg { color: #7c8a98; }
+.sidebar-settings:hover { background: #e9e9ec; }
+.sidebar-settings.selected { background: #dedee0; color: #25272b; }
+.sidebar-settings.selected svg { color: #176ca9; }
 .connection-dot { display: inline-block; width: 7px; height: 7px; background: #389767; border-radius: 50%; margin-right: 7px; }
 main { margin-left: 238px; padding: 0 32px 32px; width: calc(100% - 238px); min-width: 0; }
 .page-heading { display: flex; align-items: center; justify-content: space-between; min-height: 93px; padding: 18px 32px; margin: 0 -32px 28px; border-bottom: 1px solid var(--border); background: #ffffff; }
@@ -237,8 +244,12 @@ tr:last-child td { border-bottom: 0; }
   .sidebar { position: static; height: auto; width: 100%; padding: 18px 16px 12px; border-right: 0; border-bottom: 1px solid var(--border); }
   .brand { padding: 0 0 18px; }
   .sidebar nav { display: flex; overflow-x: auto; gap: 4px; }
+  .nav-group { display: contents; }
+  .nav-group-title { display: none; }
   .sidebar nav button { flex-shrink: 0; padding: 9px; }
-  .sidebar nav kbd, .sidebar-bottom { display: none; }
+  .sidebar nav kbd, .connection-line, .account-switch, .sidebar-bottom small { display: none; }
+  .sidebar-bottom { display: block; margin-top: 0; padding: 8px 0 0; border-top: 0; }
+  .sidebar-settings { width: auto; margin-top: 0; padding: 9px 10px; }
   .app-shell { display: block; }
   main { margin-left: 0; width: 100%; padding: 0 16px 24px; }
   .page-heading { min-height: 86px; margin: 0 -16px 24px; padding: 16px; }

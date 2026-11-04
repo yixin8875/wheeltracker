@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, Settings, RefreshCw, ArrowLeft, ChevronRight, CircleDollarSign, Activity, Upload, CalendarDays, ChartScatter, ChartColumn, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, Settings, RefreshCw, ArrowLeft, ChevronRight, CircleDollarSign, Activity, Upload, CalendarDays, ChartColumn, type LucideIcon } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
 import type { Account, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
@@ -20,8 +20,27 @@ import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'compare' | 'income' | 'annual' | 'market' | 'settings' | 'detail';
-const navigation = [{ id: 'dashboard', label: '仪表盘', icon: LayoutDashboard }, { id: 'positions', label: '当前持仓', icon: Layers }, { id: 'ledger', label: '收租台账', icon: BookOpen }, { id: 'entry', label: '记一笔', icon: Plus }, { id: 'import', label: '导入', icon: Upload }, { id: 'calendar', label: '到期日历', icon: CalendarDays }, { id: 'compare', label: '战役对比', icon: ChartScatter }, { id: 'income', label: '收租月报', icon: TrendingUp }, { id: 'annual', label: '年度报表', icon: ChartColumn }, { id: 'market', label: '行情', icon: Activity }, { id: 'settings', label: '设置', icon: Settings }] as const;
+type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type ReportTab = 'income' | 'annual' | 'compare';
+type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
+type NavGroup = { id: string; title: string; items: NavItem[] };
+const navigation: NavGroup[] = [
+  { id: 'daily', title: '日常', items: [
+    { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
+    { id: 'positions', label: '当前持仓', icon: Layers },
+    { id: 'entry', label: '记一笔', icon: Plus },
+  ] },
+  { id: 'books', title: '账本', items: [
+    { id: 'ledger', label: '收租台账', icon: BookOpen },
+    { id: 'import', label: '导入', icon: Upload },
+  ] },
+  { id: 'review', title: '复盘', items: [
+    { id: 'calendar', label: '到期日历', icon: CalendarDays },
+    { id: 'reports', label: '报告', icon: ChartColumn },
+    { id: 'market', label: '行情', icon: Activity },
+  ] },
+];
+const navigationItems: NavItem[] = navigation.flatMap(group => group.items);
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
@@ -76,6 +95,7 @@ export default function App() {
   const market = usePortfolioQuotes(activeSymbols, reload);
   const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'vision' | 'data'>('accounting');
   const [ledgerTab, setLedgerTab] = useState<'entries' | 'events'>('entries');
+  const [reportTab, setReportTab] = useState<ReportTab>('income');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
   useEffect(() => {
     if (!desktop) return;
@@ -132,8 +152,11 @@ export default function App() {
   const reminders = reminderPositions(positions, leadDays);
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
   const asOf = data?.asOf ?? today();
-  const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : navigation.find(item => item.id === page)?.label;
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><CircleDollarSign size={30}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}<label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small></div></aside>
+  const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : navigationItems.find(item => item.id === page)?.label;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><CircleDollarSign size={30}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(group => <div className="nav-group" role="group" aria-labelledby={`nav-${group.id}`} key={group.id}>
+      <p className="nav-group-title" id={`nav-${group.id}`}>{group.title}</p>
+      {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
+    </div>)}</nav><div className="sidebar-bottom"><div className="connection-line"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}</div><label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small><button className={`sidebar-settings ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Settings size={16}/>设置</button></div></aside>
     <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
@@ -161,9 +184,14 @@ export default function App() {
     {page === 'entry' && <EntryForm key={entryKey} initial={initial} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={saved}/>}
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
-    {page === 'compare' && !unavailable && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
-    {page === 'income' && !unavailable && <MonthlyIncomeReport report={income}/>}
-    {page === 'annual' && !unavailable && <AnnualReportPage report={annual}/>}
+    {page === 'reports' && !unavailable && <>
+      <div className="settings-tabs" aria-label="报告分类">
+        {([['income', '收租月报'], ['annual', '年度报表'], ['compare', '战役对比']] as const).map(([tab, label]) => <button key={tab} aria-pressed={reportTab === tab} onClick={() => setReportTab(tab)}>{label}</button>)}
+      </div>
+      {reportTab === 'income' && <MonthlyIncomeReport report={income}/>}
+      {reportTab === 'annual' && <AnnualReportPage report={annual}/>}
+      {reportTab === 'compare' && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
+    </>}
     {page === 'positions' && !unavailable && <>
       <section className="panel"><div className="section-heading"><h2>股票持仓</h2></div><div className="table-wrap"><table><thead><tr><th>标的</th><th>股数</th><th>纯股票成本 / 股</th><th>有效成本 / 股</th><th>标的参考价</th><th>操作</th></tr></thead><tbody>{data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => <tr key={campaign.id}><td><button className="text-button" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</button></td><td>{campaign.shares}</td><td>{money(campaign.costA)}</td><td>{money(campaign.costB)}</td><td>{money(campaign.price)}</td><td><button onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</button></td></tr>)}</tbody></table></div>{!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="empty">暂无股票持仓。</p>}</section>
       <section className="panel"><div className="section-heading"><h2>未平仓期权</h2><span className="muted">按到期日排序</span></div><div className="table-wrap"><table><thead><tr><th>合约</th><th>手数</th><th>每手股数</th><th>每股净权利金</th><th>到期日</th><th>剩余天数</th><th>了结合约</th></tr></thead><tbody>{positions.map(position => <tr key={position.contract}><td>{position.contract}</td><td>{position.openQty}</td><td>{position.multiplier} 股/手</td><td>{money(position.avgCredit)}</td><td>{position.expiry}</td><td><span className={position.daysLeft < 0 ? 'negative' : position.daysLeft <= 7 ? 'warning-text' : ''}>{position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}</span></td><td><div className="toolbar">{['option_close', 'option_expire', 'option_assign'].map(kind => <button key={kind} onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier })}>{labels[kind]}</button>)}</div></td></tr>)}</tbody></table></div>{!positions.length && <p className="empty">暂无未平仓期权。</p>}</section>

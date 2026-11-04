@@ -3,7 +3,11 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.5.1] - 2026-11-04
+
+### Changed
+
+- 侧栏导航按「日常 / 账本 / 复盘」分组，设置移至底部账户区；收租月报、年度报表、战役对比合并为「报告」页签，一级入口从 11 项降至 8 项
 
 ## [0.5.0] - 2026-11-04
 
