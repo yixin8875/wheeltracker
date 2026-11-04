@@ -78,6 +78,8 @@ npm --prefix ui run desktop:build -- --bundles nsis
 
 输出：`target/release/bundle/nsis/Wheel Tracker_0.5.1_x64-setup.exe`。本轮已成功构建；安装与原生完整流程的验收状态见[桌面验收记录](docs/desktop-acceptance.md)。
 
+每次推送到 `main`，`.github/workflows/release.yml` 会自动把补丁版本 +1、提交版本号、打 `vX.Y.Z` 标签、重新构建 NSIS 安装包并发布 GitHub Release。自动提交带 `[skip release]`，不会递归触发；本地提交本身不会触发，需要推送到 `main`。
+
 单独预览前端：
 
 ```bash
