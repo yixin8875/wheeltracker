@@ -14,6 +14,14 @@ export interface Entry { id: string; campaignId: string; symbol: string; contrac
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
 export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number }
+export interface VisionSettings {
+  baseUrl: string;
+  model: string;
+  hasKey: boolean;
+  keyHint: string;
+  enabled: boolean;
+  consent: boolean;
+}
 export type BackupKind = 'manual' | 'auto' | 'safety' | 'unknown';
 export interface Backup { fileName: string; kind: BackupKind; sizeBytes: number; modifiedAt: string | null; encrypted: boolean }
 export interface BackupValidation { fileName: string; valid: boolean; integrity: string; events: number; accounts: number; prices: number; issues: string[] }
@@ -53,5 +61,5 @@ export interface CandidateEvent { date: string; kind: string; symbol: string; qt
 export type RowStatus = 'ok' | 'warning' | 'duplicate' | 'error';
 export interface CandidateRow { rowNumber: number; line: number; status: RowStatus; messages: string[]; cells: string[]; raw: string; event: CandidateEvent | null; selectedByDefault: boolean }
 export interface ImportCounts { total: number; ok: number; warning: number; duplicate: number; error: number; selected: number }
-export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'text'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
+export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'text' | 'vision'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
 export interface ImportSummary { imported: number; eventIds: string[]; accountId: string; notePrefix: string; duplicateCount: number }

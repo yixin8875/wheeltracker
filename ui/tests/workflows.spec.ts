@@ -12,6 +12,8 @@ async function setup(page: Page) {
     state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }];
     state.testRejectSettings = false; state.testPartial = false;
     state.testRejectMetadata = false; state.testRejectDashboard = false;
+    state.testVision = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', hasKey: true, keyHint: '1234', enabled: true, consent: true };
+    state.testVisionKey = 'sk-test-1234';
     const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 };
     const currentCampaign = () => ({ ...campaign, dividends: 100,
       costB: preferences.includeDividendsInCost ? 147 : 148,
@@ -138,7 +140,37 @@ async function setup(page: Page) {
             counts: { total: 1, ok: 1, warning: 0, duplicate: 0, error: 0, selected: 1 },
             warnings: [`已从${template}识别 1 笔交易，请核对后导入。`, '第 2 行：未找到成交价，已跳过。'] };
         }
-        case 'ocr_image': return 'SOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00\nTrade Date: 2026-01-02';
+        case 'get_vision_settings': return { ...state.testVision };
+        case 'set_vision_settings': {
+          const req = args.req as any;
+          if (!String(req.baseUrl).startsWith('https://')) throw new Error('Base URL 必须使用 https://。');
+          if (!String(req.model).trim()) throw new Error('请填写模型名称。');
+          if (req.enabled && !req.consent) throw new Error('启用前请先阅读并同意隐私说明。');
+          if (req.apiKey !== undefined) {
+            if (req.apiKey === '') {
+              state.testVisionKey = '';
+              state.testVision.hasKey = false;
+              state.testVision.keyHint = '';
+            } else {
+              state.testVisionKey = String(req.apiKey);
+              state.testVision.hasKey = true;
+              state.testVision.keyHint = String(req.apiKey).slice(-4);
+            }
+          }
+          if (req.enabled && !state.testVision.hasKey) throw new Error('启用 AI 截图识别前请先保存 API Key。');
+          state.testVision = { ...state.testVision, baseUrl: String(req.baseUrl).replace(/\/$/, ''), model: String(req.model), enabled: Boolean(req.enabled), consent: Boolean(req.consent) };
+          return { ...state.testVision };
+        }
+        case 'vision_import_preview': {
+          if (!state.testVision.enabled) throw new Error('AI 截图识别未启用，请前往设置 → AI 识别。');
+          const row = { rowNumber: 1, line: 2, status: 'ok', messages: [], cells: ['2026-01-02', 'option_open_short', 'AAPL', '1', '2', '1', '2026-02-20', '150', 'P'], raw: 'synthetic vision row',
+            event: { date: '2026-01-02', kind: 'option_open_short', symbol: 'AAPL', qty: 1, price: 2, fees: 1, amount: 0, expiry: '2026-02-20', strike: 150, right: 'P', note: '云端视觉 · gpt-4o' }, selectedByDefault: true };
+          return { headers: ['日期', '方向', '代码', '数量', '价格', '费用', '到期日', '行权价', '看涨看跌', '备注'], signature: '0011223344556677', delimiter: 'comma', headerLine: 1,
+            mapping: { fields: { date: 0, kind: 1, symbol: 2, qty: 3, price: 4, fees: 5, expiry: 6, strike: 7, right: 8, note: 9 }, dateFormat: 'yearMonthDay', delimiter: 'comma', hasHeader: true },
+            mappingSource: 'vision', rows: [row],
+            counts: { total: 1, ok: 1, warning: 0, duplicate: 0, error: 0, selected: 1 },
+            warnings: ['已从云端视觉（gpt-4o）识别 1 笔交易，请核对后导入。', `来源截图：${(args.req as any).source}`] };
+        }
         default: throw new Error(`Unexpected IPC: ${command}`);
       }
     } };
@@ -437,26 +469,70 @@ test('email import skips column mapping and commits through the text pipeline', 
   expect(commit.args.req.origin).toBe('邮件导入');
 });
 
-test('OCR import lets the user correct recognized text before parsing', async ({ page }) => {
+test('AI screenshot import skips text editing and commits through the vision preview', async ({ page }) => {
   await setup(page);
   await page.getByRole('button', { name: '导入', exact: true }).click();
-  await page.getByRole('button', { name: '截图 OCR', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '截图 OCR' })).toBeVisible();
+  await page.getByRole('button', { name: 'AI 截图', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
+  await expect(page.getByText('截图会发送到你配置的云端视觉服务')).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('synthetic-image') });
-  const textarea = page.getByLabel('识别文字（可修改）');
-  await expect(textarea).toHaveValue(/SOLD TO OPEN/);
-  const ocr = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'ocr_image'));
-  expect(ocr.args.mime).toBe('image/png');
-  expect(ocr.args.data.length).toBeGreaterThan(0);
-  await textarea.fill('SOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00\nTrade Date: 2026-01-02');
-  await page.getByRole('button', { name: '解析识别文本', exact: true }).click();
   await expect(page.getByRole('heading', { name: '逐行确认' })).toBeVisible();
-  const preview = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'text_import_preview'));
-  expect(preview.args.req.text).toContain('Trade Date: 2026-01-02');
+  await expect(page.getByText('已从云端视觉（gpt-4o）识别 1 笔交易，请核对后导入。')).toBeVisible();
+  await expect(page.getByText('来源截图：shot.png')).toBeVisible();
+  await expect(page.getByLabel('识别文字（可修改）')).toHaveCount(0);
+  const preview = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'vision_import_preview'));
+  expect(preview.args.req.mime).toBe('image/png');
+  expect(preview.args.req.data.length).toBeGreaterThan(0);
   expect(preview.args.req.source).toBe('shot.png');
+  expect(preview.args.req.accountId).toBe('main');
   await page.getByRole('button', { name: '确认导入 1 笔' }).click();
+  await expect(page.locator('.alert.success')).toContainText('已导入 1 笔交易');
   const commit = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'import_commit'));
-  expect(commit.args.req.origin).toBe('截图 OCR');
+  expect(commit.args.req.origin).toBe('AI 截图');
+});
+
+test('AI screenshot import sends the user to settings when recognition is not enabled', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).testVision.enabled = false; });
+  await page.getByRole('button', { name: '导入', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 截图', exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles({ name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('synthetic-image') });
+  await expect(page.getByText('AI 截图识别未启用，请前往设置 → AI 识别。')).toBeVisible();
+  await page.getByRole('button', { name: '前往设置 → AI 识别', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'AI 识别', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('AI recognition settings save the key only as a masked hint and clear it on request', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 识别', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
+  const key = page.getByLabel('API Key');
+  await expect(key).toHaveValue('');
+  await expect(key).toHaveAttribute('placeholder', /尾号 1234/);
+  await page.getByLabel('Base URL').fill('https://openrouter.ai/api/v1/');
+  await page.getByLabel('模型').fill('qwen-vl-max');
+  await key.fill('sk-vision-9876');
+  await page.getByLabel('我理解截图会发送到上面配置的第三方服务').uncheck();
+  await page.getByLabel('我理解截图会发送到上面配置的第三方服务').check();
+  await page.getByLabel('启用 AI 截图识别').check();
+  await page.getByRole('button', { name: '保存 AI 识别设置' }).click();
+  await expect(page.locator('.alert.success')).toContainText('AI 识别设置已保存。');
+  const saved = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'set_vision_settings'));
+  expect(saved.args.req.baseUrl).toBe('https://openrouter.ai/api/v1/');
+  expect(saved.args.req.model).toBe('qwen-vl-max');
+  expect(saved.args.req.apiKey).toBe('sk-vision-9876');
+  expect(saved.args.req.enabled).toBe(true);
+  expect(saved.args.req.consent).toBe(true);
+  await expect(key).toHaveValue('');
+  await expect(key).toHaveAttribute('placeholder', /尾号 9876/);
+  await page.getByRole('button', { name: '清除密钥' }).click();
+  await page.getByRole('button', { name: '保存 AI 识别设置' }).click();
+  const cleared = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'set_vision_settings').at(-1));
+  expect(cleared.args.req.apiKey).toBe('');
+  expect(cleared.args.req.enabled).toBe(false);
+  await expect(key).toHaveAttribute('placeholder', '输入 API Key');
 });
 
 function crc32(bytes: Buffer) {

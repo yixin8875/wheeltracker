@@ -13,12 +13,12 @@ import type {
 } from './types';
 
 type Step = 'source' | 'map' | 'review';
-type Mode = 'csv' | 'email' | 'ocr';
+type Mode = 'csv' | 'email' | 'vision';
 
 const MODES: { id: Mode; label: string }[] = [
   { id: 'csv', label: 'CSV 文件' },
   { id: 'email', label: '邮件' },
-  { id: 'ocr', label: '截图 OCR' }
+  { id: 'vision', label: 'AI 截图' }
 ];
 
 const STEPS: { id: Step; label: string }[] = [
@@ -32,13 +32,17 @@ const TEXT_STEPS: { id: Step; label: string }[] = [
   { id: 'review', label: '逐行确认' }
 ];
 
+const VISION_STEPS: { id: Step; label: string }[] = [
+  { id: 'source', label: '选择截图' },
+  { id: 'review', label: '逐行确认' }
+];
+
 const IMAGE_MIME: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-  bmp: 'image/bmp', gif: 'image/gif', tif: 'image/tiff', tiff: 'image/tiff'
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif'
 };
 
 function imageMime(file: File) {
-  if (file.type.startsWith('image/')) return file.type;
+  if (Object.values(IMAGE_MIME).includes(file.type)) return file.type;
   const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
   return IMAGE_MIME[extension] ?? '';
 }
@@ -81,10 +85,15 @@ const MAPPING_SOURCE = {
   detected: '自动识别',
   saved: '已保存的映射',
   manual: '手动映射',
-  text: '邮件 / OCR 文本'
+  text: '邮件文本',
+  vision: 'AI 截图'
 } as const;
 
-export function ImportWizard({ accountId, onCommitted }: { accountId: string; onCommitted: (message: string) => void }) {
+export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
+  accountId: string;
+  onCommitted: (message: string) => void;
+  onOpenVisionSettings?: () => void;
+}) {
   const [mode, setMode] = useState<Mode>('csv');
   const [step, setStep] = useState<Step>('source');
   const [paste, setPaste] = useState('');
@@ -93,8 +102,7 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
   const [encodingWarning, setEncodingWarning] = useState('');
   const [emailText, setEmailText] = useState('');
   const [emailName, setEmailName] = useState('');
-  const [ocrText, setOcrText] = useState('');
-  const [ocrName, setOcrName] = useState('');
+  const [imageName, setImageName] = useState('');
   const [origin, setOrigin] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping | null>(null);
@@ -229,25 +237,32 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
 
   async function chooseImage(file: File | undefined) {
     if (!file) return;
-    const mime = imageMime(file);
-    if (!mime) {
-      setError('仅支持 PNG、JPEG、WebP、BMP、GIF 或 TIFF 图片。');
+    if (!desktop) {
+      setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setError('图片超过 10 MB 上限。');
+    const mime = imageMime(file);
+    if (!mime) {
+      setError('仅支持 PNG、JPEG、WebP 或 GIF 截图。');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError('截图超过 5 MB 上限，请裁剪或压缩后再试。');
       return;
     }
     setBusy(true);
     setError('');
     setInfo('');
-    setOcrName(file.name);
+    setImageName(file.name);
     try {
       const dataUrl = await readAsDataUrl(file);
       const data = dataUrl.split(',')[1] ?? '';
-      const text = await api<string>('ocr_image', { data, mime });
-      setOcrText(text);
-      setInfo('识别完成。OCR 可能有误，请先核对并修正日期、数量、价格与合约，再解析。');
+      const result = await api<ImportPreview>('vision_import_preview', {
+        req: { data, mime, source: file.name, accountId }
+      });
+      setOrigin('AI 截图');
+      applyPreview(result, 'review');
+      setInfo('识别完成。模型可能看错或漏行，请逐行核对日期、数量、价格与合约后再提交。');
     } catch (failure) {
       setError(String(failure));
     } finally {
@@ -281,14 +296,6 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
     if (!file) return;
     event.preventDefault();
     void chooseImage(file);
-  }
-
-  function parseOcr() {
-    if (!ocrText.trim()) {
-      setError('请先选择截图并确认识别文字。');
-      return;
-    }
-    void runTextPreview(ocrText, ocrName || '截图', '截图 OCR');
   }
 
   function updateField(field: ImportField, raw: string) {
@@ -339,7 +346,7 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
           accountId,
           origin: mode === 'csv'
             ? (fileName || '粘贴文本')
-            : (origin || (mode === 'email' ? '邮件导入' : '截图 OCR')),
+            : (origin || (mode === 'email' ? '邮件导入' : 'AI 截图')),
           allowDuplicates,
           rows: selectedRows.map(row => ({ rowNumber: row.rowNumber, event: row.event! }))
         }
@@ -373,8 +380,7 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
     setEncodingWarning('');
     setEmailText('');
     setEmailName('');
-    setOcrText('');
-    setOcrName('');
+    setImageName('');
     setOrigin('');
     setPreview(null);
     setMapping(null);
@@ -400,7 +406,7 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
         ))}
       </div>
       <div className="wizard-steps" aria-label="导入步骤">
-        {(mode === 'csv' ? STEPS : TEXT_STEPS).map((item, index) => (
+        {(mode === 'csv' ? STEPS : mode === 'vision' ? VISION_STEPS : TEXT_STEPS).map((item, index) => (
           <span key={item.id} className={step === item.id ? 'active' : ''} aria-current={step === item.id ? 'step' : undefined}>
             {index + 1}. {item.label}
           </span>
@@ -408,7 +414,17 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
       </div>
 
       {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用导入本地账本。</div>}
-      {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
+      {error && (
+        <div className="alert error" role="alert">
+          <span>{error}</span>
+          <div className="toolbar">
+            <button onClick={() => setError('')}>关闭</button>
+            {mode === 'vision' && onOpenVisionSettings && /AI 识别|API Key|隐私说明/.test(error) && (
+              <button onClick={onOpenVisionSettings}>前往设置 → AI 识别</button>
+            )}
+          </div>
+        </div>
+      )}
       {info && <div className="alert success" role="status">{info}</div>}
 
       {step === 'source' && (
@@ -506,19 +522,19 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
             </>
           )}
 
-          {mode === 'ocr' && (
+          {mode === 'vision' && (
             <>
               <div className="section-heading">
-                <h2>截图 OCR</h2>
-                <span className="muted">Windows 内置 OCR · PNG / JPEG / WebP / BMP · 最多 10 MB</span>
+                <h2>AI 截图识别</h2>
+                <span className="muted">OpenAI 兼容视觉模型 · PNG / JPEG / WebP / GIF · 最多 5 MB</span>
               </div>
               <label className="file-drop">
                 <Upload size={24} />
-                <strong>{ocrName || '选择截图文件'}</strong>
-                <span className="muted">点击选择图片，或在下方区域按 Ctrl+V 粘贴截图</span>
+                <strong>{imageName || '选择截图文件'}</strong>
+                <span className="muted">点击选择截图，或在下方区域按 Ctrl+V 粘贴</span>
                 <input
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/bmp,image/gif,image/tiff"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   disabled={!desktop || busy}
                   onChange={event => {
                     const file = event.target.files?.[0];
@@ -528,7 +544,7 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
                 />
               </label>
               <div
-                className="ocr-paste"
+                className="vision-paste"
                 tabIndex={0}
                 role="button"
                 aria-label="粘贴截图"
@@ -537,28 +553,21 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
                 <Clipboard size={20} />
                 <span>在此区域按 Ctrl+V 粘贴截图</span>
               </div>
-              <p className="muted import-meta">
-                OCR 结果可能有误。请先修正日期、数量、价格、到期日与行权价，再解析；读取失败时可改用 CSV 或邮件导入。
-              </p>
+              <div className="alert warning vision-privacy" role="status">
+                <strong>截图会发送到你配置的云端视觉服务</strong>
+                <p>图片可能包含账户、持仓与交易信息。请只使用你信任的服务，并确认已在设置 → AI 识别中启用。</p>
+                <p>模型可能看错、漏行或把相似字符混淆。识别结果只是草稿，必须逐行核对后才能提交。</p>
+              </div>
               <div className="form-actions">
                 <button onClick={reset} disabled={busy}>清空</button>
                 <button onClick={() => void readClipboardImage()} disabled={!desktop || busy}>从剪贴板读取</button>
+                {onOpenVisionSettings && (
+                  <button onClick={onOpenVisionSettings} disabled={busy}>AI 识别设置</button>
+                )}
               </div>
-              <label className="full import-paste">
-                识别文字（可修改）
-                <textarea
-                  rows={10}
-                  value={ocrText}
-                  onChange={event => setOcrText(event.target.value)}
-                  placeholder={'SOLD TO OPEN 1 AAPL 02/20/2026 150 P @ 2.00\nTrade Date: 2026-01-02'}
-                />
-              </label>
-              <div className="form-actions">
-                <span className="muted">请核对识别文字后再解析。</span>
-                <button className="primary" onClick={parseOcr} disabled={!desktop || busy || !ocrText.trim()}>
-                  {busy ? '解析中…' : '解析识别文本'}
-                </button>
-              </div>
+              <p className="muted import-meta">
+                选择截图后会自动上传并识别，随后直接进入逐行确认；不会自动入账。
+              </p>
             </>
           )}
         </section>

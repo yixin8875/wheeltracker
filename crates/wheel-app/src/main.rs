@@ -5,11 +5,11 @@ mod commands;
 mod crypto;
 mod import;
 mod market;
-mod ocr;
 mod restore;
 mod store;
 mod text_import;
 mod views;
+mod vision;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -117,7 +117,9 @@ fn main() {
             commands::import_commit,
             commands::import_save_mapping,
             commands::text_import_preview,
-            commands::ocr_image,
+            commands::get_vision_settings,
+            commands::set_vision_settings,
+            commands::vision_import_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Wheel Tracker");

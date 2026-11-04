@@ -101,6 +101,177 @@ pub fn set_preferences(
     settings_view(&conn, settings)
 }
 
+const VISION_BASE_URL_KEY: &str = "vision.baseUrl";
+const VISION_MODEL_KEY: &str = "vision.model";
+const VISION_API_KEY_KEY: &str = "vision.apiKey";
+const VISION_ENABLED_KEY: &str = "vision.enabled";
+const VISION_CONSENT_KEY: &str = "vision.consent";
+const DEFAULT_VISION_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_VISION_MODEL: &str = "gpt-4o";
+
+/// Settings exposed to the UI. The API key itself never crosses IPC; only a
+/// boolean and the last four characters are returned.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VisionSettingsView {
+    pub base_url: String,
+    pub model: String,
+    pub has_key: bool,
+    pub key_hint: String,
+    pub enabled: bool,
+    pub consent: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisionSettingsReq {
+    pub base_url: String,
+    pub model: String,
+    /// `None` keeps the saved key; `Some("")` clears it.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub enabled: bool,
+    pub consent: bool,
+}
+
+struct VisionSettingsState {
+    view: VisionSettingsView,
+    key: String,
+}
+
+fn setting_bool(conn: &rusqlite::Connection, key: &str, default: bool) -> Result<bool, String> {
+    match store::get_setting_value(conn, key).map_err(|error| error.to_string())? {
+        Some(value) => match value.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(format!("设置 {key} 的值无效")),
+        },
+        None => Ok(default),
+    }
+}
+
+fn vision_settings_state(conn: &rusqlite::Connection) -> Result<VisionSettingsState, String> {
+    let base_url = store::get_setting_value(conn, VISION_BASE_URL_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| DEFAULT_VISION_BASE_URL.to_string());
+    let model = store::get_setting_value(conn, VISION_MODEL_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| DEFAULT_VISION_MODEL.to_string());
+    let key = store::get_setting_value(conn, VISION_API_KEY_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let hint = key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    Ok(VisionSettingsState {
+        view: VisionSettingsView {
+            base_url,
+            model,
+            has_key: !key.trim().is_empty(),
+            key_hint: hint,
+            enabled: setting_bool(conn, VISION_ENABLED_KEY, false)?,
+            consent: setting_bool(conn, VISION_CONSENT_KEY, false)?,
+        },
+        key,
+    })
+}
+
+fn vision_config(conn: &rusqlite::Connection) -> Result<crate::vision::VisionConfig, String> {
+    let state = vision_settings_state(conn)?;
+    if !state.view.enabled {
+        return Err("AI 截图识别未启用，请前往设置 → AI 识别。".to_string());
+    }
+    if !state.view.consent {
+        return Err("请先在设置 → AI 识别中同意隐私说明。".to_string());
+    }
+    if state.key.trim().is_empty() {
+        return Err("请先在设置 → AI 识别中保存 API Key。".to_string());
+    }
+    Ok(crate::vision::VisionConfig {
+        base_url: state.view.base_url,
+        model: state.view.model,
+        api_key: state.key,
+    })
+}
+
+#[tauri::command]
+pub fn get_vision_settings(
+    state: State<'_, AppState>,
+) -> Result<VisionSettingsView, String> {
+    let conn = state.conn();
+    Ok(vision_settings_state(&conn)?.view)
+}
+
+fn set_vision_for(
+    conn: &rusqlite::Connection,
+    req: VisionSettingsReq,
+) -> Result<VisionSettingsView, String> {
+    let base_url = crate::vision::normalize_base_url(&req.base_url)?;
+    if base_url.len() > 300 {
+        return Err("Base URL 过长。".to_string());
+    }
+    let model = crate::vision::validate_model(&req.model)?;
+    if model.len() > 100 {
+        return Err("模型名称过长。".to_string());
+    }
+    let existing = vision_settings_state(conn)?.key;
+    let replace_key = req.api_key.is_some();
+    let key = match req.api_key {
+        Some(raw) if raw.trim().is_empty() => String::new(),
+        Some(raw) => crate::vision::validate_api_key(&raw)?,
+        None => existing,
+    };
+    if req.enabled && key.trim().is_empty() {
+        return Err("启用 AI 截图识别前请先保存 API Key。".to_string());
+    }
+    if req.enabled && !req.consent {
+        return Err("启用前请先阅读并同意隐私说明。".to_string());
+    }
+
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .map_err(|error| error.to_string())?;
+    store::set_setting_value(&tx, VISION_BASE_URL_KEY, &base_url)
+        .map_err(|error| error.to_string())?;
+    store::set_setting_value(&tx, VISION_MODEL_KEY, &model)
+        .map_err(|error| error.to_string())?;
+    store::set_setting_value(
+        &tx,
+        VISION_ENABLED_KEY,
+        if req.enabled { "true" } else { "false" },
+    )
+    .map_err(|error| error.to_string())?;
+    store::set_setting_value(
+        &tx,
+        VISION_CONSENT_KEY,
+        if req.consent { "true" } else { "false" },
+    )
+    .map_err(|error| error.to_string())?;
+    if replace_key {
+        store::set_setting_value(&tx, VISION_API_KEY_KEY, &key)
+            .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(vision_settings_state(conn)?.view)
+}
+
+#[tauri::command]
+pub fn set_vision_settings(
+    state: State<'_, AppState>,
+    req: VisionSettingsReq,
+) -> Result<VisionSettingsView, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    set_vision_for(&conn, req)
+}
+
 #[tauri::command]
 pub fn dashboard(
     state: State<'_, AppState>,
@@ -1351,12 +1522,21 @@ fn text_preview_for(
     req: TextImportReq,
 ) -> Result<crate::import::ImportPreview, String> {
     let extraction = crate::text_import::extract(&req.text, req.source.as_deref())?;
+    extraction_preview_for(conn, extraction, req.account_id, "text")
+}
+
+fn extraction_preview_for(
+    conn: &rusqlite::Connection,
+    extraction: crate::text_import::Extraction,
+    account_id: Option<String>,
+    mapping_source: &str,
+) -> Result<crate::import::ImportPreview, String> {
     let csv_req = ImportPreviewReq {
         text: extraction.csv.clone(),
         delimiter: Some(crate::import::Delimiter::Comma),
         mapping: Some(text_mapping()),
         has_header: Some(true),
-        account_id: req.account_id,
+        account_id,
     };
     let mut preview = preview_for(conn, csv_req)?;
     let mut warnings = extraction.warnings;
@@ -1370,7 +1550,52 @@ fn text_preview_for(
     );
     warnings.extend(preview.warnings);
     preview.warnings = warnings;
-    preview.mapping_source = "text".to_string();
+    preview.mapping_source = mapping_source.to_string();
+    Ok(preview)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisionImportReq {
+    pub data: String,
+    pub mime: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+/// Send one screenshot to the configured OpenAI-compatible vision endpoint,
+/// then reuse the same preview path as CSV and email imports. The SQLite lock
+/// is released while the network request is in flight.
+#[tauri::command]
+pub async fn vision_import_preview(
+    state: State<'_, AppState>,
+    req: VisionImportReq,
+) -> Result<crate::import::ImportPreview, String> {
+    let config = {
+        let conn = state.conn();
+        vision_config(&conn)?
+    };
+    let extraction = crate::vision::extract(&config, &req.data, &req.mime).await?;
+    let source = req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(120)
+                .collect::<String>()
+        });
+    let conn = state.conn();
+    let mut preview =
+        extraction_preview_for(&conn, extraction, req.account_id, "vision")?;
+    if let Some(source) = source {
+        preview.warnings.insert(1, format!("来源截图：{source}"));
+    }
     Ok(preview)
 }
 
@@ -1394,14 +1619,6 @@ fn text_mapping() -> crate::import::ColumnMapping {
         delimiter: Some(Delimiter::Comma),
         has_header: Some(true),
     }
-}
-
-#[tauri::command]
-pub fn ocr_image(data: String, mime: String) -> Result<String, String> {
-    let extension = crate::ocr::extension_for_mime(&mime)
-        .ok_or_else(|| "仅支持 PNG、JPEG、WebP、BMP、GIF 或 TIFF 截图".to_string())?;
-    let bytes = crate::ocr::decode_image(&data)?;
-    crate::ocr::recognize(&bytes, extension)
 }
 
 #[cfg(test)]
@@ -2127,5 +2344,90 @@ Fees: 1.00
         )
         .unwrap()
         .is_some());
+    }
+
+    fn vision_settings(api_key: Option<&str>, enabled: bool, consent: bool) -> VisionSettingsReq {
+        VisionSettingsReq {
+            base_url: "https://api.openai.com/v1/".into(),
+            model: "gpt-4o".into(),
+            api_key: api_key.map(str::to_string),
+            enabled,
+            consent,
+        }
+    }
+
+    #[test]
+    fn vision_settings_mask_the_key_and_require_consent_to_enable() {
+        let conn = db();
+        let saved = set_vision_for(&conn, vision_settings(Some("sk-test-1234"), false, false))
+            .unwrap();
+        assert_eq!(saved.base_url, "https://api.openai.com/v1");
+        assert!(saved.has_key);
+        assert_eq!(saved.key_hint, "1234");
+        assert!(!saved.enabled);
+
+        let error = set_vision_for(&conn, vision_settings(None, true, false)).unwrap_err();
+        assert!(error.contains("隐私说明"), "{error}");
+        assert!(vision_config(&conn).is_err());
+
+        let enabled = set_vision_for(&conn, vision_settings(None, true, true)).unwrap();
+        assert!(enabled.enabled && enabled.consent);
+        let config = vision_config(&conn).unwrap();
+        assert_eq!(config.api_key, "sk-test-1234");
+        assert_eq!(config.model, "gpt-4o");
+
+        let cleared = set_vision_for(&conn, vision_settings(Some(""), false, true)).unwrap();
+        assert!(!cleared.has_key);
+        assert!(cleared.key_hint.is_empty());
+        assert!(vision_config(&conn).is_err());
+    }
+
+    #[test]
+    fn vision_settings_reject_invalid_values_and_enable_without_a_key() {
+        let conn = db();
+        for req in [
+            VisionSettingsReq {
+                base_url: "http://api.openai.com/v1".into(),
+                ..vision_settings(None, false, false)
+            },
+            VisionSettingsReq {
+                model: " ".into(),
+                ..vision_settings(None, false, false)
+            },
+            VisionSettingsReq {
+                api_key: Some("short".into()),
+                ..vision_settings(None, false, false)
+            },
+        ] {
+            assert!(set_vision_for(&conn, req).is_err());
+        }
+        let error = set_vision_for(&conn, vision_settings(None, true, true)).unwrap_err();
+        assert!(error.contains("API Key"), "{error}");
+    }
+
+    #[test]
+    fn vision_extraction_reuses_the_preview_pipeline() {
+        let conn = db();
+        let extraction = crate::vision::to_extraction(
+            vec![serde_json::json!({
+                "date": "2026-01-02",
+                "kind": "option_open_short",
+                "symbol": "AAPL",
+                "qty": 1,
+                "price": 2.0,
+                "fees": 1.0,
+                "expiry": "2026-02-20",
+                "strike": 150,
+                "right": "P"
+            })],
+            Vec::new(),
+            "gpt-4o",
+        )
+        .unwrap();
+        let preview = extraction_preview_for(&conn, extraction, None, "vision").unwrap();
+        assert_eq!(preview.mapping_source, "vision");
+        assert_eq!(preview.rows.len(), 1);
+        assert!(preview.warnings[0].contains("云端视觉（gpt-4o）"));
+        assert_eq!(preview.rows[0].event.as_ref().unwrap().note.as_deref(), Some("云端视觉 · gpt-4o"));
     }
 }

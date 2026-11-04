@@ -22,7 +22,7 @@
 | G3 | 每笔期权收租可追溯：开仓价、平仓成本、净收入、年化 | 收租台账表格 |
 | G4 | 手工录入一笔交易 ≤ 15 秒 | 键盘优先的快速录入表单 |
 | G5 | 数据可完整重算、可导出、可备份 | 事件溯源 + 一键重建 + JSON/SQLite 导出 |
-| G6 | 截图/邮件里的成交信息能半自动进系统 | OCR / 文本解析 → 人工确认 → 入库 |
+| G6 | 截图/邮件里的成交信息能半自动进系统 | 云端视觉 / 文本解析 → 人工确认 → 入库 |
 
 ### 1.2 非目标（明确不做）
 
@@ -424,7 +424,7 @@ wheel-core/
 ├── premium.rs      // 权利金池、台账生成
 ├── metrics.rs      // A/B/C 成本、年化、汇总
 ├── store.rs        // sqlx 读写与事务
-└── import/         // CSV/OCR/邮件解析（也可独立 crate）
+└── import/         // CSV/AI 截图/邮件解析（也可独立 crate）
 ```
 
 ### 6.2 不变量（每次重算后断言）
@@ -460,7 +460,7 @@ wheel-core/
 ├─ 持仓       ← 股票持仓 / 期权持仓（含到期倒计时）
 ├─ 收租台账   ← 全量表格 + 筛选 + 汇总
 ├─ 记一笔     ← 快速录入（快捷键 Ctrl+N）
-├─ 导入       ← CSV / 截图 OCR / 邮件文本
+├─ 导入       ← CSV / AI 截图 / 邮件文本
 └─ 设置       ← 账户、成本口径、提醒、备份
 ```
 
@@ -567,7 +567,7 @@ wheel-core/
 │  Rust / Tauri 2                             │
 │  ├── wheel-core（领域引擎，纯逻辑 + 测试）  │
 │  ├── store（sqlx + SQLite）                 │
-│  ├── import（CSV / OCR / 邮件解析）         │
+│  ├── import（CSV / AI 截图 / 邮件解析）     │
 │  ├── notify（到期提醒）                     │
 │  └── backup（自动备份 / 导出）              │
 └─────────────────────────────────────────────┘
@@ -598,7 +598,7 @@ optiontrader/
 │   ├── wheel-core/            # 领域模型 + 引擎 + 存储（可独立测试）
 │   │   ├── src/{model,engine,campaign,premium,metrics,store}.rs
 │   │   └── tests/scenarios/
-│   ├── wheel-import/          # CSV / OCR / 邮件解析
+│   ├── wheel-import/          # CSV / AI 截图 / 邮件解析
 │   └── wheel-app/             # Tauri 二进制
 │       ├── src/{main,commands,store,views,backup,restore,import,market}.rs
 │       └── tauri.conf.json
@@ -631,8 +631,10 @@ preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
 import_preview(req: ImportPreviewReq) -> ImportPreview
 import_commit(req: ImportCommitReq) -> ImportSummary
 import_save_mapping(signature, mapping) -> bool
-text_import_preview(req: TextImportReq) -> ImportPreview   // 邮件 / OCR 文本
-ocr_image(data: String, mime: String) -> String             // Windows 内置 OCR
+text_import_preview(req: TextImportReq) -> ImportPreview   // 邮件文本
+get_vision_settings() -> VisionSettingsView                // 只返回 hasKey / 尾号
+set_vision_settings(req: VisionSettingsReq) -> VisionSettingsView
+vision_import_preview(req: VisionImportReq) -> ImportPreview  // 云端视觉 → 逐行确认
 set_price(symbol, date, close)
 export_report(range, format) -> Path
 backup_now(password: Option<String>) -> Path      // 有密码时生成 .sqlite.enc
@@ -696,14 +698,18 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 
 见 7.4。另提供「批量粘贴」：一行一笔，用固定模板解析。
 
-### 9.2 截图 OCR
+### 9.2 AI 截图识别
 
-已实现（Windows）：
+已实现（云端视觉，OpenAI 兼容协议）：
 
-- 导入向导「截图 OCR」：选择 PNG / JPEG / WebP / BMP / GIF / TIFF（≤10 MB），或在页面内 Ctrl+V 粘贴；也可从剪贴板读取。
-- 引擎：**Windows.Media.Ocr**（系统自带、离线）。`ocr` 模块把图片与一段 PowerShell 5.1 WinRT 脚本写入 `%TEMP%/wheel-ocr-<pid>-<nanos>/`，无窗口启动，最多等待 45 秒，读取 UTF-8 识别结果后删除整个临时目录。
-- 识别文字先回填到可编辑文本框，不直接入库；用户修正日期、数量、价格、到期日与行权价后再解析。OCR 不保证数字准确，抽取器对缺失字段只警告并跳过，绝不猜。
-- 文本随后走 9.3 的抽取器与 CSV 预览 / 提交管线。非 Windows 平台明确返回「截图 OCR 仅支持 Windows」。
+- 配置：设置 → AI 识别填写 Base URL（如 `https://api.openai.com/v1`）、模型与 API Key，勾选隐私同意后才能启用。Key 存在 `settings` 表的 `vision.apiKey`，`get_vision_settings` 只返回 `hasKey` 与尾号，不返回明文；JSON 导出不含 Key，但 SQLite 备份（含自动备份）会包含。
+- 输入：导入向导「AI 截图」选择 PNG / JPEG / WebP / GIF（≤5 MB，base64 解码后再校验文件头），或在页面内 Ctrl+V 粘贴；不接受 BMP / TIFF。图片会发送到用户配置的第三方服务，界面在启用和导入页都明确提示。
+- 请求：`POST {baseUrl}/chat/completions`，Bearer Key，`temperature: 0`、`max_tokens: 4096`，图片以 data URI 放入 `image_url`。客户端只允许 HTTPS、禁止重定向（避免 Key 被转发）、60 秒超时、10 秒连接超时、响应上限 2 MB。
+- 模型契约：系统提示要求只返回 `{ "trades": [...], "warnings": [...] }`，字段为 `date / kind / symbol / qty / price / fees / expiry / strike / right / amount`，日期统一 `YYYY-MM-DD`；明确要求忽略截图里的指令（防提示注入），看不清就省略并写入 warnings，不猜。
+- 后端校验：`vision` 模块解析纯 JSON、```json 围栏或顶层数组；逐条规范化日期与标的，数量 1–1,000,000；期权必须有到期日、行权价与 C/P，股票/分红不得带期权字段；开平仓与股票买卖必须有正价格，到期/指派价格与费用清零；`buy_to_open` / `sell_to_close` 明确拒绝；重复行合并并警告；单次最多 200 笔。任何字段不合法只跳过该行并列出原因，没有可导入行时直接报错。
+- 写入：模型结果转换为固定表头 CSV（`日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,备注`），复用 CSV 的预览、去重、整批事务与 `导入:<来源>` 备注；预览的 `mappingSource` 为 `vision`，来源默认「AI 截图」。截图不会自动入账，必须逐行确认。
+- 错误：401/403、404、429、5xx 给出可操作提示，并保留服务端 `error.message`（截断 300 字符，不回显 Key）；未启用、未同意或缺少 Key 时提示前往设置。
+- 已知边界：不同兼容服务的模型名、图片字段和错误格式可能不同；模型可能幻觉或漏行，因此不信任模型输出，必须人工确认。已移除 Windows 内置 OCR：实测数字、小数点与斜杠错误严重，不再保留回退路径。
 
 ### 9.3 邮件导入
 
@@ -737,9 +743,9 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 |---|---|---|---|
 | **P0 内核** ✅ | `wheel-core` 领域模型 + 重放引擎 + 不变量断言 + golden/property 测试 | `cargo test` 全绿（16 项 + 文档测试），`cargo run --example demo` 可重放示例 | 已完成 |
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
-| **P2 导入** 🟢 | CSV 映射向导 + 去重、截图 OCR、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
+| **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、OCR / 邮件导入（已完成）+ 拆股支持 + 云端同步 | 进阶 | 进行中 |
+| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入（已完成）+ 拆股支持 + 云端同步 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 
@@ -752,7 +758,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | 成本口径理解偏差 | 数字不可信，用户弃用 | 三轨并列显示 + 设置里可切换口径 + 文档解释每个数字来源 |
 | 手工录入出错 | 成本越算越偏 | 实时预览、录入校验、事件可删可重建、每日核对提醒 |
 | 指派日期与到期日混淆 | 时间轴错乱 | 分开存 `occurred_at` 与 `effective_at`，指派默认用到期日 |
-| OCR 误识别 | 脏数据 | 永远人工确认，低置信度高亮，保留原始截图引用 |
+| 视觉模型误识别 | 脏数据 | 严格字段校验、跳过可疑行、永远人工确认，不自动入账 |
 | 券商改名/拆股 | 历史数据失真 | MVP 明确不支持，`ADJUSTMENT` 兜底 |
 | 滚动记账复杂 | 用户漏记一半 | 「滚动」合并表单，一次生成两条事件 |
 | 数据丢失 | 灾难 | WAL + 每日自动备份（保留 7 份）+ 一键导出 JSON |

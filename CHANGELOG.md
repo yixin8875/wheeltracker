@@ -9,8 +9,10 @@
 
 - 邮件导入：导入向导新增「邮件」模式，选择 `.eml` / `.txt` 或粘贴正文；`text_import` 模块本地解码 multipart、base64、quoted-printable 与 HTML，按 Schwab、Fidelity、IBKR、富途、老虎和通用成交确认抽取日期、方向、合约、数量、价格与费用
 - 邮件抽取器保守处理：缺少日期、数量、价格或合约的行不猜测，记录为警告并跳过；同一封邮件中的完全重复记录合并；做多期权（Buy to Open / Sell to Close）明确拒绝；抽取结果生成固定表头 CSV，复用现有预览、去重、整批事务与备注前缀
-- 截图 OCR：导入向导新增「OCR」模式，支持选择图片或 Ctrl+V 粘贴；`ocr` 模块通过 PowerShell 5.1 调用 Windows 内置 `Windows.Media.Ocr`，临时目录存放图片与脚本并在结束或超时后删除；识别文本可先编辑再解析
-- `text_import_preview` 与 `ocr_image` 命令；`import_preview` 的映射来源新增 `text`
+- AI 截图识别：导入向导新增「AI 截图」，支持 PNG / JPEG / WebP / GIF 与 Ctrl+V 粘贴；`vision` 模块向用户配置的 OpenAI 兼容 `/chat/completions` 接口发送 base64 图片，要求模型返回严格 JSON，再逐字段校验、去重并生成固定表头 CSV
+- AI 识别设置：设置页新增「AI 识别」，可配置 Base URL、模型与 API Key，显式同意后才允许启用；Key 保存在本机 `settings` 表，界面只显示尾号，清除需再次保存
+- `get_vision_settings` / `set_vision_settings` / `vision_import_preview` 命令；`import_preview` 的映射来源新增 `text` 与 `vision`
+- 云端视觉安全边界：仅 HTTPS、禁止重定向、60 秒超时、响应上限 2 MB、图片 ≤ 5 MB；模型返回的未知交易类型、缺失价格、期权字段不完整、做多期权与重复行均被拒绝或合并，结果只进入人工确认
 - `wheel-app` 新增 `regex` 与 `base64` 依赖（均来自既有离线锁定版本）
 - 备份加密：手动备份可设置 8–128 位密码，生成 `.sqlite.enc`；`crypto` 模块使用 PBKDF2-HMAC-SHA256（200,000 次）与 AES-256-GCM，文件头作为 AAD，密码错误或文件被改写会在解密时失败
 - 加密备份的校验与恢复：备份列表显示锁标记；校验需密码并解密到临时文件做完整性检查；暂存时解密到 `restore/staged-*.sqlite`，marker 升级为 version 2，替换完成或失败后删除明文副本
@@ -42,6 +44,10 @@
 
 - 无表头 CSV 在重新预览时不再被误当作有表头文件（预览回填实际 `hasHeader`）
 - 邮件抽取收紧边界：`exercise price` 不再触发指派，`at <日期>` 不再被当作成交价；只有实际采用的交易日期为美式 `M/D/YYYY` 时才提示；缺少成交价的交易不再借用下一笔交易的价格；金额保留六位小数，避免小额期权价格被提前舍入
+
+### Removed
+
+- 移除 Windows 内置 `Windows.Media.Ocr` 截图识别、`ocr` 模块与 `ocr_image` 命令：实测会把 `02/20/2026` 识别成 `92/29/2926`、`150` 识别成 `159`，数字与表格列不可靠；截图导入改由云端视觉模型完成
 
 ## [0.1.0] - 2026-11-03
 

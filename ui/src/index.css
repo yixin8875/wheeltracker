@@ -270,9 +270,19 @@ tr:last-child td { border-bottom: 0; }
 .import-modes { margin-bottom: 16px; }
 .import-paste { display: block; font-size: 12px; color: #626873; }
 .import-paste textarea { display: block; margin-top: 9px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
-.ocr-paste { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border: 1px dashed #c6ccd6; border-radius: 8px; background: #fafbfd; color: #626873; margin-bottom: 14px; cursor: pointer; }
-.ocr-paste:focus { outline: none; border-color: #0875e1; background: #f5f9fe; }
-.ocr-paste > svg { color: #7c8a98; }
+.vision-paste { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border: 1px dashed #c6ccd6; border-radius: 8px; background: #fafbfd; color: #626873; margin-bottom: 14px; cursor: pointer; }
+.vision-paste:focus { outline: none; border-color: #0875e1; background: #f5f9fe; }
+.vision-paste > svg { color: #7c8a98; }
+.vision-privacy { display: block; margin-bottom: 0; }
+.vision-privacy p { margin: 6px 0 0; line-height: 1.6; }
+.vision-settings form { display: grid; gap: 14px; max-width: 760px; }
+.vision-settings form > label:not(.check) { display: grid; gap: 7px; font-size: 12px; color: #626873; }
+.vision-settings form input[type="url"],
+.vision-settings form input[type="text"],
+.vision-settings form input[type="password"] { width: 100%; }
+.vision-hint { font-size: 11px; line-height: 1.7; }
+.vision-hint code { background: #f2f4f7; border-radius: 3px; padding: 1px 4px; font-size: 11px; }
+.vision-key-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 12px; }
 .mapping-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 22px; }
 .mapping-grid label { font-size: 12px; color: #626873; }
 .mapping-grid select { display: block; margin-top: 8px; }

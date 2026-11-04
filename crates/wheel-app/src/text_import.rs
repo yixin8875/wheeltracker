@@ -872,7 +872,7 @@ fn is_stopword(word: &str) -> bool {
     WORDS.contains(&word.to_lowercase().as_str())
 }
 
-fn sanitize_symbol(raw: &str) -> Option<String> {
+pub(crate) fn sanitize_symbol(raw: &str) -> Option<String> {
     let trimmed = raw
         .trim()
         .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-');
@@ -1133,7 +1133,7 @@ fn is_american_date(raw: &str) -> bool {
     regex.is_match(raw.trim().trim_matches(|ch: char| ch == ',' || ch == '.'))
 }
 
-fn normalize_any_date(raw: &str) -> Option<String> {
+pub(crate) fn normalize_any_date(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_matches(|ch: char| ch == ',' || ch == '.');
     if let Some(value) = month_name_date(trimmed) {
         return Some(value);
@@ -1218,7 +1218,7 @@ fn is_price_line(line: &str) -> bool {
     regex.is_match(line)
 }
 
-fn fingerprint(trade: &ExtractedTrade) -> String {
+pub(crate) fn fingerprint(trade: &ExtractedTrade) -> String {
     format!(
         "{}|{}|{}|{}|{:.6}|{:.6}|{}|{}|{}|{:.6}",
         trade.date,
@@ -1246,7 +1246,7 @@ fn round_money(value: f64) -> f64 {
     }
 }
 
-fn build_csv(trades: &[ExtractedTrade]) -> String {
+pub(crate) fn build_csv(trades: &[ExtractedTrade]) -> String {
     let mut rows = vec![CSV_HEADER.to_string()];
     for trade in trades {
         let row = [

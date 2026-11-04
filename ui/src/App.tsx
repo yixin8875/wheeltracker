@@ -13,6 +13,7 @@ import { ReminderCard, ReminderPreferences, reminderPositions } from './Reminder
 import { ExpiryCalendar } from './ExpiryCalendar';
 import { CampaignCompare } from './CampaignCompare';
 import { SettingsData } from './SettingsData';
+import { VisionSettings } from './VisionSettings';
 import { AccountsPanel } from './Accounts';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 
@@ -70,7 +71,7 @@ export default function App() {
   }, [accountId]);
   const activeSymbols = [...new Set((data?.campaigns ?? []).filter(campaign => campaign.status === 'active').map(campaign => campaign.symbol))];
   const market = usePortfolioQuotes(activeSymbols, reload);
-  const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'data' | 'history'>('accounting');
+  const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'vision' | 'data' | 'history'>('accounting');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
   useEffect(() => {
     if (!desktop) return;
@@ -146,7 +147,7 @@ export default function App() {
     </>}
     {page === 'ledger' && !unavailable && <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/>}
     {page === 'entry' && <EntryForm key={entryKey} initial={initial} positions={positions} accountId={accountId} onSaved={saved}/>}
-    {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved}/>}
+    {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
     {page === 'compare' && !unavailable && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
     {page === 'income' && !unavailable && <MonthlyIncomeReport report={income}/>}
@@ -157,10 +158,11 @@ export default function App() {
     {page === 'detail' && !unavailable && <><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)}/><p className="footnote">{settings?.includeDividendsInCost ? '当前 B/C′ 成本已扣除累计分红。' : '当前分红不摊薄 B/C′ 成本，可在设置页调整。'}</p><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
     {page === 'market' && <MarketPage prices={prices} symbols={activeSymbols} market={market} onSaved={saved} onEntry={symbol => startEntry({ symbol })}/>}
     {page === 'settings' && <>
-      <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'data', 'history'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', data: '备份与维护', history: '交易记录' }[tab]}</button>)}</div>
+      <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'vision', 'data', 'history'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', vision: 'AI 识别', data: '备份与维护', history: '交易记录' }[tab]}</button>)}</div>
       {settingsTab === 'accounting' && <AccountingPreferences settings={settings} onSaved={settingsSaved}/>}
       {settingsTab === 'accounts' && <AccountsPanel accounts={accounts} currentId={accountId} onSwitch={switchAccount} onAccounts={setAccounts} onNotice={setNotice} onError={setError}/>}
       {settingsTab === 'reminders' && <ReminderPreferences settings={settings} onSaved={preferencesSaved}/>}
+      {settingsTab === 'vision' && <VisionSettings/>}
       {settingsTab === 'data' && <SettingsData accountId={accountId} info={info} events={events} campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} positions={positions} settings={settings} restoreStatus={restoreStatus} onRestoreStatus={setRestoreStatus} onNotice={setNotice} onError={setError} onPreferencesSaved={preferencesSaved}/>}
       {settingsTab === 'history' && <section className="panel"><div className="section-heading"><h2>交易事件日志</h2><span className="muted">撤销前会重新校验后续交易</span></div><div className="table-wrap"><table><thead><tr><th>日期</th><th>类型</th><th>标的 / 合约</th><th>数量</th><th>每股价格</th><th>费用</th><th>备注</th><th>操作</th></tr></thead><tbody>{[...events].reverse().map(event => <tr key={event.id}><td>{event.date}</td><td>{labels[event.kind]}</td><td>{event.symbol} {event.expiry} {event.strike}{event.right}</td><td>{event.qty}</td><td>{money(event.price)}</td><td>{money(event.fees)}</td><td className="note-cell">{event.note}</td><td><button onClick={() => setPendingDelete(event.id)}>撤销</button></td></tr>)}</tbody></table></div>{!events.length && <p className="empty">暂无交易记录。</p>}</section>}
     </>}
