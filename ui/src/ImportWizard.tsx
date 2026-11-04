@@ -13,22 +13,16 @@ import type {
 } from './types';
 
 type Step = 'source' | 'map' | 'review';
-type Mode = 'csv' | 'email' | 'vision';
+type Mode = 'csv' | 'vision';
 
 const MODES: { id: Mode; label: string }[] = [
   { id: 'csv', label: 'CSV 文件' },
-  { id: 'email', label: '邮件' },
   { id: 'vision', label: 'AI 截图' }
 ];
 
 const STEPS: { id: Step; label: string }[] = [
   { id: 'source', label: '选择文件' },
   { id: 'map', label: '确认列映射' },
-  { id: 'review', label: '逐行确认' }
-];
-
-const TEXT_STEPS: { id: Step; label: string }[] = [
-  { id: 'source', label: '选择来源' },
   { id: 'review', label: '逐行确认' }
 ];
 
@@ -86,7 +80,6 @@ const MAPPING_SOURCE = {
   detected: '自动识别',
   saved: '已保存的映射',
   manual: '手动映射',
-  text: '邮件文本',
   vision: 'AI 截图'
 } as const;
 
@@ -101,8 +94,6 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
   const [fileName, setFileName] = useState('');
   const [encoding, setEncoding] = useState('');
   const [encodingWarning, setEncodingWarning] = useState('');
-  const [emailText, setEmailText] = useState('');
-  const [emailName, setEmailName] = useState('');
   const [imageName, setImageName] = useState('');
   const [origin, setOrigin] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -159,27 +150,6 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     }
   }
 
-  async function runTextPreview(text: string, source: string, nextOrigin: string) {
-    if (!desktop) {
-      setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    setInfo('');
-    try {
-      const result = await api<ImportPreview>('text_import_preview', {
-        req: { text, source, accountId }
-      });
-      setOrigin(nextOrigin);
-      applyPreview(result, 'review');
-    } catch (failure) {
-      setError(String(failure));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function chooseFile(file: File | undefined) {
     if (!file) return;
     setBusy(true);
@@ -204,36 +174,6 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
       return;
     }
     void runPreview(paste);
-  }
-
-  async function chooseEmail(file: File | undefined) {
-    if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      setError('邮件文件超过 8 MB 上限。');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    setInfo('');
-    try {
-      const decoded = await decodeCsvFile(file);
-      setEmailText(decoded.text);
-      setEmailName(file.name);
-      setEncoding(decoded.encoding);
-      setEncodingWarning(decoded.warning ?? '');
-      await runTextPreview(decoded.text, file.name, file.name);
-    } catch (failure) {
-      setError(String(failure));
-      setBusy(false);
-    }
-  }
-
-  function parseEmail() {
-    if (!emailText.trim()) {
-      setError('请先选择邮件文件或粘贴邮件内容。');
-      return;
-    }
-    void runTextPreview(emailText, emailName || '粘贴邮件', emailName || '邮件导入');
   }
 
   async function chooseImage(file: File | undefined) {
@@ -345,9 +285,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
       const summary = await api<ImportSummary>('import_commit', {
         req: {
           accountId,
-          origin: mode === 'csv'
-            ? (fileName || '粘贴文本')
-            : (origin || (mode === 'email' ? '邮件导入' : 'AI 截图')),
+          origin: mode === 'csv' ? (fileName || '粘贴文本') : (origin || 'AI 截图'),
           allowDuplicates,
           rows: selectedRows.map(row => ({ rowNumber: row.rowNumber, event: row.event! }))
         }
@@ -379,8 +317,6 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setFileName('');
     setEncoding('');
     setEncodingWarning('');
-    setEmailText('');
-    setEmailName('');
     setImageName('');
     setOrigin('');
     setPreview(null);
@@ -407,7 +343,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
         ))}
       </div>
       <div className="wizard-steps" aria-label="导入步骤">
-        {(mode === 'csv' ? STEPS : mode === 'vision' ? VISION_STEPS : TEXT_STEPS).map((item, index) => (
+        {(mode === 'csv' ? STEPS : VISION_STEPS).map((item, index) => (
           <span key={item.id} className={step === item.id ? 'active' : ''} aria-current={step === item.id ? 'step' : undefined}>
             {index + 1}. {item.label}
           </span>
@@ -470,54 +406,6 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                 <button onClick={reset} disabled={busy}>清空</button>
                 <button className="primary" onClick={parsePasted} disabled={!desktop || busy || !paste.trim()}>
                   {busy ? '解析中…' : '解析预览'}
-                </button>
-              </div>
-            </>
-          )}
-
-          {mode === 'email' && (
-            <>
-              <div className="section-heading">
-                <h2>导入邮件</h2>
-                <span className="muted">.eml / .txt · MIME、base64、HTML · 最多 8 MB</span>
-              </div>
-              <label className="file-drop">
-                <Upload size={24} />
-                <strong>{emailName || '选择邮件文件'}</strong>
-                <span className="muted">点击选择 .eml 或 .txt，或把邮件内容粘贴到下方</span>
-                <input
-                  type="file"
-                  accept=".eml,.txt,message/rfc822,text/plain"
-                  disabled={!desktop || busy}
-                  onChange={event => {
-                    const file = event.target.files?.[0];
-                    void chooseEmail(file);
-                    event.target.value = '';
-                  }}
-                />
-              </label>
-              <p className="muted import-meta">
-                支持 Schwab、Fidelity、IBKR、富途、老虎与通用成交确认；无法确定的行会在预览中说明并跳过。
-              </p>
-              {(encoding || encodingWarning) && (
-                <p className="muted import-meta">
-                  {encoding && <>编码：{encoding}</>}
-                  {encodingWarning && <> · {encodingWarning}</>}
-                </p>
-              )}
-              <label className="full import-paste">
-                粘贴邮件正文或 .eml 内容
-                <textarea
-                  rows={10}
-                  value={emailText}
-                  onChange={event => setEmailText(event.target.value)}
-                  placeholder={'Trade Date: 2026-01-02\nSOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00\nFees: 1.00'}
-                />
-              </label>
-              <div className="form-actions">
-                <button onClick={reset} disabled={busy}>清空</button>
-                <button className="primary" onClick={parseEmail} disabled={!desktop || busy || !emailText.trim()}>
-                  {busy ? '解析中…' : '解析邮件'}
                 </button>
               </div>
             </>
@@ -665,7 +553,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
           <div className="alert warning" role="status">
             提交时会按账本顺序整体校验；任一行不合法，整批都不会入账。
           </div>
-          <p className="muted">拆股 / 合股不会从 CSV、邮件或截图自动识别，请使用「记一笔 → 拆股 / 合股」手工录入比例与零股补偿；导入只读取券商明确给出的「乘数」列。</p>
+          <p className="muted">拆股 / 合股不会从 CSV 或截图自动识别，请使用「记一笔 → 拆股 / 合股」手工录入比例与零股补偿；导入只读取券商明确给出的「乘数」列。</p>
           <div className="toolbar import-toolbar">
             <button onClick={() => selectAll(true)} disabled={busy}>全选可导入</button>
             <button onClick={() => selectAll(false)} disabled={busy}>清空选择</button>

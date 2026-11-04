@@ -7,7 +7,7 @@ mod import;
 mod market;
 mod restore;
 mod store;
-mod text_import;
+mod trade_text;
 mod views;
 mod vision;
 
@@ -119,7 +119,6 @@ fn main() {
             commands::import_preview,
             commands::import_commit,
             commands::import_save_mapping,
-            commands::text_import_preview,
             commands::get_vision_settings,
             commands::set_vision_settings,
             commands::vision_import_preview,

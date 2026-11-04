@@ -1849,38 +1849,9 @@ fn save_mapping_for(
     Ok(true)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextImportReq {
-    pub text: String,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub account_id: Option<String>,
-}
-
-/// Parse an email / pasted broker confirmation and return the same preview
-/// shape as CSV import, so the wizard can reuse review and commit unchanged.
-#[tauri::command]
-pub fn text_import_preview(
-    state: State<'_, AppState>,
-    req: TextImportReq,
-) -> Result<crate::import::ImportPreview, String> {
-    let conn = state.conn();
-    text_preview_for(&conn, req)
-}
-
-fn text_preview_for(
-    conn: &rusqlite::Connection,
-    req: TextImportReq,
-) -> Result<crate::import::ImportPreview, String> {
-    let extraction = crate::text_import::extract(&req.text, req.source.as_deref())?;
-    extraction_preview_for(conn, extraction, req.account_id, "text")
-}
-
 fn extraction_preview_for(
     conn: &rusqlite::Connection,
-    extraction: crate::text_import::Extraction,
+    extraction: crate::trade_text::Extraction,
     account_id: Option<String>,
     mapping_source: &str,
 ) -> Result<crate::import::ImportPreview, String> {
@@ -1919,8 +1890,8 @@ pub struct VisionImportReq {
 }
 
 /// Send one screenshot to the configured OpenAI-compatible vision endpoint,
-/// then reuse the same preview path as CSV and email imports. The SQLite lock
-/// is released while the network request is in flight.
+/// then reuse the same preview path as CSV imports. The SQLite lock is
+/// released while the network request is in flight.
 #[tauri::command]
 pub async fn vision_import_preview(
     state: State<'_, AppState>,
@@ -2790,48 +2761,6 @@ mod tests {
         assert!(events
             .iter()
             .all(|event| event.note.starts_with("导入:broker.csv")));
-    }
-
-    #[test]
-    fn text_import_preview_maps_email_trades_and_flags_duplicates() {
-        let conn = db();
-        let text = "\
-Trade Date: 2026-01-02
-SOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00
-Fees: 1.00
-";
-        let preview = text_preview_for(
-            &conn,
-            TextImportReq {
-                text: text.to_string(),
-                source: Some("schwab.eml".to_string()),
-                account_id: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(preview.rows.len(), 1);
-        let event = preview.rows[0].event.as_ref().unwrap();
-        assert_eq!(event.kind, "option_open_short");
-        assert_eq!(event.symbol, "AAPL");
-        assert_eq!(event.qty, 1);
-        assert_eq!(event.price, 2.0);
-        assert_eq!(event.fees, 1.0);
-        assert_eq!(event.expiry.as_deref(), Some("2026-02-20"));
-        assert_eq!(event.strike, Some(150.0));
-        assert!(preview.warnings[0].contains("Schwab"));
-        assert_eq!(preview.mapping_source, "text");
-
-        commit_for(&conn, commit_request(commit_rows(&preview), false)).unwrap();
-        let again = text_preview_for(
-            &conn,
-            TextImportReq {
-                text: text.to_string(),
-                source: Some("schwab.eml".to_string()),
-                account_id: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(again.counts.duplicate, 1);
     }
 
     #[test]

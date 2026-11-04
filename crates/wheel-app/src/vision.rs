@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use time::Date;
 
 use crate::import;
-use crate::text_import::{self, ExtractedTrade, Extraction};
+use crate::trade_text::{self, ExtractedTrade, Extraction};
 
 /// Maximum decoded image size accepted by the cloud request.
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
@@ -435,7 +435,7 @@ pub(crate) fn to_extraction(
         };
         match normalize_trade(&model_trade, model) {
             Ok(trade) => {
-                let key = text_import::fingerprint(&trade);
+                let key = trade_text::fingerprint(&trade);
                 if seen.contains(&key) {
                     push_warning(
                         &mut warnings,
@@ -460,7 +460,7 @@ pub(crate) fn to_extraction(
         };
         return Err(format!("没有可导入的交易：{detail}"));
     }
-    let csv = text_import::build_csv(&trades);
+    let csv = trade_text::build_csv(&trades);
     Ok(Extraction {
         template: format!("云端视觉（{model}）"),
         trades,
@@ -497,14 +497,14 @@ struct ModelTrade {
 
 fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, String> {
     let date_raw = value_text(&trade.date).ok_or_else(|| "缺少交易日期".to_string())?;
-    let date = text_import::normalize_any_date(&date_raw)
+    let date = trade_text::normalize_any_date(&date_raw)
         .ok_or_else(|| format!("无法识别交易日期 `{date_raw}`"))?;
     validate_date(&date)?;
 
     let kind_raw = value_text(&trade.kind).ok_or_else(|| "缺少交易类型".to_string())?;
     let kind = normalize_kind(&kind_raw)?;
     let symbol_raw = value_text(&trade.symbol).ok_or_else(|| "缺少标的代码".to_string())?;
-    let symbol = text_import::sanitize_symbol(&symbol_raw)
+    let symbol = trade_text::sanitize_symbol(&symbol_raw)
         .ok_or_else(|| format!("标的代码 `{symbol_raw}` 无法识别"))?;
     let qty = value_u32(&trade.qty).ok_or_else(|| "数量必须是正整数".to_string())?;
     if !(1..=1_000_000).contains(&qty) {
@@ -514,7 +514,7 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
     let option_kind = kind.starts_with("option_");
     let expiry = value_text(&trade.expiry)
         .map(|raw| {
-            text_import::normalize_any_date(&raw)
+            trade_text::normalize_any_date(&raw)
                 .ok_or_else(|| format!("无法识别到期日 `{raw}`"))
         })
         .transpose()?;

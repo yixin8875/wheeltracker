@@ -174,17 +174,6 @@ async function setup(page: Page) {
         }
         case 'import_commit': return { imported: (args.req as any).rows.length, eventIds: (args.req as any).rows.map((row: any) => `import-${row.rowNumber}`), accountId: 'main', notePrefix: '导入:粘贴文本', duplicateCount: 1 };
         case 'import_save_mapping': return true;
-        case 'text_import_preview': {
-          const source = String((args.req as any).source ?? '');
-          const template = source.toLowerCase().includes('schwab') ? 'Schwab' : '通用邮件';
-          const row = { rowNumber: 1, line: 1, status: 'ok', messages: [], cells: ['2026-01-02', 'option_open_short', 'AAPL', '1', '2', '1', '2026-02-20', '150', 'P'], raw: 'synthetic email row',
-            event: { date: '2026-01-02', kind: 'option_open_short', symbol: 'AAPL', qty: 1, price: 2, fees: 1, amount: 0, expiry: '2026-02-20', strike: 150, right: 'P', note: `${template} · 第 1 行` }, selectedByDefault: true };
-          return { headers: ['日期', '方向', '代码', '数量', '价格', '费用', '到期日', '行权价', '看涨看跌', '备注'], signature: 'fedcba9876543210', delimiter: 'comma', headerLine: 1,
-            mapping: { fields: { date: 0, kind: 1, symbol: 2, qty: 3, price: 4, fees: 5, expiry: 6, strike: 7, right: 8, note: 9 }, dateFormat: 'yearMonthDay', delimiter: 'comma', hasHeader: true },
-            mappingSource: 'text', rows: [row],
-            counts: { total: 1, ok: 1, warning: 0, duplicate: 0, error: 0, selected: 1 },
-            warnings: [`已从${template}识别 1 笔交易，请核对后导入。`, '第 2 行：未找到成交价，已跳过。'] };
-        }
         case 'get_vision_settings': return { ...state.testVision };
         case 'set_vision_settings': {
           const req = args.req as any;
@@ -492,26 +481,6 @@ test('CSV import wizard maps columns, blocks duplicates and commits selected row
   expect(commit.args.req.origin).toBe('粘贴文本');
   expect(commit.args.req.rows.map((row: any) => row.rowNumber)).toEqual([1, 2, 3]);
   expect(commit.args.req.rows[0].event.kind).toBe('shares_buy');
-});
-
-test('email import skips column mapping and commits through the text pipeline', async ({ page }) => {
-  await setup(page);
-  await page.getByRole('button', { name: '导入', exact: true }).click();
-  await page.getByRole('button', { name: '邮件', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '导入邮件' })).toBeVisible();
-  await page.getByLabel('粘贴邮件正文或 .eml 内容').fill('Trade Date: 2026-01-02\nSOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00\nFees: 1.00');
-  await page.getByRole('button', { name: '解析邮件', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '逐行确认' })).toBeVisible();
-  await expect(page.getByText('已从通用邮件识别 1 笔交易，请核对后导入。')).toBeVisible();
-  await expect(page.getByText('第 2 行：未找到成交价，已跳过。')).toBeVisible();
-  const preview = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'text_import_preview'));
-  expect(preview.args.req.text).toContain('SOLD TO OPEN');
-  expect(preview.args.req.source).toBe('粘贴邮件');
-  await expect(page.getByRole('button', { name: '返回来源' })).toBeVisible();
-  await page.getByRole('button', { name: '确认导入 1 笔' }).click();
-  await expect(page.locator('.alert.success')).toContainText('已导入 1 笔交易');
-  const commit = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'import_commit'));
-  expect(commit.args.req.origin).toBe('邮件导入');
 });
 
 test('AI screenshot import skips text editing and commits through the vision preview', async ({ page }) => {

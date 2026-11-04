@@ -14,6 +14,10 @@
 - `AccountAdminView` 增加 `archivedAt` 与 `eventCount`；设置 → 账户分为可用 / 已归档两组，显示交易数，删除需二次确认
 - 数据库 schema v3：`accounts` 新增可空 `archived_at`，幂等迁移并写 `PRAGMA user_version = 3`
 
+### Removed
+
+- 移除邮件导入：删除「邮件」导入模式、`text_import_preview` 命令与 MIME / 券商文本抽取模块；导入方式保留 CSV 与 AI 截图，AI 截图继续复用共享的固定表头 CSV 预览管线
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

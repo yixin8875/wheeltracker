@@ -1,7 +1,7 @@
 # Wheel Tracker — 美股期权车轮策略成本追踪器
 
 > 详细设计文档 v0.1 · 2026-11-03
-> 技术栈：Tauri 2 + React + TypeScript · 成本口径：双轨展示 · 数据来源：手工 + 截图/邮件导入 · 首版：MVP
+> 技术栈：Tauri 2 + React + TypeScript · 成本口径：双轨展示 · 数据来源：手工 + CSV / 截图导入 · 首版：MVP
 
 ---
 
@@ -22,7 +22,7 @@
 | G3 | 每笔期权收租可追溯：开仓价、平仓成本、净收入、年化 | 收租台账表格 |
 | G4 | 手工录入一笔交易 ≤ 15 秒 | 键盘优先的快速录入表单 |
 | G5 | 数据可完整重算、可导出、可备份 | 事件溯源 + 一键重建 + JSON/SQLite 导出 |
-| G6 | 截图/邮件里的成交信息能半自动进系统 | 云端视觉 / 文本解析 → 人工确认 → 入库 |
+| G6 | 截图里的成交信息能半自动进系统 | 云端视觉识别 → 人工确认 → 入库 |
 
 ### 1.2 非目标（明确不做）
 
@@ -429,7 +429,7 @@ wheel-core/
 ├── premium.rs      // 权利金池、台账生成
 ├── metrics.rs      // A/B/C 成本、年化、汇总
 ├── store.rs        // sqlx 读写与事务
-└── import/         // CSV/AI 截图/邮件解析（也可独立 crate）
+└── import/         // CSV / AI 截图解析（也可独立 crate）
 ```
 
 ### 6.2 不变量（每次重算后断言）
@@ -465,7 +465,7 @@ wheel-core/
 ├─ 持仓       ← 股票持仓 / 期权持仓（含到期倒计时）
 ├─ 收租台账   ← 全量表格 + 筛选 + 汇总
 ├─ 记一笔     ← 快速录入（快捷键 Ctrl+N）
-├─ 导入       ← CSV / AI 截图 / 邮件文本
+├─ 导入       ← CSV / AI 截图
 └─ 设置       ← 账户、成本口径、提醒、备份
 ```
 
@@ -572,7 +572,7 @@ wheel-core/
 │  Rust / Tauri 2                             │
 │  ├── wheel-core（领域引擎，纯逻辑 + 测试）  │
 │  ├── store（sqlx + SQLite）                 │
-│  ├── import（CSV / AI 截图 / 邮件解析）     │
+│  ├── import（CSV / AI 截图解析）            │
 │  ├── notify（到期提醒）                     │
 │  └── backup（自动备份 / 导出）              │
 └─────────────────────────────────────────────┘
@@ -603,7 +603,7 @@ optiontrader/
 │   ├── wheel-core/            # 领域模型 + 引擎 + 存储（可独立测试）
 │   │   ├── src/{model,engine,campaign,premium,metrics,store}.rs
 │   │   └── tests/scenarios/
-│   ├── wheel-import/          # CSV / AI 截图 / 邮件解析
+│   ├── wheel-import/          # CSV / AI 截图解析
 │   └── wheel-app/             # Tauri 二进制
 │       ├── src/{main,commands,store,views,backup,restore,import,market}.rs
 │       └── tauri.conf.json
@@ -636,7 +636,6 @@ preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
 import_preview(req: ImportPreviewReq) -> ImportPreview
 import_commit(req: ImportCommitReq) -> ImportSummary
 import_save_mapping(signature, mapping) -> bool
-text_import_preview(req: TextImportReq) -> ImportPreview   // 邮件文本
 get_vision_settings() -> VisionSettingsView                // 只返回 hasKey / 尾号
 set_vision_settings(req: VisionSettingsReq) -> VisionSettingsView
 vision_import_preview(req: VisionImportReq) -> ImportPreview  // 云端视觉 → 逐行确认
@@ -689,7 +688,7 @@ restore_status() -> RestoreStatus
 
 ### 8.9 P4 拆股与合约乘数
 
-- **乘数**：`OptionContract.multiplier` 默认 100，录入时可填实际每手股数；毛权利金、占用资金、指派预览、年化、到期提醒与仪表盘资金义务均按乘数计算。CSV / 邮件 / 视觉导入新增可选「乘数」列，默认 100。
+- **乘数**：`OptionContract.multiplier` 默认 100，录入时可填实际每手股数；毛权利金、占用资金、指派预览、年化、到期提醒与仪表盘资金义务均按乘数计算。CSV / 视觉导入新增可选「乘数」列，默认 100。
 - **事件**：`EventKind::Split` 无载荷，比例与零股补偿存于 `Event.split: Option<SplitTerms>`；`kind == Split` 当且仅当 `split.is_some()`。拆股事件不得携带合约、数量、价格、费用或金额；分子 / 分母为 1–1,000,000 的整数，`cash_in_lieu` 有限且非负。
 - **重放顺序**：拆股只作用于该标的当前进行中的战役；没有持仓时记录为无害历史事件。先预检全部未平仓合约与持股，任一失败则整笔拆股不入账、状态不变。
 - **期权调整**：行权价 `new = old_strike × denominator ÷ numerator`，四舍五入到 4 位小数；每手股数 `new_multiplier = old_multiplier × numerator ÷ denominator` 必须精确整除且为正整数，否则返回 `NonIntegralOptionAdjustment`。未平仓台账与持仓的合约直接替换，`premium_gross_per_share` / `credit_per_share` 除以比例；`net_premium`、手数与占用资金总额不变。
@@ -748,18 +747,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 - 错误：401/403、404、429、5xx 给出可操作提示，并保留服务端 `error.message`（截断 300 字符，不回显 Key）；未启用、未同意或缺少 Key 时提示前往设置。
 - 已知边界：不同兼容服务的模型名、图片字段和错误格式可能不同；模型可能幻觉或漏行，因此不信任模型输出，必须人工确认。已移除 Windows 内置 OCR：实测数字、小数点与斜杠错误严重，不再保留回退路径。
 
-### 9.3 邮件导入
-
-已实现（本地解析，不联网）：
-
-- 输入：`.eml` / `.txt` 或粘贴正文；`text_import` 解码 MIME `multipart/*`（优先 `text/plain`，否则 HTML）、base64、quoted-printable，并把 HTML 表格转成制表符 / 换行文本。非 UTF-8 字符集给出警告，不猜测编码。
-- 模板识别：Schwab、Fidelity、IBKR、富途、老虎与「通用邮件」；模板只影响备注与提示，字段抽取使用同一组通用规则，便于处理同一券商的不同邮件版式。
-- 字段：交易日期（含 `Trade Date` / `成交日期`、上一行日期、月名日期）、方向（STO / BTC / 到期 / 指派 / 买卖股票 / 分红）、合约（`AAPL 02/20/2026 150 P`、月名格式或 OCC 代码）、数量、价格（`@`、`Price`、`成交价`、`at`）、费用（下一行也可）、分红金额与每股金额。
-- 保守边界：缺少日期 / 数量 / 价格 / 合约的行逐条警告并跳过；做多期权明确拒绝；同封邮件完全重复的记录合并；持仓相关跨行错误仍由提交重放拒绝整批。
-- 输出：固定表头 CSV（`日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,备注`），因此复用 9.4 的映射、去重、逐行预览与单事务提交；备注格式 `导入:<来源> · <模板> · 第 N 行`。
-- 未实现：IMAP 定时拉取、附件 PDF 解析。Phase 3 若加入 IMAP，仍应只读、按发件人过滤，并复用同一抽取器。
-
-### 9.4 CSV 对账单
+### 9.3 CSV 对账单
 
 已实现（通用列映射，不绑定券商）：
 
@@ -780,9 +768,9 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 |---|---|---|---|
 | **P0 内核** ✅ | `wheel-core` 领域模型 + 重放引擎 + 不变量断言 + golden/property 测试 | `cargo test` 全绿（16 项 + 文档测试），`cargo run --example demo` 可重放示例 | 已完成 |
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
-| **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
+| **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图识别（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
+| **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
 | **P5 发布** ✅ | 版本统一 0.3.0、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI | 可分发安装包 | 已完成（不签名、不自动更新） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
