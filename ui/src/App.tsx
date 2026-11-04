@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, Settings, RefreshCw, ArrowLeft, ChevronRight, CircleDollarSign, Activity, Upload, CalendarDays, ChartScatter } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, Settings, RefreshCw, ArrowLeft, ChevronRight, CircleDollarSign, Activity, Upload, CalendarDays, ChartScatter, TrendingUp } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, NewEvent, Position, Price, RestoreStatus } from './types';
+import type { Account, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -14,15 +14,17 @@ import { ExpiryCalendar } from './ExpiryCalendar';
 import { CampaignCompare } from './CampaignCompare';
 import { SettingsData } from './SettingsData';
 import { AccountsPanel } from './Accounts';
+import { MonthlyIncomeReport } from './MonthlyIncome';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'compare' | 'market' | 'settings' | 'detail';
-const navigation = [{ id: 'dashboard', label: '仪表盘', icon: LayoutDashboard }, { id: 'positions', label: '当前持仓', icon: Layers }, { id: 'ledger', label: '收租台账', icon: BookOpen }, { id: 'entry', label: '记一笔', icon: Plus }, { id: 'import', label: '导入', icon: Upload }, { id: 'calendar', label: '到期日历', icon: CalendarDays }, { id: 'compare', label: '战役对比', icon: ChartScatter }, { id: 'market', label: '行情', icon: Activity }, { id: 'settings', label: '设置', icon: Settings }] as const;
+type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'compare' | 'income' | 'market' | 'settings' | 'detail';
+const navigation = [{ id: 'dashboard', label: '仪表盘', icon: LayoutDashboard }, { id: 'positions', label: '当前持仓', icon: Layers }, { id: 'ledger', label: '收租台账', icon: BookOpen }, { id: 'entry', label: '记一笔', icon: Plus }, { id: 'import', label: '导入', icon: Upload }, { id: 'calendar', label: '到期日历', icon: CalendarDays }, { id: 'compare', label: '战役对比', icon: ChartScatter }, { id: 'income', label: '收租月报', icon: TrendingUp }, { id: 'market', label: '行情', icon: Activity }, { id: 'settings', label: '设置', icon: Settings }] as const;
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
   const [data, setData] = useState<Dashboard | null>(null);
   const [ledger, setLedger] = useState<Ledger | null>(null);
+  const [income, setIncome] = useState<MonthlyIncome | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [prices, setPrices] = useState<Price[]>([]);
@@ -47,13 +49,13 @@ export default function App() {
     const current = ++generation.current; setBusy(true); setError('');
     try {
       const scope = { accountId };
-      const [dashboard, book, options, history, quotes, preferences, metadata, restore] = await Promise.all([
-        api<Dashboard>('dashboard', scope), api<Ledger>('ledger', scope), api<Position[]>('positions', scope), api<EventRow[]>('list_events', scope), api<Price[]>('list_prices'), api<AccountingSettings>('get_settings'),
+      const [dashboard, book, options, history, report, quotes, preferences, metadata, restore] = await Promise.all([
+        api<Dashboard>('dashboard', scope), api<Ledger>('ledger', scope), api<Position[]>('positions', scope), api<EventRow[]>('list_events', scope), api<MonthlyIncome>('monthly_income', scope), api<Price[]>('list_prices'), api<AccountingSettings>('get_settings'),
         api<AppInfo>('app_info').then(value => ({ value, error: '' }), failure => ({ value: null, error: String(failure) })),
         api<RestoreStatus>('restore_status').catch(() => null),
       ]);
       if (current !== generation.current) return false;
-      setData(dashboard); setLedger(book); setPositions(options.sort((a, b) => a.expiry.localeCompare(b.expiry))); setEvents(history); setPrices(quotes); setSettings(preferences); setUnavailable(false);
+      setData(dashboard); setLedger(book); setIncome(report); setPositions(options.sort((a, b) => a.expiry.localeCompare(b.expiry))); setEvents(history); setPrices(quotes); setSettings(preferences); setUnavailable(false);
       setRestoreStatus(restore ?? { pending: null, lastResult: null, failed: [] });
       if (metadata.value) setInfo(metadata.value);
       else setError(`账本已更新，但应用信息读取失败：${metadata.error}`);
@@ -61,7 +63,7 @@ export default function App() {
     } catch (failure) {
       if (current === generation.current) {
         detailGeneration.current++;
-        setData(null); setLedger(null); setPositions([]); setEvents([]); setPrices([]); setDetail(null); setUnavailable(true); setError(String(failure));
+        setData(null); setLedger(null); setIncome(null); setPositions([]); setEvents([]); setPrices([]); setDetail(null); setUnavailable(true); setError(String(failure));
       }
       return false;
     } finally { if (current === generation.current) setBusy(false); }
@@ -105,7 +107,7 @@ export default function App() {
   function saved(message: string) { setNotice(message); void reload(); }
   async function settingsSaved(result: AccountingSettings) {
     generation.current++; detailGeneration.current++;
-    setData(null); setLedger(null); setPositions([]); setEvents([]); setPrices([]); setDetail(null); setUnavailable(true); setSettings(result); setNotice('');
+    setData(null); setLedger(null); setIncome(null); setPositions([]); setEvents([]); setPrices([]); setDetail(null); setUnavailable(true); setSettings(result); setNotice('');
     const refreshed = await reload();
     setNotice(refreshed ? '成本设置已保存，历史成本已重新计算。' : '成本设置已保存。账本尚未刷新，请重试读取。');
   }
@@ -147,6 +149,7 @@ export default function App() {
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
     {page === 'compare' && !unavailable && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
+    {page === 'income' && !unavailable && <MonthlyIncomeReport report={income}/>}
     {page === 'positions' && !unavailable && <>
       <section className="panel"><div className="section-heading"><h2>股票持仓</h2></div><div className="table-wrap"><table><thead><tr><th>标的</th><th>股数</th><th>纯股票成本 / 股</th><th>有效成本 / 股</th><th>标的参考价</th><th>操作</th></tr></thead><tbody>{data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => <tr key={campaign.id}><td><button className="text-button" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</button></td><td>{campaign.shares}</td><td>{money(campaign.costA)}</td><td>{money(campaign.costB)}</td><td>{money(campaign.price)}</td><td><button onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</button></td></tr>)}</tbody></table></div>{!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="empty">暂无股票持仓。</p>}</section>
       <section className="panel"><div className="section-heading"><h2>未平仓期权</h2><span className="muted">按到期日排序</span></div><div className="table-wrap"><table><thead><tr><th>合约</th><th>手数</th><th>每股净权利金</th><th>到期日</th><th>剩余天数</th><th>了结合约</th></tr></thead><tbody>{positions.map(position => <tr key={position.contract}><td>{position.contract}</td><td>{position.openQty}</td><td>{money(position.avgCredit)}</td><td>{position.expiry}</td><td><span className={position.daysLeft < 0 ? 'negative' : position.daysLeft <= 7 ? 'warning-text' : ''}>{position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}</span></td><td><div className="toolbar">{['option_close', 'option_expire', 'option_assign'].map(kind => <button key={kind} onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right })}>{labels[kind]}</button>)}</div></td></tr>)}</tbody></table></div>{!positions.length && <p className="empty">暂无未平仓期权。</p>}</section>

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use wheel_core::{DerivedState, Event, OptionContract, Right};
+use wheel_core::{DerivedState, Event, EventKind, OptionContract, Right};
 
 use crate::{backup, restore, store, views, AppState};
 
@@ -337,6 +337,118 @@ pub fn ledger(
         total_net,
         total_collateral,
     })
+}
+
+#[tauri::command]
+pub fn monthly_income(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<views::MonthlyIncomeView, String> {
+    monthly_income_for(&state.conn(), &account_or_default(account_id))
+}
+
+#[derive(Default)]
+struct MonthBucket {
+    premium: f64,
+    dividends: f64,
+    fees: f64,
+    adjustments: f64,
+    closed_entries: u32,
+}
+
+fn month_key(date: time::Date) -> String {
+    format!("{}-{:02}", date.year(), date.month() as u8)
+}
+
+/// Realized income by calendar month. Premium is booked when an option ledger
+/// line closes (net of open and close fees); dividends, fees and cash
+/// adjustments are booked on their event date. Open premium is excluded.
+fn monthly_income_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<views::MonthlyIncomeView, String> {
+    let events = store::list_events(conn, account_id).map_err(|error| error.to_string())?;
+    let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
+    let derived = store::replay_checked(account_id, &events, settings)
+        .map_err(|error| format!("{error:#}"))?;
+
+    let mut buckets: std::collections::BTreeMap<String, MonthBucket> =
+        std::collections::BTreeMap::new();
+    for entry in &derived.premium_entries {
+        let Some(closed_at) = entry.closed_at else {
+            continue;
+        };
+        let bucket = buckets.entry(month_key(closed_at)).or_default();
+        bucket.premium += entry.net_premium;
+        bucket.closed_entries += 1;
+    }
+    for event in &events {
+        match event.kind {
+            EventKind::Dividend => {
+                let amount = derived
+                    .event_dividends
+                    .get(&event.id)
+                    .copied()
+                    .unwrap_or(event.price * event.qty as f64);
+                buckets
+                    .entry(month_key(event.occurred_at))
+                    .or_default()
+                    .dividends += amount;
+            }
+            EventKind::Fee => {
+                buckets
+                    .entry(month_key(event.occurred_at))
+                    .or_default()
+                    .fees += event.amount;
+            }
+            EventKind::Adjustment => {
+                buckets
+                    .entry(month_key(event.occurred_at))
+                    .or_default()
+                    .adjustments += event.amount;
+            }
+            _ => {}
+        }
+    }
+
+    let mut cumulative = 0.0;
+    let months: Vec<views::MonthIncomeView> = buckets
+        .into_iter()
+        .map(|(month, bucket)| {
+            let total = bucket.premium + bucket.dividends - bucket.fees + bucket.adjustments;
+            cumulative += total;
+            views::MonthIncomeView {
+                month,
+                premium: bucket.premium,
+                dividends: bucket.dividends,
+                fees: bucket.fees,
+                adjustments: bucket.adjustments,
+                total,
+                cumulative,
+                closed_entries: bucket.closed_entries,
+            }
+        })
+        .collect();
+
+    let mut total = views::MonthIncomeTotalView {
+        premium: 0.0,
+        dividends: 0.0,
+        fees: 0.0,
+        adjustments: 0.0,
+        total: 0.0,
+        closed_entries: 0,
+        month_count: months.len(),
+    };
+    for month in &months {
+        total.premium += month.premium;
+        total.dividends += month.dividends;
+        total.fees += month.fees;
+        total.adjustments += month.adjustments;
+        total.total += month.total;
+        total.closed_entries += month.closed_entries;
+    }
+
+    Ok(views::MonthlyIncomeView { months, total })
 }
 
 #[derive(Serialize)]
@@ -1105,6 +1217,60 @@ mod tests {
         assert!(valid_account_name(&"x".repeat(41)).is_err());
         assert!(valid_account_name("line\nbreak").is_err());
         assert!(valid_account_name(&"账".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn monthly_income_buckets_realized_income_and_isolates_accounts() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 100, 150.0, 0.0),
+                Event::sell_option("main", "sto", 2, at("2026-01-05"), contract.clone(), 1, 2.0, 1.0),
+                Event::dividend("main", "div", 3, at("2026-01-10"), "AAPL", 1.0, 100),
+                Event::fee("main", "fee", 4, at("2026-01-20"), "AAPL", 5.0),
+                Event::close_option("main", "btc", 5, at("2026-02-20"), contract, 1, 0.5, 1.0),
+                Event::adjustment("main", "adj", 6, at("2026-02-25"), "AAPL", 20.0),
+                Event::buy_shares("other", "other-buy", 1, at("2026-03-01"), "MSFT", 10, 300.0, 0.0),
+                Event::dividend("other", "other-div", 2, at("2026-03-10"), "MSFT", 2.0, 10),
+            ],
+        )
+        .unwrap();
+
+        let report = monthly_income_for(&conn, "main").unwrap();
+        assert_eq!(
+            report.months.iter().map(|month| month.month.as_str()).collect::<Vec<_>>(),
+            vec!["2026-01", "2026-02"]
+        );
+        let january = &report.months[0];
+        assert_eq!(january.premium, 0.0);
+        assert_eq!(january.dividends, 100.0);
+        assert_eq!(january.fees, 5.0);
+        assert_eq!(january.adjustments, 0.0);
+        assert_eq!(january.total, 95.0);
+        assert_eq!(january.cumulative, 95.0);
+        assert_eq!(january.closed_entries, 0);
+        let february = &report.months[1];
+        assert_eq!(february.premium, 148.0);
+        assert_eq!(february.adjustments, 20.0);
+        assert_eq!(february.total, 168.0);
+        assert_eq!(february.cumulative, 263.0);
+        assert_eq!(february.closed_entries, 1);
+        assert_eq!(report.total.total, 263.0);
+        assert_eq!(report.total.closed_entries, 1);
+        assert_eq!(report.total.month_count, 2);
+
+        let other = monthly_income_for(&conn, "other").unwrap();
+        assert_eq!(other.months.len(), 1);
+        assert_eq!(other.months[0].month, "2026-03");
+        assert_eq!(other.months[0].dividends, 20.0);
+
+        let wire = serde_json::to_value(&report).unwrap();
+        assert_eq!(wire["months"][1]["closedEntries"], 1);
+        assert_eq!(wire["months"][1]["cumulative"], 263.0);
+        assert_eq!(wire["total"]["monthCount"], 2);
     }
 
     #[test]

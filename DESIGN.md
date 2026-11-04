@@ -625,6 +625,7 @@ add_event(req: NewEventReq) -> EventId
 delete_event(event_id) -> ()          // 软删除 + 重建
 rebuild_all(account_id) -> RebuildReport
 list_ledger(filter: LedgerFilter) -> LedgerPage
+monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按 UTC 月份
 list_positions(account_id) -> PositionsView
 preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
 import_csv(path, mapping) -> ImportPreview
@@ -656,6 +657,13 @@ restore_status() -> RestoreStatus
 - **选择**：当前账户存于前端 `localStorage`（`wheel.account`）；读取 `list_accounts` 后若该 ID 不存在则回退到最早创建的账户。切换账户会清除战役详情并刷新仪表盘、持仓、台账与事件。
 - **隔离范围**：仪表盘、持仓、台账、事件日志、战役详情、录入与 CSV 导入均传 `accountId`；行情报价、成本口径、备份与恢复为全局资源。
 - **管理**：设置 → 账户显示币种与建立日期，支持新建与重命名；名称去首尾空白、1–40 字符、不含控制字符、不区分大小写唯一，最多 50 个账户。暂存恢复期间拒绝新建与重命名。
+
+### 8.7 P4 收租月报
+
+- **口径**：只统计已落袋收入。净收租按 `PremiumEntry.status != open` 的行在 `closed_at` 所在月入账，金额为 `net_premium`（已扣开仓与平仓费用）；分红按 `Dividend` 事件日入账，金额取 `DerivedState.event_dividends`（事件未填数量时由引擎按当时持股解析）；独立费用按 `Fee` 事件日、现金调整按 `Adjustment` 事件日入账。未平仓权利金与股票浮盈亏不计入。
+- **月合计**：`净收租 + 分红 − 独立费用 + 现金调整`；`BTreeMap<YYYY-MM>` 保证月份升序，逐月累加得到累计。
+- **前端**：柱形为月度合计、折线为所选年份区间累计；年份筛选后重新计算区间合计与累计；表尾显示区间合计；CSV 导出当前筛选结果，含合计行。
+- **边界**：只返回有活动的月份，不补零；没有已了结期权时只显示分红 / 费用 / 调整月份。
 
 ---
 
@@ -714,7 +722,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
 | **P2 导入** 🟡 | CSV 映射向导 + 去重（已完成）；截图 OCR + 邮件文本解析（未做） | 历史数据可批量补录 | CSV 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户（已完成）+ SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
+| **P4 扩展** 🟡 | 多账户、收租月报（已完成）+ SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

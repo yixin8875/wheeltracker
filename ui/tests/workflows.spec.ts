@@ -33,6 +33,14 @@ async function setup(page: Page) {
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
         case 'positions': return [position];
         case 'list_events': return [{ id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null }];
+        case 'monthly_income': return state.testMonthly ?? {
+          months: [
+            { month: '2025-12', premium: 50, dividends: 0, fees: 0, adjustments: 0, total: 50, cumulative: 50, closedEntries: 1 },
+            { month: '2026-01', premium: 0, dividends: 100, fees: 5, adjustments: 0, total: 95, cumulative: 145, closedEntries: 0 },
+            { month: '2026-02', premium: 148, dividends: 0, fees: 0, adjustments: 20, total: 168, cumulative: 313, closedEntries: 1 },
+          ],
+          total: { premium: 198, dividends: 100, fees: 5, adjustments: 20, total: 313, closedEntries: 2, monthCount: 3 },
+        };
         case 'list_prices': return state.testPrices ?? [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }];
         case 'search_symbols':
           if (state.testRejectSearch) throw new Error('search offline');
@@ -559,6 +567,25 @@ test('creating and switching an account scopes reads and new entries', async ({ 
   await page.getByLabel('切换账户').selectOption('main');
   await expect(page.locator('header')).toContainText('默认账户');
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1).args.accountId)).toBe('main');
+});
+
+test('monthly income report accumulates rent by month and filters by year', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '收租月报', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '收租月报', level: 1 })).toBeVisible();
+  await expect(page.locator('.income-summary')).toContainText('$313.00');
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  const latest = page.locator('tbody tr').first();
+  await expect(latest).toContainText('2026-02');
+  await expect(latest).toContainText('$168.00');
+  await expect(latest).toContainText('$313.00');
+  await expect(page.locator('tfoot')).toContainText('$198.00');
+  await page.getByLabel('选择年份').selectOption('2026');
+  await expect(page.locator('tbody tr')).toHaveCount(2);
+  await expect(page.locator('.income-summary')).toContainText('$263.00');
+  await expect(page.locator('tfoot')).toContainText('$263.00');
+  await expect(page.locator('tbody tr').filter({ hasText: '2025-12' })).toHaveCount(0);
+  await expect(page.getByRole('img', { name: /收租月报图/ })).toBeVisible();
 });
 
 test('renaming the current account updates the switcher and header', async ({ page }) => {

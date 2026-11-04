@@ -167,6 +167,39 @@ pub struct LedgerView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MonthlyIncomeView {
+    pub months: Vec<MonthIncomeView>,
+    pub total: MonthIncomeTotalView,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthIncomeView {
+    /// `YYYY-MM`, ordered ascending and including only months with activity.
+    pub month: String,
+    pub premium: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub adjustments: f64,
+    pub total: f64,
+    pub cumulative: f64,
+    pub closed_entries: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthIncomeTotalView {
+    pub premium: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub adjustments: f64,
+    pub total: f64,
+    pub closed_entries: u32,
+    pub month_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PriceView {
     pub symbol: String,
     pub date: String,

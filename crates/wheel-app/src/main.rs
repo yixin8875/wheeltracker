@@ -85,6 +85,7 @@ fn main() {
             commands::dashboard,
             commands::campaign_detail,
             commands::ledger,
+            commands::monthly_income,
             commands::positions,
             commands::list_events,
             commands::add_events,

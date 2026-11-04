@@ -7,6 +7,8 @@
 
 ### Added
 
+- 收租月报：按 UTC 月份统计已落袋净收租、分红、独立费用与现金调整，柱形月度合计叠加区间累计折线，支持年份筛选与 CSV 导出
+- `monthly_income(accountId)` 命令按账户聚合月度收入；`DerivedState` 新增 `event_dividends`，记录分红事件按当时持股解析出的金额，便于报表与引擎口径一致
 - 多账户 UI：侧栏「切换账户」与设置 → 账户页，支持新建（最多 50 个、名称唯一）与重命名；仪表盘、持仓、台账、事件、战役详情、录入与 CSV 导入均按账户隔离，当前账户保存在本地，行情与成本口径保持全局
 - `list_accounts` / `create_account` / `rename_account` 命令；`campaign_detail` 接受 `accountId`；`app_info` 不再返回账户 ID
 - 到期提醒：可配置提前天数（0–60，默认 7），侧栏数量徽标、仪表盘提醒卡与 UTC 到期日历；仅应用内提醒

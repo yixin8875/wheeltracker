@@ -28,6 +28,9 @@ export interface CallScenario {
 }
 export interface Detail { campaign: Campaign; entries: Entry[]; positions: Position[]; lots: Lot[]; events: EventRow[]; callScenarios: CallScenario[] }
 export interface Ledger { entries: Entry[]; totalNet: number; totalCollateral: number; count: number }
+export interface MonthIncome { month: string; premium: number; dividends: number; fees: number; adjustments: number; total: number; cumulative: number; closedEntries: number }
+export interface MonthIncomeTotal { premium: number; dividends: number; fees: number; adjustments: number; total: number; closedEntries: number; monthCount: number }
+export interface MonthlyIncome { months: MonthIncome[]; total: MonthIncomeTotal }
 export interface Price { symbol: string; date: string; close: number; source: string; quotedAt: string | null }
 export interface SymbolMatch { symbol: string; name: string; exchange: string }
 export interface MarketQuote { symbol: string; name: string; price: number; previousClose: number | null; changePercent: number | null; quotedAt: string; source: string; currency: string }

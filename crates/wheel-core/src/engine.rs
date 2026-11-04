@@ -111,6 +111,11 @@ pub struct DerivedState {
     pub premium_entries: Vec<PremiumEntry>,
     /// Campaign actually affected by each successfully replayed event.
     pub event_campaigns: HashMap<EventId, String>,
+    /// Dividend amount realized by each dividend event. The event only stores a
+    /// per-share rate; when quantity is omitted the engine resolves it against
+    /// the holding at that point, so reports must use this amount rather than
+    /// re-multiplying the rate.
+    pub event_dividends: HashMap<EventId, f64>,
 }
 
 impl DerivedState {
@@ -289,6 +294,7 @@ struct Builder {
     next_campaign_id: u32,
     seen_ids: HashSet<String>,
     event_campaigns: HashMap<EventId, String>,
+    event_dividends: HashMap<EventId, f64>,
 }
 
 impl Builder {
@@ -304,6 +310,7 @@ impl Builder {
             next_campaign_id: 0,
             seen_ids: HashSet::new(),
             event_campaigns: HashMap::new(),
+            event_dividends: HashMap::new(),
         }
     }
 
@@ -631,6 +638,7 @@ impl Builder {
         let amount = event.price * shares as f64;
         self.campaigns[campaign_idx].dividends += amount;
         self.campaigns[campaign_idx].cash_flow += amount;
+        self.event_dividends.insert(event.id.clone(), amount);
         self.record_cost_point(campaign_idx, event.occurred_at);
         Ok(())
     }
@@ -934,6 +942,7 @@ impl Builder {
             lots: self.lots,
             premium_entries: self.entries,
             event_campaigns: self.event_campaigns,
+            event_dividends: self.event_dividends,
         }
     }
 }
@@ -972,5 +981,18 @@ mod tests {
         assert!(!state.campaign("main#c0").unwrap().is_active());
         assert!(state.campaign("main#c1").unwrap().is_active());
         assert!(state.check_invariants().is_empty());
+    }
+
+    #[test]
+    fn dividend_report_amount_uses_the_holding_when_quantity_is_omitted() {
+        let at = date!(2026 - 01 - 02);
+        let events = vec![
+            Event::buy_shares("main", "buy", 1, at, "AAPL", 100, 100.0, 0.0),
+            Event::dividend("main", "div-known", 2, at, "AAPL", 1.0, 100),
+            Event::dividend("main", "div-fallback", 3, at, "AAPL", 0.5, 0),
+        ];
+        let state = replay("main", &events, Settings::default()).unwrap();
+        assert_eq!(state.event_dividends["div-known"], 100.0);
+        assert_eq!(state.event_dividends["div-fallback"], 50.0);
     }
 }
