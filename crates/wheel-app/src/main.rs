@@ -2,6 +2,7 @@
 
 mod backup;
 mod commands;
+mod crypto;
 mod import;
 mod market;
 mod restore;
@@ -98,6 +99,7 @@ fn main() {
             commands::refresh_quotes,
             commands::rebuild,
             commands::backup_now,
+            commands::export_json,
             commands::app_info,
             commands::list_accounts,
             commands::create_account,

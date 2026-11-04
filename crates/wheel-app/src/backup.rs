@@ -1,6 +1,7 @@
 //! SQLite snapshots: manual backups, daily automatic backups and the safety
-//! copy taken before a restore. All snapshots are plain SQLite files created by
-//! `VACUUM INTO`, so users can open them with any SQLite tool.
+//! copy taken before a restore. Snapshots are created by `VACUUM INTO`; manual
+//! backups can optionally be wrapped in password encryption (`.sqlite.enc`),
+//! while automatic and safety snapshots stay plain SQLite.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -12,7 +13,7 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use time::OffsetDateTime;
 
-use crate::{restore, store};
+use crate::{crypto, restore, store};
 
 pub const BACKUP_DIR: &str = "backups";
 const MANUAL_PREFIX: &str = "wheel-";
@@ -40,6 +41,9 @@ pub struct BackupEntry {
     pub kind: String,
     pub size_bytes: u64,
     pub modified_at: Option<String>,
+    /// Password-protected snapshots use a `.sqlite.enc` suffix and cannot be
+    /// validated or restored without the password.
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -63,10 +67,14 @@ pub fn dir_for(db_path: &Path) -> Result<PathBuf> {
 
 /// Only plain file names inside the backup directory are accepted, so a
 /// restore request can never escape it with separators or `..`.
+pub fn is_encrypted_file_name(file_name: &str) -> bool {
+    file_name.ends_with(".sqlite.enc")
+}
+
 pub fn is_safe_file_name(file_name: &str) -> bool {
     !file_name.is_empty()
         && file_name.len() <= 200
-        && file_name.ends_with(".sqlite")
+        && (file_name.ends_with(".sqlite") || is_encrypted_file_name(file_name))
         && !file_name.contains('/')
         && !file_name.contains('\\')
         && !file_name.contains("..")
@@ -110,7 +118,7 @@ pub fn list(directory: &Path) -> Result<Vec<BackupEntry>> {
             continue;
         }
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if !file_name.ends_with(".sqlite") || !is_safe_file_name(&file_name) {
+        if !is_safe_file_name(&file_name) {
             continue;
         }
         let metadata = entry.metadata()?;
@@ -118,6 +126,7 @@ pub fn list(directory: &Path) -> Result<Vec<BackupEntry>> {
             kind: kind_for(&file_name).to_string(),
             modified_at: metadata.modified().ok().map(snapshot_timestamp),
             size_bytes: metadata.len(),
+            encrypted: is_encrypted_file_name(&file_name),
             file_name,
         });
     }
@@ -145,7 +154,88 @@ pub fn create(conn: &Connection, directory: &Path, prefix: &str, stamp: i128) ->
     Ok(path)
 }
 
+/// Create a portable encrypted snapshot. The intermediate plaintext SQLite
+/// file is written next to the result and removed whatever happens; only the
+/// `.sqlite.enc` file remains, so a failed encryption never leaves readable
+/// data behind.
+pub fn create_encrypted(
+    conn: &Connection,
+    directory: &Path,
+    prefix: &str,
+    stamp: i128,
+    password: &str,
+) -> Result<PathBuf> {
+    if prefix != MANUAL_PREFIX {
+        bail!("只有手动备份支持密码加密");
+    }
+    crypto::validate_password(password)?;
+    std::fs::create_dir_all(directory)
+        .with_context(|| format!("cannot create backup directory {}", directory.display()))?;
+    static NEXT_BACKUP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let suffix = NEXT_BACKUP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = format!("{prefix}{stamp}-{suffix}");
+    let plain_path = directory.join(format!("{stem}.sqlite"));
+    let encrypted_path = directory.join(format!("{stem}.sqlite.enc"));
+    store::backup_to(conn, &plain_path)?;
+
+    let result = (|| -> Result<PathBuf> {
+        let plaintext = std::fs::read(&plain_path)
+            .with_context(|| format!("cannot read snapshot {}", plain_path.display()))?;
+        let encrypted = crypto::encrypt(&plaintext, password)?;
+        let temporary = directory.join(format!(".{stem}.sqlite.enc.tmp"));
+        std::fs::write(&temporary, &encrypted)
+            .with_context(|| format!("cannot write {}", temporary.display()))?;
+        std::fs::rename(&temporary, &encrypted_path)
+            .with_context(|| format!("cannot finalize {}", encrypted_path.display()))?;
+        Ok(encrypted_path)
+    })();
+    if let Err(error) = std::fs::remove_file(&plain_path) {
+        eprintln!(
+            "cannot remove plaintext snapshot {}: {error}",
+            plain_path.display()
+        );
+    }
+    result
+}
+
+/// Copy a snapshot to `target`, decrypting password-protected files. The
+/// caller owns `target` and is responsible for removing it.
+pub fn materialize(
+    directory: &Path,
+    file_name: &str,
+    password: Option<&str>,
+    target: &Path,
+) -> Result<()> {
+    if !is_safe_file_name(file_name) {
+        bail!("无效的备份文件名");
+    }
+    let source = directory.join(file_name);
+    if !source.is_file() {
+        bail!("备份文件不存在");
+    }
+    if is_encrypted_file_name(file_name) {
+        let password = password.ok_or_else(|| anyhow::anyhow!("加密备份需要密码"))?;
+        let blob = std::fs::read(&source)
+            .with_context(|| format!("cannot read backup {}", source.display()))?;
+        let plaintext = crypto::decrypt(&blob, password)?;
+        std::fs::write(target, plaintext)
+            .with_context(|| format!("cannot write {}", target.display()))?;
+    } else {
+        std::fs::copy(&source, target)
+            .with_context(|| format!("cannot copy backup {}", source.display()))?;
+    }
+    Ok(())
+}
+
 pub fn validate(directory: &Path, file_name: &str) -> Result<BackupValidation> {
+    validate_with_password(directory, file_name, None)
+}
+
+pub fn validate_with_password(
+    directory: &Path,
+    file_name: &str,
+    password: Option<&str>,
+) -> Result<BackupValidation> {
     if !is_safe_file_name(file_name) {
         bail!("无效的备份文件名");
     }
@@ -153,7 +243,27 @@ pub fn validate(directory: &Path, file_name: &str) -> Result<BackupValidation> {
     if !path.is_file() {
         bail!("备份文件不存在");
     }
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    if is_encrypted_file_name(file_name) {
+        let password = password.ok_or_else(|| anyhow::anyhow!("加密备份需要密码"))?;
+        let blob = std::fs::read(&path)
+            .with_context(|| format!("cannot read backup {}", path.display()))?;
+        let plaintext = crypto::decrypt(&blob, password)?;
+        let temporary = directory.join(format!(
+            "validate-{}-{}.tmp",
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::write(&temporary, plaintext)
+            .with_context(|| format!("cannot write {}", temporary.display()))?;
+        let result = validate_sqlite(&temporary, file_name);
+        let _ = std::fs::remove_file(&temporary);
+        return result;
+    }
+    validate_sqlite(&path, file_name)
+}
+
+fn validate_sqlite(path: &Path, file_name: &str) -> Result<BackupValidation> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("cannot open backup {}", path.display()))?;
     let mut issues = Vec::new();
     let integrity: String = match conn.query_row("PRAGMA integrity_check", [], |row| row.get(0)) {
@@ -298,24 +408,31 @@ mod tests {
     }
 
     #[test]
-    fn list_classifies_only_plain_sqlite_files() {
+    fn list_classifies_plain_and_encrypted_snapshots() {
         let directory = temp_dir("list");
         std::fs::write(directory.join("wheel-1.sqlite"), b"x").unwrap();
         std::fs::write(directory.join("auto-2.sqlite"), b"x").unwrap();
         std::fs::write(directory.join("pre-restore-3.sqlite"), b"x").unwrap();
         std::fs::write(directory.join("other.sqlite"), b"x").unwrap();
+        std::fs::write(directory.join("wheel-4.sqlite.enc"), b"x").unwrap();
         std::fs::write(directory.join("notes.txt"), b"x").unwrap();
         std::fs::create_dir(directory.join("folder.sqlite")).unwrap();
         let listed = list(&directory).unwrap();
         let kinds: Vec<(String, String)> = listed
-            .into_iter()
-            .map(|entry| (entry.file_name, entry.kind))
+            .iter()
+            .map(|entry| (entry.file_name.clone(), entry.kind.clone()))
             .collect();
-        assert_eq!(kinds.len(), 4);
+        assert_eq!(kinds.len(), 5);
         assert!(kinds.contains(&("wheel-1.sqlite".into(), "manual".into())));
         assert!(kinds.contains(&("auto-2.sqlite".into(), "auto".into())));
         assert!(kinds.contains(&("pre-restore-3.sqlite".into(), "safety".into())));
         assert!(kinds.contains(&("other.sqlite".into(), "unknown".into())));
+        let encrypted = listed
+            .iter()
+            .find(|entry| entry.file_name == "wheel-4.sqlite.enc")
+            .unwrap();
+        assert_eq!(encrypted.kind, "manual");
+        assert!(encrypted.encrypted);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -395,6 +512,62 @@ mod tests {
         let validation = validate(&backups, "wheel-empty.sqlite").unwrap();
         assert!(!validation.valid);
         assert!(validation.issues.iter().any(|issue| issue.contains("settings")));
+        drop(conn);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn encrypted_snapshot_round_trips_and_requires_its_password() {
+        let directory = temp_dir("encrypted");
+        let conn = conn_at(&directory);
+        store::insert_event(
+            &conn,
+            &wheel_core::Event::buy_shares(
+                "main",
+                "buy",
+                1,
+                store::parse_date("2026-01-02").unwrap(),
+                "AAPL",
+                100,
+                150.0,
+                0.0,
+            ),
+        )
+        .unwrap();
+        let backups = dir_for(&directory.join("wheel.db")).unwrap();
+        let path = create_encrypted(&conn, &backups, MANUAL_PREFIX, 50, "correct horse").unwrap();
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(file_name.ends_with(".sqlite.enc"));
+        let plaintext_left = std::fs::read_dir(&backups)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".sqlite")
+            })
+            .count();
+        assert_eq!(plaintext_left, 0, "plaintext snapshot must be removed");
+        let listed = list(&backups).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].encrypted);
+        assert_eq!(listed[0].kind, "manual");
+
+        assert!(validate(&backups, &file_name).is_err());
+        assert!(validate_with_password(&backups, &file_name, Some("wrong password")).is_err());
+        let validation =
+            validate_with_password(&backups, &file_name, Some("correct horse")).unwrap();
+        assert!(validation.valid);
+        assert_eq!(validation.events, 1);
+
+        let staged = directory.join("staged.sqlite");
+        materialize(&backups, &file_name, Some("correct horse"), &staged).unwrap();
+        assert!(validate(&directory, "staged.sqlite").unwrap().valid);
+        assert!(materialize(&backups, &file_name, None, &staged).is_err());
+        assert!(create_encrypted(&conn, &backups, AUTO_PREFIX, 51, "correct horse").is_err());
+        assert!(create_encrypted(&conn, &backups, MANUAL_PREFIX, 52, "short").is_err());
+
         drop(conn);
         std::fs::remove_dir_all(directory).unwrap();
     }

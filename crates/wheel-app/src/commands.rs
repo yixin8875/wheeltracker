@@ -819,12 +819,20 @@ pub fn rebuild(
 }
 
 #[tauri::command]
-pub fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
+pub fn backup_now(
+    state: State<'_, AppState>,
+    password: Option<String>,
+) -> Result<String, String> {
     let directory = backups_dir(&state);
     let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
     let conn = state.conn();
-    let path = backup::create(&conn, &directory, "wheel-", stamp)
-        .map_err(|error| format!("{error:#}"))?;
+    let path = match password.filter(|value| !value.is_empty()) {
+        Some(password) => {
+            backup::create_encrypted(&conn, &directory, "wheel-", stamp, &password)
+        }
+        None => backup::create(&conn, &directory, "wheel-", stamp),
+    }
+    .map_err(|error| format!("{error:#}"))?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -837,19 +845,144 @@ pub fn list_backups(state: State<'_, AppState>) -> Result<Vec<backup::BackupEntr
 pub fn validate_backup(
     state: State<'_, AppState>,
     file_name: String,
+    password: Option<String>,
 ) -> Result<backup::BackupValidation, String> {
-    backup::validate(&backups_dir(&state), &file_name).map_err(|error| format!("{error:#}"))
+    backup::validate_with_password(
+        &backups_dir(&state),
+        &file_name,
+        password.as_deref().filter(|value| !value.is_empty()),
+    )
+    .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
 pub fn stage_restore(
     state: State<'_, AppState>,
     file_name: String,
+    password: Option<String>,
 ) -> Result<restore::PendingRestore, String> {
     let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
     let conn = state.conn();
-    restore::stage(&conn, &data_dir(&state), &file_name, stamp)
-        .map_err(|error| format!("{error:#}"))
+    restore::stage_with_password(
+        &conn,
+        &data_dir(&state),
+        &file_name,
+        stamp,
+        password.as_deref().filter(|value| !value.is_empty()),
+    )
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportEvent {
+    account_id: String,
+    id: String,
+    seq: u64,
+    /// `YYYY-MM-DD`, same UTC date口径 as the SQLite rows.
+    occurred_at: String,
+    kind: String,
+    symbol: String,
+    expiry: Option<String>,
+    strike: Option<f64>,
+    right: Option<&'static str>,
+    multiplier: Option<u32>,
+    qty: u32,
+    price: f64,
+    fees: f64,
+    amount: f64,
+    note: String,
+}
+
+impl ExportEvent {
+    fn from_event(event: Event) -> Self {
+        let contract = event.contract;
+        Self {
+            account_id: event.account_id,
+            id: event.id,
+            seq: event.seq,
+            occurred_at: store::format_date(event.occurred_at),
+            kind: store::kind_to_str(event.kind).to_string(),
+            symbol: event.symbol,
+            expiry: contract
+                .as_ref()
+                .map(|contract| store::format_date(contract.expiry)),
+            strike: contract.as_ref().map(|contract| contract.strike),
+            right: contract.as_ref().map(|contract| match contract.right {
+                Right::Put => "put",
+                Right::Call => "call",
+            }),
+            multiplier: contract.as_ref().map(|contract| contract.multiplier),
+            qty: event.qty,
+            price: event.price,
+            fees: event.fees,
+            amount: event.amount,
+            note: event.note,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LedgerExport<'a> {
+    format: &'a str,
+    version: u32,
+    app_version: &'a str,
+    exported_at: String,
+    accounts: Vec<AccountView>,
+    settings: SettingsView,
+    events: Vec<ExportEvent>,
+    prices: Vec<views::PriceView>,
+}
+
+fn export_json_for(conn: &rusqlite::Connection) -> Result<String, String> {
+    let accounts = store::list_accounts(conn).map_err(|error| error.to_string())?;
+    // The accounts table is authoritative, but include any event-only account
+    // ids as well so an export never silently drops rows.
+    let mut account_ids: BTreeSet<String> = accounts.iter().map(|account| account.id.clone()).collect();
+    {
+        let mut statement = conn
+            .prepare("SELECT DISTINCT account_id FROM events WHERE deleted_at IS NULL")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            account_ids.insert(row.map_err(|error| error.to_string())?);
+        }
+    }
+    let mut events = Vec::new();
+    for account_id in &account_ids {
+        for event in store::list_events(conn, account_id).map_err(|error| error.to_string())? {
+            events.push(ExportEvent::from_event(event));
+        }
+    }
+    events.sort_by(|left, right| {
+        left.occurred_at
+            .cmp(&right.occurred_at)
+            .then_with(|| left.account_id.cmp(&right.account_id))
+            .then_with(|| left.seq.cmp(&right.seq))
+    });
+    let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
+    let document = LedgerExport {
+        format: "wheel-export",
+        version: 1,
+        app_version: env!("CARGO_PKG_VERSION"),
+        exported_at: time::OffsetDateTime::now_utc().to_string(),
+        accounts: accounts.into_iter().map(AccountView::from).collect(),
+        settings: settings_view(conn, settings)?,
+        events,
+        prices: store::list_prices(conn).map_err(|error| error.to_string())?,
+    };
+    serde_json::to_string_pretty(&document).map_err(|error| error.to_string())
+}
+
+/// A portable, human-readable copy of every account's event log plus prices
+/// and settings. Unlike a SQLite snapshot it is not a restorable backup.
+#[tauri::command]
+pub fn export_json(state: State<'_, AppState>) -> Result<String, String> {
+    let conn = state.conn();
+    export_json_for(&conn)
 }
 
 #[tauri::command]
@@ -1271,6 +1404,52 @@ mod tests {
         assert_eq!(wire["months"][1]["closedEntries"], 1);
         assert_eq!(wire["months"][1]["cumulative"], 263.0);
         assert_eq!(wire["total"]["monthCount"], 2);
+    }
+
+    #[test]
+    fn json_export_contains_every_account_event_prices_and_settings() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "Test").unwrap();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::sell_option("main", "sto", 1, at("2026-01-05"), contract, 1, 2.0, 1.0),
+                Event::buy_shares(
+                    "other",
+                    "orphan-buy",
+                    1,
+                    at("2026-01-10"),
+                    "MSFT",
+                    10,
+                    300.0,
+                    0.0,
+                ),
+            ],
+        )
+        .unwrap();
+        store::upsert_price(&conn, "AAPL", at("2026-01-02"), 150.0).unwrap();
+
+        let document: serde_json::Value =
+            serde_json::from_str(&export_json_for(&conn).unwrap()).unwrap();
+        assert_eq!(document["format"], "wheel-export");
+        assert_eq!(document["version"], 1);
+        assert_eq!(document["accounts"].as_array().unwrap().len(), 1);
+        let events = document["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["accountId"], "main");
+        assert_eq!(events[0]["occurredAt"], "2026-01-05");
+        assert_eq!(events[0]["kind"], "option_open_short");
+        assert_eq!(events[0]["expiry"], "2026-02-20");
+        assert_eq!(events[0]["right"], "put");
+        assert_eq!(events[0]["strike"], 150.0);
+        assert_eq!(events[1]["accountId"], "other");
+        assert_eq!(events[1]["kind"], "shares_buy");
+        assert_eq!(events[1]["qty"], 10);
+        assert_eq!(document["prices"][0]["symbol"], "AAPL");
+        assert!(document["settings"]["includeDividendsInCost"].is_boolean());
+        assert!(document["settings"]["autoBackupKeep"].is_number());
     }
 
     #[test]

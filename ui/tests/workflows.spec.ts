@@ -89,15 +89,17 @@ async function setup(page: Page) {
           return { ...preferences };
         case 'restore_status': return { pending: state.testPending ?? null, lastResult: state.testLastResult ?? null, failed: [] };
         case 'list_backups': return state.testBackups ?? [
-          { fileName: 'wheel-1767225600000000000-0.sqlite', kind: 'manual', sizeBytes: 40960, modifiedAt: '2026-01-02 08:00:00' },
-          { fileName: 'auto-1767225600000000000-1.sqlite', kind: 'auto', sizeBytes: 30720, modifiedAt: '2026-01-02 09:00:00' },
-          { fileName: 'pre-restore-1767225600000000000-2.sqlite', kind: 'safety', sizeBytes: 20480, modifiedAt: '2026-01-02 10:00:00' },
+          { fileName: 'wheel-1767225600000000000-0.sqlite', kind: 'manual', sizeBytes: 40960, modifiedAt: '2026-01-02 08:00:00', encrypted: false },
+          { fileName: 'auto-1767225600000000000-1.sqlite', kind: 'auto', sizeBytes: 30720, modifiedAt: '2026-01-02 09:00:00', encrypted: false },
+          { fileName: 'pre-restore-1767225600000000000-2.sqlite', kind: 'safety', sizeBytes: 20480, modifiedAt: '2026-01-02 10:00:00', encrypted: false },
+          { fileName: 'wheel-1767225600000000000-3.sqlite.enc', kind: 'manual', sizeBytes: 20480, modifiedAt: '2026-01-02 11:00:00', encrypted: true },
         ];
         case 'validate_backup':
           if (state.testInvalidBackup) return { fileName: args.fileName, valid: false, integrity: 'not ok: synthetic corruption', events: 0, accounts: 0, prices: 0, issues: ['完整性检查失败'] };
+          if (String(args.fileName).endsWith('.enc') && args.password !== 'correct horse') throw new Error('密码错误或备份文件已损坏');
           return { fileName: args.fileName, valid: true, integrity: 'ok', events: 3, accounts: 1, prices: 5, issues: [] };
         case 'stage_restore':
-          state.testPending = { version: 1, backupFile: String(args.fileName), safetyFile: 'pre-restore-1767225600000000000-2.sqlite', requestedAt: '2026-01-02 10:05:00' };
+          state.testPending = { version: String(args.fileName).endsWith('.enc') ? 2 : 1, backupFile: String(args.fileName), safetyFile: 'pre-restore-1767225600000000000-2.sqlite', requestedAt: '2026-01-02 10:05:00', stagedFile: String(args.fileName).endsWith('.enc') ? 'staged-1.sqlite' : null };
           return state.testPending;
         case 'campaign_detail': return {
           campaign: { ...currentCampaign(), shares: state.testPartial ? 200 : 100 }, entries: [entry], positions: [position, callPosition], lots: [], events: history,
@@ -107,7 +109,8 @@ async function setup(page: Page) {
         };
         case 'add_event': if (state.testReject) throw new Error('insufficient shares'); return 'saved';
         case 'add_events': return ['close', 'open'];
-        case 'backup_now': return 'test-only/backups/snapshot.sqlite';
+        case 'backup_now': return args.password ? 'test-only/backups/snapshot.sqlite.enc' : 'test-only/backups/snapshot.sqlite';
+        case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.2.0', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
         case 'rebuild': return { events: 1, campaigns: 1, entries: 1, issues: [] };
         case 'import_preview': {
           const mapping = (args.req as any).mapping ?? { fields: { date: 0, action: 1, symbol: 2, qty: 3, price: 4 }, dateFormat: 'auto', delimiter: 'comma', hasHeader: true };
@@ -503,10 +506,11 @@ test('backup list validates, rejects corruption, and stages a restore for restar
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '备份与维护', exact: true }).click();
   const list = page.locator('.backup-list');
-  await expect(list.locator('.backup-row')).toHaveCount(3);
+  await expect(list.locator('.backup-row')).toHaveCount(4);
   await expect(list).toContainText('手动备份');
   await expect(list).toContainText('自动备份');
   await expect(list).toContainText('恢复前安全快照');
+  await expect(list).toContainText('已加密');
   await expect(list).toContainText('2026-01-02 08:00:00 UTC');
 
   await page.evaluate(() => { (window as any).testInvalidBackup = true; });
@@ -523,6 +527,59 @@ test('backup list validates, rejects corruption, and stages a restore for restar
   await page.getByRole('button', { name: '确认恢复并重启' }).click();
   await expect(page.locator('.alert.error')).toContainText('已安排从 wheel-1767225600000000000-0.sqlite 恢复账本');
   expect(await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'stage_restore').args.fileName)).toBe('wheel-1767225600000000000-0.sqlite');
+});
+
+test('encrypted backup is created and restored only with its password', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '备份与维护', exact: true }).click();
+  await page.getByLabel('备份加密密码').fill('correct horse');
+  await page.getByRole('button', { name: '备份 SQLite' }).click();
+  await expect(page.getByRole('status')).toContainText('加密备份已保存');
+  await expect(page.getByRole('status')).toContainText('.sqlite.enc');
+  expect(await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'backup_now').args.password)).toBe('correct horse');
+
+  const encryptedRow = page.locator('.backup-row').filter({ hasText: '.sqlite.enc' });
+  await expect(encryptedRow).toContainText('已加密');
+  await encryptedRow.getByRole('button', { name: '校验与恢复' }).click();
+  await expect(page.locator('.restore-validation')).toContainText('此备份使用密码加密');
+  const decrypt = page.getByRole('button', { name: '解密并校验' });
+  await expect(decrypt).toBeDisabled();
+  await page.getByLabel('恢复密码').fill('wrong password');
+  await decrypt.click();
+  await expect(page.locator('.alert.error')).toContainText('密码错误');
+  await page.getByRole('button', { name: '关闭' }).click();
+  await page.getByLabel('恢复密码').fill('correct horse');
+  await decrypt.click();
+  await expect(page.locator('.restore-validation')).toContainText('校验通过');
+  await page.getByRole('button', { name: '恢复此备份…' }).click();
+  await expect(page.getByRole('dialog')).toContainText('暂存时会用恢复密码解密');
+  await page.getByRole('button', { name: '确认恢复并重启' }).click();
+  await expect(page.locator('.alert.error')).toContainText('已安排从 wheel-1767225600000000000-3.sqlite.enc 恢复账本');
+  const staged = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'stage_restore'));
+  expect(staged.args.password).toBe('correct horse');
+  expect(staged.args.fileName).toBe('wheel-1767225600000000000-3.sqlite.enc');
+});
+
+test('JSON export downloads the full ledger document', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '备份与维护', exact: true }).click();
+  const pending = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 JSON' }).click();
+  const download = await pending;
+  expect(download.suggestedFilename()).toMatch(/^wheel-ledger-\d{4}-\d{2}-\d{2}\.json$/);
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk as Buffer);
+  const document = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  expect(document.format).toBe('wheel-export');
+  expect(document.version).toBe(1);
+  expect(document.accounts[0].id).toBe('main');
+  expect(document.events[0].occurredAt).toBe('2026-01-02');
+  expect(document.prices[0].symbol).toBe('TEST');
+  expect(document.settings.autoBackupKeep).toBe(7);
+  await expect(page.getByRole('status')).toContainText('不能直接恢复');
 });
 
 test('auto backup settings preserve reminder lead days', async ({ page }) => {

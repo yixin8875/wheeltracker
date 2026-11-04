@@ -25,6 +25,10 @@ pub struct PendingRestore {
     pub backup_file: String,
     pub safety_file: String,
     pub requested_at: String,
+    /// Version 2 only: the decrypted SQLite copy waiting in the restore
+    /// directory. It is removed once the restore finishes or fails.
+    #[serde(default)]
+    pub staged_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,38 +100,81 @@ fn now_stamp() -> String {
 }
 
 /// Validate the chosen snapshot, take a pre-restore safety copy and record the
-/// request. The active database is not touched here.
-pub fn stage(
+/// request. The active database is not touched here. Encrypted snapshots are
+/// decrypted once, at staging time, into the restore
+/// directory. The plaintext copy stays there only until the next launch swaps
+/// it in, so the backup itself keeps its password protection at rest.
+pub fn stage_with_password(
     conn: &Connection,
     data_dir: &Path,
     file_name: &str,
     stamp: i128,
+    password: Option<&str>,
 ) -> Result<PendingRestore> {
     if is_pending(data_dir)? {
         bail!("已有一项恢复等待重启，请重启应用后再操作");
     }
     let backups = data_dir.join(backup::BACKUP_DIR);
-    let validation = backup::validate(&backups, file_name)?;
+    let validation = backup::validate_with_password(&backups, file_name, password)?;
     if !validation.valid {
         bail!("备份未通过校验：{}", validation.issues.join("；"));
     }
+
+    let mut staged: Option<PathBuf> = None;
+    if backup::is_encrypted_file_name(file_name) {
+        let directory = restore_dir(data_dir);
+        std::fs::create_dir_all(&directory)?;
+        let staged_name = format!("staged-{stamp}.sqlite");
+        let staged_path = directory.join(&staged_name);
+        if let Err(error) = backup::materialize(&backups, file_name, password, &staged_path) {
+            let _ = std::fs::remove_file(&staged_path);
+            return Err(error);
+        }
+        let staged_validation = backup::validate(&directory, &staged_name)?;
+        if !staged_validation.valid {
+            let _ = std::fs::remove_file(&staged_path);
+            bail!(
+                "暂存的恢复副本未通过校验：{}",
+                staged_validation.issues.join("；")
+            );
+        }
+        staged = Some(staged_path);
+    }
+
     let safety = backup::create(conn, &backups, "pre-restore-", stamp)?;
     let safety_file = safety
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| anyhow::anyhow!("safety snapshot has no file name"))?;
+    let staged_file = staged
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned());
     let pending = PendingRestore {
-        version: 1,
+        version: if staged_file.is_some() { 2 } else { 1 },
         backup_file: file_name.to_string(),
         safety_file,
         requested_at: now_stamp(),
+        staged_file,
     };
     let json = serde_json::to_vec_pretty(&pending)?;
     if let Err(error) = write_atomic(&marker_path(data_dir), &json) {
         let _ = std::fs::remove_file(&safety);
+        if let Some(path) = staged {
+            let _ = std::fs::remove_file(path);
+        }
         return Err(error);
     }
     Ok(pending)
+}
+
+fn remove_staged(data_dir: &Path, pending: &PendingRestore) {
+    let Some(name) = pending.staged_file.as_deref() else {
+        return;
+    };
+    if backup::is_safe_file_name(name) {
+        let _ = std::fs::remove_file(restore_dir(data_dir).join(name));
+    }
 }
 
 fn move_aside(data_dir: &Path, archive_set: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
@@ -169,6 +216,7 @@ fn fail_restore(
     stamp: i128,
     message: String,
 ) -> Result<RestoreResult> {
+    remove_staged(data_dir, pending);
     let result = RestoreResult {
         ok: false,
         message,
@@ -215,7 +263,7 @@ pub fn apply_pending(data_dir: &Path, stamp: i128) -> Result<Option<RestoreResul
             serde_json::from_slice::<PendingRestore>(&bytes).context("parse restore marker")
         })
     {
-        Ok(pending) if pending.version == 1 => pending,
+        Ok(pending) if matches!(pending.version, 1 | 2) => pending,
         Ok(pending) => {
             let result = RestoreResult {
                 ok: false,
@@ -243,31 +291,82 @@ pub fn apply_pending(data_dir: &Path, stamp: i128) -> Result<Option<RestoreResul
     };
 
     let backups = data_dir.join(backup::BACKUP_DIR);
-    let source = backups.join(&pending.backup_file);
     if !backup::is_safe_file_name(&pending.backup_file) {
         return fail_restore(data_dir, &pending, stamp, "恢复标记包含无效文件名".into()).map(Some);
     }
-    match backup::validate(&backups, &pending.backup_file) {
-        Ok(validation) if validation.valid => {}
-        Ok(validation) => {
+
+    // Version 2 restores reuse the decrypted copy prepared while staging; the
+    // password is long gone by the time the app restarts.
+    let staged_source = match (pending.version, pending.staged_file.as_deref()) {
+        (2, Some(name)) if backup::is_safe_file_name(name) => {
+            let directory = restore_dir(data_dir);
+            if !directory.join(name).is_file() {
+                return fail_restore(
+                    data_dir,
+                    &pending,
+                    stamp,
+                    "暂存的恢复副本不存在，请重新暂存恢复".into(),
+                )
+                .map(Some);
+            }
+            match backup::validate(&directory, name) {
+                Ok(validation) if validation.valid => Some(directory.join(name)),
+                Ok(validation) => {
+                    return fail_restore(
+                        data_dir,
+                        &pending,
+                        stamp,
+                        format!("暂存副本未通过校验：{}", validation.issues.join("；")),
+                    )
+                    .map(Some)
+                }
+                Err(error) => {
+                    return fail_restore(
+                        data_dir,
+                        &pending,
+                        stamp,
+                        format!("无法读取暂存副本：{error:#}"),
+                    )
+                    .map(Some)
+                }
+            }
+        }
+        (2, _) => {
             return fail_restore(
                 data_dir,
                 &pending,
                 stamp,
-                format!("备份未通过校验：{}", validation.issues.join("；")),
+                "恢复标记缺少暂存副本".into(),
             )
             .map(Some)
         }
-        Err(error) => {
-            return fail_restore(
-                data_dir,
-                &pending,
-                stamp,
-                format!("无法读取备份：{error:#}"),
-            )
-            .map(Some)
+        _ => None,
+    };
+
+    if staged_source.is_none() {
+        match backup::validate(&backups, &pending.backup_file) {
+            Ok(validation) if validation.valid => {}
+            Ok(validation) => {
+                return fail_restore(
+                    data_dir,
+                    &pending,
+                    stamp,
+                    format!("备份未通过校验：{}", validation.issues.join("；")),
+                )
+                .map(Some)
+            }
+            Err(error) => {
+                return fail_restore(
+                    data_dir,
+                    &pending,
+                    stamp,
+                    format!("无法读取备份：{error:#}"),
+                )
+                .map(Some)
+            }
         }
     }
+    let source = staged_source.unwrap_or_else(|| backups.join(&pending.backup_file));
 
     let archive_set = restore_dir(data_dir)
         .join("archive")
@@ -307,12 +406,17 @@ pub fn apply_pending(data_dir: &Path, stamp: i128) -> Result<Option<RestoreResul
                 .map(Some)
             }
             Err(rollback_error) => {
+                remove_staged(data_dir, &pending);
                 return Err(anyhow::anyhow!(
                     "恢复失败且无法还原原数据库：{error:#}；{rollback_error:#}"
-                ))
+                ));
             }
         }
     }
+
+    // The decrypted copy has served its purpose; the encrypted backup remains
+    // available in the backup list.
+    remove_staged(data_dir, &pending);
 
     let result = RestoreResult {
         ok: true,
@@ -400,12 +504,12 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let original = std::fs::read(&db_path).unwrap();
-        let pending = stage(&conn, &directory, &file_name, 11).unwrap();
+        let pending = stage_with_password(&conn, &directory, &file_name, 11, None).unwrap();
         assert_eq!(pending.backup_file, file_name);
         assert!(is_pending(&directory).unwrap());
         assert_eq!(std::fs::read(&db_path).unwrap(), original);
         assert_eq!(store::count_events(&conn, "main").unwrap(), 1);
-        assert!(stage(&conn, &directory, &file_name, 12).is_err());
+        assert!(stage_with_password(&conn, &directory, &file_name, 12, None).is_err());
         assert!(is_pending(&directory).unwrap());
         let safety = backups.join(&pending.safety_file);
         assert!(safety.is_file());
@@ -436,7 +540,7 @@ mod tests {
         let mut live_only = buy("live-only");
         live_only.seq = 2;
         store::insert_event(&conn, &live_only).unwrap();
-        stage(&conn, &directory, &file_name, 21).unwrap();
+        stage_with_password(&conn, &directory, &file_name, 21, None).unwrap();
         drop(conn);
         std::fs::write(directory.join("wheel.db-wal"), b"wal").unwrap();
         std::fs::write(directory.join("wheel.db-shm"), b"shm").unwrap();
@@ -472,7 +576,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        stage(&conn, &directory, &file_name, 31).unwrap();
+        stage_with_password(&conn, &directory, &file_name, 31, None).unwrap();
         drop(conn);
         std::fs::write(&snapshot, b"corrupted after staging").unwrap();
         let before = std::fs::read(&db_path).unwrap();
@@ -484,6 +588,85 @@ mod tests {
         let status = status(&directory).unwrap();
         assert_eq!(status.failed.len(), 1);
         assert!(!status.last_result.unwrap().ok);
+        let conn = store::open(&db_path).unwrap();
+        assert_eq!(store::count_events(&conn, "main").unwrap(), 1);
+        drop(conn);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn encrypted_restore_stages_a_decrypted_copy_and_removes_it_after_apply() {
+        let directory = temp_dir("encrypted");
+        let db_path = directory.join(DATABASE_FILE);
+        let conn = store::open(&db_path).unwrap();
+        store::insert_event(&conn, &buy("restored")).unwrap();
+        let backups = directory.join(backup::BACKUP_DIR);
+        let snapshot =
+            backup::create_encrypted(&conn, &backups, "wheel-", 50, "correct horse").unwrap();
+        let file_name = snapshot
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        store::delete_event(&conn, "restored").unwrap();
+
+        assert!(stage_with_password(
+            &conn,
+            &directory,
+            &file_name,
+            51,
+            Some("wrong password")
+        )
+        .is_err());
+        assert!(stage_with_password(&conn, &directory, &file_name, 52, None).is_err());
+        assert!(!is_pending(&directory).unwrap());
+
+        let pending =
+            stage_with_password(&conn, &directory, &file_name, 53, Some("correct horse")).unwrap();
+        assert_eq!(pending.version, 2);
+        let staged_name = pending.staged_file.clone().unwrap();
+        let staged_path = restore_dir(&directory).join(&staged_name);
+        assert!(staged_path.is_file());
+        assert!(backup::validate(&restore_dir(&directory), &staged_name)
+            .unwrap()
+            .valid);
+        assert_eq!(store::count_events(&conn, "main").unwrap(), 0);
+        drop(conn);
+
+        let result = apply_pending(&directory, 54).unwrap().unwrap();
+        assert!(result.ok);
+        assert!(!staged_path.exists());
+        let restored = store::open(&db_path).unwrap();
+        assert_eq!(store::count_events(&restored, "main").unwrap(), 1);
+        drop(restored);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn missing_staged_copy_keeps_the_live_database() {
+        let directory = temp_dir("staged-missing");
+        let db_path = directory.join(DATABASE_FILE);
+        let conn = store::open(&db_path).unwrap();
+        store::insert_event(&conn, &buy("keep")).unwrap();
+        let backups = directory.join(backup::BACKUP_DIR);
+        let snapshot =
+            backup::create_encrypted(&conn, &backups, "wheel-", 60, "correct horse").unwrap();
+        let file_name = snapshot
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let pending =
+            stage_with_password(&conn, &directory, &file_name, 61, Some("correct horse")).unwrap();
+        drop(conn);
+        let staged_path = restore_dir(&directory).join(pending.staged_file.unwrap());
+        std::fs::remove_file(&staged_path).unwrap();
+        let before = std::fs::read(&db_path).unwrap();
+
+        let result = apply_pending(&directory, 62).unwrap().unwrap();
+        assert!(!result.ok);
+        assert_eq!(std::fs::read(&db_path).unwrap(), before);
+        assert!(!is_pending(&directory).unwrap());
         let conn = store::open(&db_path).unwrap();
         assert_eq!(store::count_events(&conn, "main").unwrap(), 1);
         drop(conn);

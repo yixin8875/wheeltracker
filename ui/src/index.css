@@ -353,6 +353,12 @@ tr:last-child td { border-bottom: 0; }
 .backup-kind { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #f2f3f5; border: 1px solid #e1e3e8; font-size: 10px; }
 .backup-kind.auto { background: #edf4fd; border-color: #d1e1f7; color: #2b65a6; }
 .backup-kind.safety { background: #fff9ed; border-color: #eedfbb; color: #805b19; }
+.backup-lock { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 5px; border-radius: 3px; background: #f3edfb; border: 1px solid #e2d7f2; color: #65408f; font-size: 10px; vertical-align: 1px; }
+.backup-password-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.backup-password-row label, .restore-password { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.backup-password-row input, .restore-password input { min-width: 220px; }
+.backup-password-row .muted { flex: 1 1 320px; font-size: 11px; }
+.restore-password { margin-bottom: 10px; }
 .restore-validation { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 18px; }
 .restore-validation .section-heading { margin-bottom: 14px; }
 .restore-validation h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 13px; overflow-wrap: anywhere; }

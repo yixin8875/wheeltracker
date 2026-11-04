@@ -15,9 +15,9 @@ export interface Position extends OptionSummary { campaignId: string; symbol: st
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
 export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number }
 export type BackupKind = 'manual' | 'auto' | 'safety' | 'unknown';
-export interface Backup { fileName: string; kind: BackupKind; sizeBytes: number; modifiedAt: string | null }
+export interface Backup { fileName: string; kind: BackupKind; sizeBytes: number; modifiedAt: string | null; encrypted: boolean }
 export interface BackupValidation { fileName: string; valid: boolean; integrity: string; events: number; accounts: number; prices: number; issues: string[] }
-export interface PendingRestore { version: number; backupFile: string; safetyFile: string; requestedAt: string }
+export interface PendingRestore { version: number; backupFile: string; safetyFile: string; requestedAt: string; stagedFile: string | null }
 export interface RestoreResult { ok: boolean; message: string; at: string; backupFile: string | null; safetyFile: string | null }
 export interface RestoreStatus { pending: PendingRestore | null; lastResult: RestoreResult | null; failed: string[] }
 export interface CallScenario {

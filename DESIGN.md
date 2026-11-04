@@ -633,11 +633,12 @@ import_text(text) -> Vec<ParsedEvent>
 confirm_import(events) -> ImportResult
 set_price(symbol, date, close)
 export_report(range, format) -> Path
-backup_now() -> Path
+backup_now(password: Option<String>) -> Path      // 有密码时生成 .sqlite.enc
+export_json() -> String                          // 全账户事件 + 报价 + 设置
 set_preferences(reminder_lead_days, auto_backup_enabled, auto_backup_keep) -> SettingsView
-list_backups() -> Vec<BackupEntry>
-validate_backup(file_name) -> BackupValidation   // 只读 + integrity_check
-stage_restore(file_name) -> PendingRestore       // 写 marker，不立即替换
+list_backups() -> Vec<BackupEntry>               // 含 encrypted 标志
+validate_backup(file_name, password: Option<String>) -> BackupValidation
+stage_restore(file_name, password: Option<String>) -> PendingRestore  // 写 marker，不立即替换
 restore_status() -> RestoreStatus
 ```
 
@@ -664,6 +665,15 @@ restore_status() -> RestoreStatus
 - **月合计**：`净收租 + 分红 − 独立费用 + 现金调整`；`BTreeMap<YYYY-MM>` 保证月份升序，逐月累加得到累计。
 - **前端**：柱形为月度合计、折线为所选年份区间累计；年份筛选后重新计算区间合计与累计；表尾显示区间合计；CSV 导出当前筛选结果，含合计行。
 - **边界**：只返回有活动的月份，不补零；没有已了结期权时只显示分红 / 费用 / 调整月份。
+
+### 8.8 P4 备份加密与 JSON 导出
+
+- **文件格式**：加密备份写入 `.sqlite.enc`，布局为 `WHEELBK1`（8 字节）+ 迭代次数（u32 LE）+ 盐（16）+ nonce（12）+ AES-256-GCM 密文与 16 字节标签。密钥由 PBKDF2-HMAC-SHA256 从密码派生（默认 200,000 次），整个 40 字节头作为 AAD，改写迭代次数或盐会直接认证失败。
+- **密码策略**：8–128 个字符、不能只含空白；密码不写入磁盘、不进入日志。密码遗失无法恢复。
+- **创建**：仅手动备份支持加密。先 `VACUUM INTO` 生成普通快照，读入内存加密后原子替换为 `.sqlite.enc`，随后删除明文快照；任何一步失败都清理中间文件。自动备份与 `pre-restore-*` 安全快照保持普通 SQLite。
+- **校验**：`validate_backup` 对加密文件先在备份目录解密到临时文件，再做 `integrity_check` 与必需表/列检查，完成后删除临时文件。
+- **恢复**：暂存时解密到 `restore/staged-<stamp>.sqlite` 并校验，marker 升级为 version 2 并记录 `stagedFile`；下次启动 `apply_pending` 直接使用该副本，替换成功或失败后都删除明文副本，加密备份本身保留。version 1 marker 继续按原路径恢复。
+- **JSON 导出**：`export_json` 输出 `wheel-export` version 1 文档，包含所有账户（含仅存在于事件表的账户 ID）、全部未删除事件（`occurredAt` 为 `YYYY-MM-DD` UTC）、报价与设置；事件按日期、账户、seq 排序。JSON 仅供查看与迁移，不能替代 SQLite 快照恢复。
 
 ---
 
@@ -722,7 +732,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
 | **P2 导入** 🟡 | CSV 映射向导 + 去重（已完成）；截图 OCR + 邮件文本解析（未做） | 历史数据可批量补录 | CSV 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户、收租月报（已完成）+ SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
+| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出（已完成）+ OCR / 邮件导入 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

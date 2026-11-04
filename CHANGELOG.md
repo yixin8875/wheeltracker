@@ -7,6 +7,10 @@
 
 ### Added
 
+- 备份加密：手动备份可设置 8–128 位密码，生成 `.sqlite.enc`；`crypto` 模块使用 PBKDF2-HMAC-SHA256（200,000 次）与 AES-256-GCM，文件头作为 AAD，密码错误或文件被改写会在解密时失败
+- 加密备份的校验与恢复：备份列表显示锁标记；校验需密码并解密到临时文件做完整性检查；暂存时解密到 `restore/staged-*.sqlite`，marker 升级为 version 2，替换完成或失败后删除明文副本
+- JSON 导出：`export_json` 输出 `wheel-export` version 1 文档，包含所有账户事件、报价与设置，事件按日期 / 账户 / seq 排序；设置页新增「导出 JSON」
+- `backup_now`、`validate_backup`、`stage_restore` 接受可选密码；`list_backups` 返回 `encrypted`；`PendingRestore` 增加 `stagedFile`
 - 收租月报：按 UTC 月份统计已落袋净收租、分红、独立费用与现金调整，柱形月度合计叠加区间累计折线，支持年份筛选与 CSV 导出
 - `monthly_income(accountId)` 命令按账户聚合月度收入；`DerivedState` 新增 `event_dividends`，记录分红事件按当时持股解析出的金额，便于报表与引擎口径一致
 - 多账户 UI：侧栏「切换账户」与设置 → 账户页，支持新建（最多 50 个、名称唯一）与重命名；仪表盘、持仓、台账、事件、战役详情、录入与 CSV 导入均按账户隔离，当前账户保存在本地，行情与成本口径保持全局
