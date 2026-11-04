@@ -144,4 +144,4 @@ CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默�
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)、[P5 发布工程验收](docs/P5-release.md)。系统通知尚未实现。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)、[P5 发布工程验收](docs/P5-release.md)、[产品设计审视](docs/design-review.md) 与 [用户使用清单](docs/user-checklist.md)。系统通知尚未实现。
