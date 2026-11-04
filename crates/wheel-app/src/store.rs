@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use time::macros::format_description;
 use time::Date;
 use wheel_core::{
@@ -138,11 +138,11 @@ pub fn get_settings(conn: &Connection) -> Result<Settings> {
             [],
             |row| row.get(0),
         )
-        .context("read includeDividendsInCost setting")?;
+        .context("读取分红成本设置失败")?;
     let include_dividends_in_cost = match value.as_str() {
         "true" => true,
         "false" => false,
-        _ => bail!("invalid persisted includeDividendsInCost boolean `{value}`"),
+        _ => bail!("已保存的分红成本设置无效 `{value}`"),
     };
     Ok(Settings {
         include_dividends_in_cost,
@@ -216,13 +216,13 @@ pub fn get_preferences(conn: &Connection) -> Result<Preferences> {
         None => defaults.reminder_lead_days,
     };
     if !(0..=60).contains(&reminder_lead_days) {
-        bail!("reminderLeadDays must be between 0 and 60");
+        bail!("提醒提前天数必须在 0 到 60 之间");
     }
     let auto_backup_enabled = match get_setting_value(conn, "autoBackupEnabled")? {
         Some(value) => match value.as_str() {
             "true" => true,
             "false" => false,
-            _ => bail!("invalid persisted autoBackupEnabled boolean `{value}`"),
+            _ => bail!("已保存的自动备份开关无效 `{value}`"),
         },
         None => defaults.auto_backup_enabled,
     };
@@ -233,7 +233,7 @@ pub fn get_preferences(conn: &Connection) -> Result<Preferences> {
         None => defaults.auto_backup_keep,
     };
     if !(1..=100).contains(&auto_backup_keep) {
-        bail!("autoBackupKeep must be between 1 and 100");
+        bail!("自动备份保留数量必须在 1 到 100 之间");
     }
     Ok(Preferences {
         reminder_lead_days,
@@ -244,10 +244,10 @@ pub fn get_preferences(conn: &Connection) -> Result<Preferences> {
 
 pub fn set_preferences(conn: &Connection, preferences: Preferences) -> Result<Preferences> {
     if !(0..=60).contains(&preferences.reminder_lead_days) {
-        bail!("reminderLeadDays must be between 0 and 60");
+        bail!("提醒提前天数必须在 0 到 60 之间");
     }
     if !(1..=100).contains(&preferences.auto_backup_keep) {
-        bail!("autoBackupKeep must be between 1 and 100");
+        bail!("自动备份保留数量必须在 1 到 100 之间");
     }
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     set_setting_value(
@@ -319,7 +319,7 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<AccountRecord>> {
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
-        .context("cannot list accounts")
+        .context("无法读取账户列表")
 }
 
 pub fn account_record(conn: &Connection, id: &str) -> Result<Option<AccountRecord>> {
@@ -397,15 +397,59 @@ pub fn account_name_taken(conn: &Connection, name: &str, exclude_id: Option<&str
     )?)
 }
 
-/// The desktop UI runs in the user's timezone but the log stores plain dates;
-/// UTC keeps the default deterministic when no timezone data is available.
+/// Ledger dates are US trading dates. The app has no timezone database, so the
+/// current US Eastern date is derived from the current UTC instant using the
+/// post-2007 DST rules: second Sunday in March 07:00 UTC through first Sunday
+/// in November 06:00 UTC.
 pub fn today() -> Date {
+    eastern_date(time::OffsetDateTime::now_utc())
+}
+
+/// Timestamps that are not trading dates (for example the once-per-day
+/// automatic backup marker) stay on UTC.
+pub fn utc_today() -> Date {
     time::OffsetDateTime::now_utc().date()
+}
+
+fn eastern_date(now: time::OffsetDateTime) -> Date {
+    let offset = if is_us_eastern_dst(now) {
+        time::UtcOffset::from_hms(-4, 0, 0).expect("valid UTC offset")
+    } else {
+        time::UtcOffset::from_hms(-5, 0, 0).expect("valid UTC offset")
+    };
+    now.to_offset(offset).date()
+}
+
+fn is_us_eastern_dst(now: time::OffsetDateTime) -> bool {
+    let year = now.year();
+    let start = nth_weekday(year, time::Month::March, time::Weekday::Sunday, 2)
+        .with_hms(7, 0, 0)
+        .expect("valid DST start time")
+        .assume_utc();
+    let end = nth_weekday(year, time::Month::November, time::Weekday::Sunday, 1)
+        .with_hms(6, 0, 0)
+        .expect("valid DST end time")
+        .assume_utc();
+    now >= start && now < end
+}
+
+fn nth_weekday(
+    year: i32,
+    month: time::Month,
+    weekday: time::Weekday,
+    occurrence: u8,
+) -> Date {
+    let first = Date::from_calendar_date(year, month, 1).expect("valid first of month");
+    let delta = (weekday.number_days_from_monday() + 7
+        - first.weekday().number_days_from_monday())
+        % 7;
+    Date::from_calendar_date(year, month, 1 + delta + 7 * (occurrence - 1))
+        .expect("valid nth weekday")
 }
 
 pub fn parse_date(value: &str) -> Result<Date> {
     Date::parse(value, format_description!("[year]-[month]-[day]"))
-        .with_context(|| format!("invalid date `{value}`, expected YYYY-MM-DD"))
+        .with_context(|| format!("日期 `{value}` 格式无效，应为 YYYY-MM-DD"))
 }
 
 pub fn format_date(date: Date) -> String {
@@ -468,8 +512,8 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
         ) = row?;
         let split = match (split_numerator, split_denominator) {
             (Some(numerator), Some(denominator)) => Some(SplitTerms {
-                numerator: u32::try_from(numerator).context("invalid split numerator")?,
-                denominator: u32::try_from(denominator).context("invalid split denominator")?,
+                numerator: u32::try_from(numerator).context("拆股分子无效")?,
+                denominator: u32::try_from(denominator).context("拆股分母无效")?,
                 cash_in_lieu: split_cash_in_lieu,
             }),
             _ => None,
@@ -481,19 +525,19 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
                 strike,
                 right: parse_right(&right)?,
                 multiplier: u32::try_from(multiplier.unwrap_or(100))
-                    .context("invalid multiplier")?,
+                    .context("每手股数无效")?,
             }),
             _ => None,
         };
         events.push(Event {
             account_id: account_id.to_string(),
             id,
-            seq: u64::try_from(seq).context("invalid sequence")?,
+            seq: u64::try_from(seq).context("交易序号无效")?,
             occurred_at: parse_date(&occurred_at)?,
             kind: parse_kind(&kind)?,
             symbol,
             contract,
-            qty: u32::try_from(qty).context("invalid quantity")?,
+            qty: u32::try_from(qty).context("交易数量无效")?,
             price,
             fees,
             amount,
@@ -580,33 +624,59 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
             split_cash_in_lieu,
         ],
     )
-    .context("insert event")?;
+    .context("写入交易")?;
     Ok(())
 }
 
 /// Validate the remaining history before retaining a tombstone for audit/sequence identity.
 pub fn delete_event(conn: &Connection, event_id: &str) -> Result<bool> {
+    Ok(delete_events(conn, std::slice::from_ref(&event_id.to_string()))? > 0)
+}
+
+/// Soft-delete several events atomically. This is used by whole-import undo:
+/// either every requested event is removed and the remaining histories replay,
+/// or nothing changes.
+pub fn delete_events(conn: &Connection, event_ids: &[String]) -> Result<usize> {
+    if event_ids.is_empty() {
+        return Ok(0);
+    }
+    let requested: std::collections::BTreeSet<&str> =
+        event_ids.iter().map(String::as_str).collect();
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let account: Option<String> = tx
-        .query_row(
-            "SELECT account_id FROM events WHERE id = ?1 AND deleted_at IS NULL",
-            params![event_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(account) = account else {
-        return Ok(false);
-    };
-    let mut remaining = list_events(&tx, &account)?;
-    remaining.retain(|event| event.id != event_id);
-    replay_checked(&account, &remaining, get_settings(&tx)?)
-        .context("deletion would invalidate event history")?;
-    tx.execute(
-        "UPDATE events SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
-        params![event_id, time::OffsetDateTime::now_utc().to_string()],
-    )?;
+    let mut accounts = std::collections::BTreeSet::new();
+    let mut found = Vec::new();
+    {
+        let mut statement = tx.prepare("SELECT id, account_id FROM events WHERE deleted_at IS NULL")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, account) = row?;
+            if requested.contains(id.as_str()) {
+                accounts.insert(account);
+                found.push(id);
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(0);
+    }
+    let found_set: std::collections::BTreeSet<String> = found.iter().cloned().collect();
+    for account in &accounts {
+        let mut remaining = list_events(&tx, account)?;
+        remaining.retain(|event| !found_set.contains(&event.id));
+        replay_checked(account, &remaining, get_settings(&tx)?)
+            .context("撤销后的事件历史无效")?;
+    }
+    let stamp = time::OffsetDateTime::now_utc().to_string();
+    for id in &found {
+        tx.execute(
+            "UPDATE events SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+            params![id, &stamp],
+        )?;
+    }
     tx.commit()?;
-    Ok(true)
+    Ok(found.len())
 }
 
 pub fn replay_checked(
@@ -623,15 +693,15 @@ pub fn replay_checked(
         let units =
             u64::from(event.qty) * u64::from(event.contract.as_ref().map_or(1, |c| c.multiplier));
         let total = quantities.entry(&event.symbol).or_default();
-        *total = total.checked_add(units).context("quantity overflow")?;
+        *total = total.checked_add(units).context("数量溢出")?;
         if *total > u64::from(u32::MAX) {
-            bail!("quantity exceeds supported range");
+            bail!("数量超出支持范围");
         }
     }
-    let derived = replay(account_id, events, settings).context("event replay rejected")?;
+    let derived = replay(account_id, events, settings).context("事件回放失败")?;
     let issues = derived.check_invariants();
     if !issues.is_empty() {
-        bail!("event replay invariant violations: {}", issues.join("; "));
+        bail!("账本回放一致性检查失败：{}", issues.join("; "));
     }
     if derived.campaigns.iter().any(|c| {
         [
@@ -646,7 +716,7 @@ pub fn replay_checked(
         .iter()
         .any(|v| !v.is_finite())
     }) {
-        bail!("event replay produced non-finite financial totals");
+        bail!("账本回放产生了无效的财务数值");
     }
     if derived.campaigns.iter().any(|c| {
         c.realized_pnl.is_some_and(|v| !v.is_finite())
@@ -664,7 +734,7 @@ pub fn replay_checked(
                 .any(|v| !v.is_finite())
             })
     }) {
-        bail!("event replay produced non-finite costs or realized P&L");
+        bail!("账本回放产生了无效的成本或已实现盈亏");
     }
     Ok(derived)
 }
@@ -674,10 +744,10 @@ pub fn validate_event(event: &Event) -> Result<()> {
         || event.account_id.trim().is_empty()
         || event.symbol.trim().is_empty()
     {
-        bail!("event id, account and symbol are required");
+        bail!("事件编号、账户和标的不能为空");
     }
     if event.seq == 0 || event.seq > i64::MAX as u64 {
-        bail!("invalid event sequence");
+        bail!("交易序号无效");
     }
     if !event.price.is_finite()
         || event.price < 0.0
@@ -685,7 +755,7 @@ pub fn validate_event(event: &Event) -> Result<()> {
         || event.fees < 0.0
         || !event.amount.is_finite()
     {
-        bail!("price and fees must be finite and nonnegative; amount must be finite");
+        bail!("价格与费用必须为有限的非负数，金额必须为有限数");
     }
     if matches!(event.kind, EventKind::Split) {
         if event.contract.is_some()
@@ -694,39 +764,39 @@ pub fn validate_event(event: &Event) -> Result<()> {
             || event.fees != 0.0
             || event.amount != 0.0
         {
-            bail!("split events cannot carry contract, quantity, price, fees or amount");
+            bail!("拆股事件不能携带合约、数量、价格、费用或金额");
         }
         let Some(terms) = event.split else {
-            bail!("split events need split terms");
+            bail!("拆股事件缺少拆股比例");
         };
         if terms.numerator == 0
             || terms.denominator == 0
             || terms.numerator > 1_000_000
             || terms.denominator > 1_000_000
         {
-            bail!("split numerator and denominator must be between 1 and 1,000,000");
+            bail!("拆股比例的分子与分母必须在 1 到 1,000,000 之间");
         }
         if let Some(cash) = terms.cash_in_lieu {
             if !cash.is_finite() || cash < 0.0 {
-                bail!("cash-in-lieu must be finite and nonnegative");
+                bail!("零股现金补偿必须为有限的非负数");
             }
         }
         return Ok(());
     }
     if event.split.is_some() {
-        bail!("only split events may carry split terms");
+        bail!("只有拆股事件可以携带拆股比例");
     }
     if !matches!(event.kind, EventKind::Fee | EventKind::Adjustment) && event.qty == 0 {
-        bail!("qty must be greater than zero");
+        bail!("交易数量必须大于 0");
     }
     if matches!(event.kind, EventKind::Fee) && event.amount < 0.0 {
-        bail!("fee amount must be nonnegative");
+        bail!("费用金额不能为负数");
     }
     if matches!(event.kind, EventKind::SharesBuy | EventKind::SharesSell) && event.price <= 0.0 {
-        bail!("share price must be greater than zero");
+        bail!("股票成交价必须大于 0");
     }
     if matches!(event.kind, EventKind::Option(_)) && event.contract.is_none() {
-        bail!("option events need expiry, strike and right");
+        bail!("期权交易需要填写到期日、行权价和方向");
     }
     if let Some(contract) = &event.contract {
         if !contract.strike.is_finite()
@@ -734,11 +804,11 @@ pub fn validate_event(event: &Event) -> Result<()> {
             || contract.multiplier == 0
             || contract.underlying != event.symbol
         {
-            bail!("invalid option contract");
+            bail!("期权合约信息无效");
         }
         let shares = f64::from(contract.multiplier) * f64::from(event.qty);
         if !(contract.strike * shares).is_finite() || !(event.price * shares).is_finite() {
-            bail!("option notional exceeds supported range");
+            bail!("期权名义金额超出支持范围");
         }
     }
     Ok(())
@@ -755,10 +825,10 @@ pub fn next_seq(conn: &Connection, account_id: &str) -> Result<u64> {
 
 pub fn upsert_price(conn: &Connection, symbol: &str, date: Date, close: f64) -> Result<()> {
     if symbol.trim().is_empty() {
-        bail!("symbol is required");
+        bail!("标的代码不能为空");
     }
     if !close.is_finite() || close <= 0.0 {
-        bail!("quote must be finite and greater than zero");
+        bail!("行情价格必须为有限且大于 0 的数");
     }
     conn.execute(
         "INSERT INTO prices (symbol, date, close, source, quoted_at) VALUES (?1, ?2, ?3, '手动', NULL)
@@ -832,7 +902,7 @@ pub fn upsert_market_quote(
         || !quote.price.is_finite()
         || quote.price <= 0.0
     {
-        bail!("invalid automatic quote");
+        bail!("自动行情数据无效");
     }
     crate::market::validate_timestamp(&quote.quoted_at).map_err(anyhow::Error::msg)?;
     let date = &quote.quoted_at[..10];
@@ -868,7 +938,7 @@ fn parse_right(value: &str) -> Result<Right> {
     match value {
         "P" => Ok(Right::Put),
         "C" => Ok(Right::Call),
-        other => bail!("unknown option right `{other}`"),
+        other => bail!("未知的期权方向 `{other}`"),
     }
 }
 
@@ -899,7 +969,7 @@ fn parse_kind(value: &str) -> Result<EventKind> {
         "fee" => Ok(EventKind::Fee),
         "adjustment" => Ok(EventKind::Adjustment),
         "stock_split" => Ok(EventKind::Split),
-        other => bail!("unknown event kind `{other}`"),
+        other => bail!("未知的交易类型 `{other}`"),
     }
 }
 
@@ -962,7 +1032,7 @@ mod tests {
             assert!(get_settings(&conn)
                 .unwrap_err()
                 .to_string()
-                .contains("invalid persisted"));
+                .contains("已保存的分红成本设置无效"));
             assert!(set_settings(&conn, true).is_err());
             assert!(insert_event(&conn, &buy("buy", 1)).is_err());
             assert_eq!(count_events(&conn, "main").unwrap(), 0);
@@ -1017,7 +1087,7 @@ mod tests {
         assert!(insert_event(&conn, &close)
             .unwrap_err()
             .to_string()
-            .contains("invariant"));
+            .contains("一致性"));
         assert_eq!(count_events(&conn, "main").unwrap(), 2);
         assert_eq!(next_seq(&conn, "main").unwrap(), 3);
     }
@@ -1045,6 +1115,29 @@ mod tests {
         assert!(delete_event(&conn, "buy").unwrap());
         assert_eq!(count_events(&conn, "main").unwrap(), 0);
         assert_eq!(next_seq(&conn, "main").unwrap(), 3);
+    }
+
+    #[test]
+    fn batch_delete_removes_dependent_events_together() {
+        let conn = db();
+        let open = Event::sell_option("main", "open", 1, at(), contract(150.0), 1, 2.0, 0.0);
+        let close = Event::close_option("main", "close", 2, at(), contract(150.0), 1, 1.0, 0.0);
+        insert_event(&conn, &open).unwrap();
+        insert_event(&conn, &close).unwrap();
+        assert!(delete_events(&conn, &["open".to_string()]).is_err());
+        assert_eq!(
+            delete_events(
+                &conn,
+                &["open".to_string(), "close".to_string(), "missing".to_string()]
+            )
+            .unwrap(),
+            2
+        );
+        assert!(list_events(&conn, "main").unwrap().is_empty());
+        assert_eq!(
+            delete_events(&conn, &["open".to_string(), "close".to_string()]).unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -1468,6 +1561,36 @@ mod tests {
         assert!(delete_account(&conn, "second").unwrap());
         assert!(account_record(&conn, "second").unwrap().is_none());
         assert!(!delete_account(&conn, "second").unwrap());
+    }
+
+    #[test]
+    fn trading_date_uses_new_york_time_and_dst() {
+        let parse = |value: &str| {
+            time::OffsetDateTime::parse(
+                value,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .unwrap()
+        };
+        // Winter is UTC-5: 04:30Z is still the previous New York date.
+        assert_eq!(
+            format_date(eastern_date(parse("2026-01-02T04:30:00Z"))),
+            "2026-01-01"
+        );
+        // Summer is UTC-4: 03:30Z is still the previous New York date.
+        assert_eq!(
+            format_date(eastern_date(parse("2026-07-01T03:30:00Z"))),
+            "2026-06-30"
+        );
+        // DST begins at 07:00Z on the second Sunday in March.
+        assert_eq!(
+            format_date(eastern_date(parse("2026-03-08T04:30:00Z"))),
+            "2026-03-07"
+        );
+        assert_eq!(
+            format_date(eastern_date(parse("2026-03-09T04:30:00Z"))),
+            "2026-03-09"
+        );
     }
 
     #[test]

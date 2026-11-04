@@ -31,7 +31,7 @@ export function ReminderCard({ positions, leadDays, onOpenPositions, onOpenCalen
   const overdue = reminders.filter(position => position.daysLeft < 0).length;
   return <section className="panel reminder-card">
     <div className="section-heading">
-      <div><h2><CalendarClock size={18}/> 到期提醒</h2><span className="muted">未来 {leadDays} 天 · 按 UTC 日期计算</span></div>
+      <div><h2><CalendarClock size={18}/> 到期提醒</h2><span className="muted">未来 {leadDays} 天 · 按美东交易日计算</span></div>
       <div className="toolbar"><button onClick={onOpenCalendar}>到期日历</button><button onClick={onOpenPositions}>全部持仓<ChevronRight size={15}/></button></div>
     </div>
     {!reminders.length ? <p className="empty">未来 {leadDays} 天内没有到期合约。</p> : <div className="reminder-list">
@@ -78,7 +78,7 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
         <input type="number" min={0} max={60} step={1} value={leadDays} disabled={!desktop || !settings || busy} onChange={event => setLeadDays(Number(event.target.value))}/>
       </label>
       <p className="muted">0–60 天。剩余 3 天内的合约标为紧急，已过到期日的合约标为过期。侧栏与仪表盘会显示数量徽标。</p>
-      <p className="muted">到期天数以账本的后端 UTC 日期计算；录入表单仍使用本地日期作为默认值。</p>
+      <p className="muted">到期天数按美东交易日计算；录入表单也默认使用纽约当前日期。</p>
       <button className="primary" disabled={!desktop || !settings || busy || !changed}>{busy ? '保存中…' : '保存提醒设置'}</button>
     </form>
   </section>;

@@ -73,7 +73,7 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
 
   return <section className="panel">
     <div className="section-heading">
-      <div><h2><ChartColumn size={18}/> 年度报表</h2><span className="muted">已实现口径 · UTC 年份</span></div>
+      <div><h2><ChartColumn size={18}/> 年度报表</h2><span className="muted">已实现口径 · 美东交易日按年</span></div>
       <div className="toolbar">
         <label className="inline-select">年份<select aria-label="选择年份" value={year ?? ''} disabled={!years.length} onChange={event => setYear(Number(event.target.value))}>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <button onClick={exportRows} disabled={!current}>导出 CSV</button>

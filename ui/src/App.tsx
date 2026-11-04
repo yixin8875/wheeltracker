@@ -5,6 +5,7 @@ import type { Account, AnnualReport, AppInfo, Campaign, Dashboard, Detail, Event
 import { api, desktop, labels, money, percent, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
+import { EventLog } from './EventLog';
 import { EntryForm } from './EntryForm';
 import { AccountingPreferences, CampaignTimeline, CallAssignmentScenarios } from './CampaignInsights';
 import type { AccountingSettings } from './types';
@@ -73,7 +74,8 @@ export default function App() {
   }, [accountId]);
   const activeSymbols = [...new Set((data?.campaigns ?? []).filter(campaign => campaign.status === 'active').map(campaign => campaign.symbol))];
   const market = usePortfolioQuotes(activeSymbols, reload);
-  const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'vision' | 'data' | 'history'>('accounting');
+  const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'vision' | 'data'>('accounting');
+  const [ledgerTab, setLedgerTab] = useState<'entries' | 'events'>('entries');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
   useEffect(() => {
     if (!desktop) return;
@@ -122,7 +124,7 @@ export default function App() {
   }
   async function deleteEvent() {
     if (!pendingDelete || deleting) return; setDeleting(true);
-    try { await api<boolean>('delete_event', { eventId: pendingDelete }); setPendingDelete(null); saved('交易已撤销，原始记录保留在审计日志中。'); }
+    try { await api<boolean>('delete_event', { eventId: pendingDelete }); setPendingDelete(null); saved('交易已撤销。原始记录保留在数据库中，当前界面与导出不再展示。'); }
     catch (failure) { setError(String(failure)); } finally { setDeleting(false); }
   }
   const campaigns = (data?.campaigns ?? []).filter(campaign => (archive || campaign.status === 'active') && campaign.symbol.includes(symbol.trim().toUpperCase()));
@@ -132,7 +134,7 @@ export default function App() {
   const asOf = data?.asOf ?? today();
   const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : navigation.find(item => item.id === page)?.label;
   return <div className="app-shell"><aside className="sidebar"><div className="brand"><CircleDollarSign size={30}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}<label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small></div></aside>
-    <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · UTC</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
+    <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
     {notice && <div className="alert success" role="status">{notice}</div>}
@@ -149,8 +151,14 @@ export default function App() {
       {!campaigns.length && <div className="empty panel"><Layers size={36}/><h2>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</h2><p>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</p><button className="primary" onClick={() => startEntry()}>记录第一笔交易</button></div>}
       <p className="footnote">A 纯股票成本 · B 扣除已落袋净权利金 · C′ 再扣除未平仓净权利金。{settings?.includeDividendsInCost ? '当前分红计入 B/C′ 成本。' : '当前分红不摊薄成本。'}</p>
     </>}
-    {page === 'ledger' && !unavailable && <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/>}
-    {page === 'entry' && <EntryForm key={entryKey} initial={initial} positions={positions} accountId={accountId} onSaved={saved}/>}
+    {page === 'ledger' && !unavailable && <>
+      <div className="settings-tabs" aria-label="台账分类">
+        <button aria-pressed={ledgerTab === 'entries'} onClick={() => setLedgerTab('entries')}>收租明细</button>
+        <button aria-pressed={ledgerTab === 'events'} onClick={() => setLedgerTab('events')}>交易记录</button>
+      </div>
+      {ledgerTab === 'entries' ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/> : <EventLog events={events} onUndo={setPendingDelete}/>}
+    </>}
+    {page === 'entry' && <EntryForm key={entryKey} initial={initial} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={saved}/>}
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
     {page === 'compare' && !unavailable && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
@@ -160,18 +168,17 @@ export default function App() {
       <section className="panel"><div className="section-heading"><h2>股票持仓</h2></div><div className="table-wrap"><table><thead><tr><th>标的</th><th>股数</th><th>纯股票成本 / 股</th><th>有效成本 / 股</th><th>标的参考价</th><th>操作</th></tr></thead><tbody>{data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => <tr key={campaign.id}><td><button className="text-button" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</button></td><td>{campaign.shares}</td><td>{money(campaign.costA)}</td><td>{money(campaign.costB)}</td><td>{money(campaign.price)}</td><td><button onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</button></td></tr>)}</tbody></table></div>{!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="empty">暂无股票持仓。</p>}</section>
       <section className="panel"><div className="section-heading"><h2>未平仓期权</h2><span className="muted">按到期日排序</span></div><div className="table-wrap"><table><thead><tr><th>合约</th><th>手数</th><th>每手股数</th><th>每股净权利金</th><th>到期日</th><th>剩余天数</th><th>了结合约</th></tr></thead><tbody>{positions.map(position => <tr key={position.contract}><td>{position.contract}</td><td>{position.openQty}</td><td>{position.multiplier} 股/手</td><td>{money(position.avgCredit)}</td><td>{position.expiry}</td><td><span className={position.daysLeft < 0 ? 'negative' : position.daysLeft <= 7 ? 'warning-text' : ''}>{position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}</span></td><td><div className="toolbar">{['option_close', 'option_expire', 'option_assign'].map(kind => <button key={kind} onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier })}>{labels[kind]}</button>)}</div></td></tr>)}</tbody></table></div>{!positions.length && <p className="empty">暂无未平仓期权。</p>}</section>
     </>}
-    {page === 'detail' && !unavailable && <><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)}/><p className="footnote">{settings?.includeDividendsInCost ? '当前 B/C′ 成本已扣除累计分红。' : '当前分红不摊薄 B/C′ 成本，可在设置页调整。'}</p><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
+    {page === 'detail' && !unavailable && <><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)}/><p className="footnote">{settings?.includeDividendsInCost ? '当前 B/C′ 成本已扣除累计分红。' : '当前分红不摊薄 B/C′ 成本，可在设置页调整。'}</p><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events} onUndo={setPendingDelete}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
     {page === 'market' && <MarketPage prices={prices} symbols={activeSymbols} market={market} onSaved={saved} onEntry={symbol => startEntry({ symbol })}/>}
     {page === 'settings' && <>
-      <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'vision', 'data', 'history'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', vision: 'AI 识别', data: '备份与维护', history: '交易记录' }[tab]}</button>)}</div>
+      <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'vision', 'data'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', vision: 'AI 识别', data: '备份与维护' }[tab]}</button>)}</div>
       {settingsTab === 'accounting' && <AccountingPreferences settings={settings} onSaved={settingsSaved}/>}
       {settingsTab === 'accounts' && <AccountsPanel accounts={accounts} currentId={accountId} onSwitch={switchAccount} onAccounts={setAccounts} onNotice={setNotice} onError={setError}/>}
       {settingsTab === 'reminders' && <ReminderPreferences settings={settings} onSaved={preferencesSaved}/>}
       {settingsTab === 'vision' && <VisionSettings/>}
       {settingsTab === 'data' && <SettingsData accountId={accountId} info={info} events={events} campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} positions={positions} settings={settings} restoreStatus={restoreStatus} onRestoreStatus={setRestoreStatus} onNotice={setNotice} onError={setError} onPreferencesSaved={preferencesSaved}/>}
-      {settingsTab === 'history' && <section className="panel"><div className="section-heading"><h2>交易事件日志</h2><span className="muted">撤销前会重新校验后续交易</span></div><div className="table-wrap"><table><thead><tr><th>日期</th><th>类型</th><th>标的 / 合约</th><th>数量 / 拆股比例</th><th>每股价格</th><th>费用</th><th>备注</th><th>操作</th></tr></thead><tbody>{[...events].reverse().map(event => <tr key={event.id}><td>{event.date}</td><td>{labels[event.kind]}</td><td>{event.symbol} {event.expiry} {event.strike}{event.right}{event.multiplier && event.multiplier !== 100 ? ` · ${event.multiplier} 股/手` : ''}</td><td>{event.kind === 'stock_split' ? `${event.splitNumerator} : ${event.splitDenominator}` : event.qty}</td><td>{event.kind === 'stock_split' ? '—' : money(event.price)}</td><td>{event.kind === 'stock_split' ? '—' : money(event.fees)}</td><td className="note-cell">{event.note}{event.splitCashInLieu != null ? ` · 零股补偿 ${money(event.splitCashInLieu)}` : ''}</td><td><button onClick={() => setPendingDelete(event.id)}>撤销</button></td></tr>)}</tbody></table></div>{!events.length && <p className="empty">暂无交易记录。</p>}</section>}
     </>}
-    {pendingDelete && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="delete-title" className="modal"><h2 id="delete-title">确认撤销这笔交易？</h2><p>这会重算持仓、成本和收租。如果后续交易依赖此记录，系统会拒绝撤销。原始数据将保留用于审计。</p><div className="toolbar"><button autoFocus disabled={deleting} onClick={() => setPendingDelete(null)}>取消</button><button className="danger" disabled={deleting} onClick={() => void deleteEvent()}>{deleting ? '正在撤销…' : '确认撤销'}</button></div></section></div>}
+    {pendingDelete && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="delete-title" className="modal"><h2 id="delete-title">确认撤销这笔交易？</h2><p>这会重算持仓、成本和收租。如果后续交易依赖此记录，系统会拒绝撤销。原始记录不会被物理删除；撤销后不再出现在当前界面与导出中，但数据库仍保留审计行。</p><div className="toolbar"><button autoFocus disabled={deleting} onClick={() => setPendingDelete(null)}>取消</button><button className="danger" disabled={deleting} onClick={() => void deleteEvent()}>{deleting ? '正在撤销…' : '确认撤销'}</button></div></section></div>}
     </main></div>;
 }
 

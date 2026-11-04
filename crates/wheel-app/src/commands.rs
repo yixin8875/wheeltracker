@@ -970,7 +970,7 @@ fn append_requests(
     reqs: Vec<NewEventReq>,
 ) -> Result<Vec<String>, String> {
     if reqs.is_empty() {
-        return Err("at least one event is required".to_string());
+        return Err("至少需要一笔交易。".to_string());
     }
     let mut sequences = std::collections::HashMap::new();
     let mut events = Vec::with_capacity(reqs.len());
@@ -983,7 +983,7 @@ fn append_requests(
         };
         sequences.insert(
             account_id.clone(),
-            seq.checked_add(1).ok_or("event sequence overflow")?,
+            seq.checked_add(1).ok_or("交易序号溢出")?,
         );
         let id = next_event_id(seq);
         events.push(build_event(&req, &account_id, &id, seq)?);
@@ -1001,7 +1001,7 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
     let at = store::parse_date(&req.date).map_err(|error| error.to_string())?;
     let symbol = req.symbol.trim().to_ascii_uppercase();
     if symbol.is_empty() {
-        return Err("symbol is required".to_string());
+        return Err("标的代码不能为空。".to_string());
     }
     if !req.price.is_finite()
         || req.price < 0.0
@@ -1010,23 +1010,23 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
         || !req.amount.is_finite()
     {
         return Err(
-            "price and fees must be finite and nonnegative; amount must be finite".to_string(),
+            "价格与费用必须为有限的非负数，金额必须为有限数。".to_string(),
         );
     }
     let contract = match (&req.expiry, req.strike, &req.right) {
         (None, None, None) => None,
         (Some(expiry), Some(strike), Some(right)) => {
             if !strike.is_finite() || strike <= 0.0 {
-                return Err("strike must be finite and greater than zero".to_string());
+                return Err("行权价必须为有限且大于 0 的数。".to_string());
             }
             let right = match right.to_ascii_uppercase().as_str() {
                 "P" => Right::Put,
                 "C" => Right::Call,
-                _ => return Err("right must be P or C".to_string()),
+                _ => return Err("期权方向必须为 P（Put）或 C（Call）。".to_string()),
             };
             let multiplier = req.multiplier.unwrap_or(100);
             if multiplier == 0 {
-                return Err("multiplier must be greater than zero".to_string());
+                return Err("每手股数必须大于 0。".to_string());
             }
             Some(OptionContract {
                 underlying: symbol.clone(),
@@ -1036,12 +1036,12 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
                 multiplier,
             })
         }
-        _ => return Err("option contract needs expiry, strike and right together".to_string()),
+        _ => return Err("期权合约必须同时填写到期日、行权价和方向。".to_string()),
     };
     let require_contract = || {
         contract
             .clone()
-            .ok_or_else(|| "option events need expiry, strike and right".to_string())
+            .ok_or_else(|| "期权交易需要填写到期日、行权价和方向。".to_string())
     };
 
     let event = match req.kind.as_str() {
@@ -1089,10 +1089,10 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
         "stock_split" => {
             let numerator = req
                 .split_numerator
-                .ok_or_else(|| "split numerator is required".to_string())?;
+                .ok_or_else(|| "拆股比例缺少分子。".to_string())?;
             let denominator = req
                 .split_denominator
-                .ok_or_else(|| "split denominator is required".to_string())?;
+                .ok_or_else(|| "拆股比例缺少分母。".to_string())?;
             Event::stock_split(
                 account_id,
                 id,
@@ -1104,7 +1104,7 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
                 req.split_cash_in_lieu,
             )
         }
-        other => return Err(format!("unknown event kind `{other}`")),
+        other => return Err(format!("未知的交易类型 `{other}`。")),
     };
 
     let event = event.note(req.note.clone().unwrap_or_default());
@@ -1808,13 +1808,177 @@ fn commit_for(
     }
 
     let event_ids = append_requests(conn, requests)?;
+    let batch_id = event_ids.first().map(|id| format!("batch-{id}"));
+    let mut batch_saved = false;
+    if let Some(id) = &batch_id {
+        let batch = crate::import::ImportBatch {
+            id: id.clone(),
+            account_id: account.clone(),
+            origin: origin.clone(),
+            note_prefix: format!("导入:{origin}"),
+            created_at: time::OffsetDateTime::now_utc().to_string(),
+            imported: event_ids.len(),
+            event_ids: event_ids.clone(),
+            undone_at: None,
+            undone_count: 0,
+        };
+        batch_saved = save_import_batch(conn, &batch).is_ok();
+    }
     Ok(crate::import::ImportSummary {
         imported: event_ids.len(),
         event_ids,
         account_id: account,
         note_prefix: format!("导入:{origin}"),
         duplicate_count: duplicates,
+        batch_id: if batch_saved { batch_id } else { None },
+        batch_saved,
     })
+}
+
+const IMPORT_BATCH_KEY_PREFIX: &str = "importBatch:v1:";
+const IMPORT_BATCH_INDEX_PREFIX: &str = "importBatchIndex:v1:";
+const IMPORT_BATCH_LIST_LIMIT: usize = 50;
+
+fn import_batch_key(id: &str) -> String {
+    format!("{IMPORT_BATCH_KEY_PREFIX}{id}")
+}
+
+fn import_batch_index_key(account: &str) -> String {
+    format!("{IMPORT_BATCH_INDEX_PREFIX}{account}")
+}
+
+fn batch_ids_from_setting(raw: Option<String>) -> Vec<String> {
+    raw.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+        .unwrap_or_default()
+}
+
+fn save_import_batch(
+    conn: &rusqlite::Connection,
+    batch: &crate::import::ImportBatch,
+) -> Result<(), String> {
+    let json = serde_json::to_string(batch).map_err(|error| error.to_string())?;
+    store::set_setting_value(conn, &import_batch_key(&batch.id), &json)
+        .map_err(|error| error.to_string())?;
+    let index_key = import_batch_index_key(&batch.account_id);
+    let mut ids = batch_ids_from_setting(
+        store::get_setting_value(conn, &index_key).map_err(|error| error.to_string())?,
+    );
+    ids.retain(|id| id != &batch.id);
+    ids.insert(0, batch.id.clone());
+    ids.truncate(IMPORT_BATCH_LIST_LIMIT);
+    let index = serde_json::to_string(&ids).map_err(|error| error.to_string())?;
+    store::set_setting_value(conn, &index_key, &index).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn load_import_batch(
+    conn: &rusqlite::Connection,
+    batch_id: &str,
+) -> Result<Option<crate::import::ImportBatch>, String> {
+    let raw = store::get_setting_value(conn, &import_batch_key(batch_id))
+        .map_err(|error| error.to_string())?;
+    match raw {
+        Some(json) => serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|error| format!("导入批次记录损坏：{error}")),
+        None => Ok(None),
+    }
+}
+
+fn batch_view(
+    batch: &crate::import::ImportBatch,
+    active_ids: &BTreeSet<String>,
+) -> crate::import::ImportBatchView {
+    crate::import::ImportBatchView {
+        id: batch.id.clone(),
+        origin: batch.origin.clone(),
+        created_at: batch.created_at.clone(),
+        imported: batch.imported,
+        remaining: batch.event_ids.iter().filter(|id| active_ids.contains(*id)).count(),
+        undone_at: batch.undone_at.clone(),
+        undone_count: batch.undone_count,
+    }
+}
+
+fn list_import_batches_for(
+    conn: &rusqlite::Connection,
+    account: &str,
+) -> Result<Vec<crate::import::ImportBatchView>, String> {
+    let ids = batch_ids_from_setting(
+        store::get_setting_value(conn, &import_batch_index_key(account))
+            .map_err(|error| error.to_string())?,
+    );
+    let active_ids: BTreeSet<String> = store::list_events(conn, account)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|event| event.id)
+        .collect();
+    let mut batches = Vec::new();
+    for id in ids {
+        let Some(batch) = load_import_batch(conn, &id)? else {
+            continue;
+        };
+        if batch.account_id != account {
+            continue;
+        }
+        batches.push(batch_view(&batch, &active_ids));
+    }
+    Ok(batches)
+}
+
+fn undo_import_batch_for(
+    conn: &rusqlite::Connection,
+    batch_id: &str,
+) -> Result<crate::import::ImportBatchView, String> {
+    let mut batch = load_import_batch(conn, batch_id)?
+        .ok_or_else(|| "导入批次不存在或已被清理。".to_string())?;
+    if batch.undone_at.is_some() {
+        return Err("这组导入已经整批撤销。".to_string());
+    }
+    let active_ids: BTreeSet<String> = store::list_events(conn, &batch.account_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|event| event.id)
+        .collect();
+    let to_delete: Vec<String> = batch
+        .event_ids
+        .iter()
+        .filter(|id| active_ids.contains(*id))
+        .cloned()
+        .collect();
+    let deleted = store::delete_events(conn, &to_delete).map_err(|error| {
+        format!(
+            "无法整批撤销：后续交易依赖这组导入的记录，请先撤销后面的平仓、卖出或拆股事件。（{error:#}）"
+        )
+    })?;
+    batch.undone_at = Some(time::OffsetDateTime::now_utc().to_string());
+    batch.undone_count = deleted;
+    save_import_batch(conn, &batch)?;
+    let remaining_ids: BTreeSet<String> = store::list_events(conn, &batch.account_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|event| event.id)
+        .collect();
+    Ok(batch_view(&batch, &remaining_ids))
+}
+
+#[tauri::command]
+pub fn list_import_batches(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<Vec<crate::import::ImportBatchView>, String> {
+    let conn = state.conn();
+    list_import_batches_for(&conn, &account_or_default(account_id))
+}
+
+#[tauri::command]
+pub fn undo_import_batch(
+    state: State<'_, AppState>,
+    batch_id: String,
+) -> Result<crate::import::ImportBatchView, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    undo_import_batch_for(&conn, &batch_id)
 }
 
 #[tauri::command]
@@ -2609,7 +2773,7 @@ mod tests {
         assert!(campaign_detail_for(&conn, "main", "main#c0")
             .err()
             .unwrap()
-            .contains("only 100 held"));
+            .contains("只有 100 股"));
         assert_eq!(conn.total_changes(), changes);
         assert_eq!(store::count_events(&conn, "main").unwrap(), 3);
     }
@@ -2761,6 +2925,80 @@ mod tests {
         assert!(events
             .iter()
             .all(|event| event.note.starts_with("导入:broker.csv")));
+    }
+
+    #[test]
+    fn import_commit_records_batch_and_undo_removes_whole_batch() {
+        let conn = db();
+        let preview = preview_for(
+            &conn,
+            import_request(
+                "日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n\
+                 2026-01-02,Sell to Open,AAPL,1,2.00,0,2026-02-20,150,P\n\
+                 2026-01-03,Sell to Open,MSFT,1,3.00,0,2026-02-20,400,P\n",
+            ),
+        )
+        .unwrap();
+        let summary = commit_for(&conn, commit_request(commit_rows(&preview), false)).unwrap();
+        assert!(summary.batch_saved);
+        let batch_id = summary.batch_id.expect("batch id");
+        let batches = list_import_batches_for(&conn, "main").unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].id, batch_id);
+        assert_eq!(batches[0].imported, 2);
+        assert_eq!(batches[0].remaining, 2);
+
+        let undone = undo_import_batch_for(&conn, &batch_id).unwrap();
+        assert_eq!(undone.undone_count, 2);
+        assert!(undone.undone_at.is_some());
+        assert_eq!(undone.remaining, 0);
+        assert!(store::list_events(&conn, "main").unwrap().is_empty());
+        let after = list_import_batches_for(&conn, "main").unwrap();
+        assert_eq!(after[0].remaining, 0);
+        assert!(undo_import_batch_for(&conn, &batch_id)
+            .unwrap_err()
+            .contains("已经整批撤销"));
+    }
+
+    #[test]
+    fn import_batch_undo_refuses_when_later_events_depend_on_it() {
+        let conn = db();
+        let preview = preview_for(
+            &conn,
+            import_request(
+                "日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n\
+                 2026-01-02,Sell to Open,AAPL,1,2.00,0,2026-02-20,150,P\n",
+            ),
+        )
+        .unwrap();
+        let summary = commit_for(&conn, commit_request(commit_rows(&preview), false)).unwrap();
+        let batch_id = summary.batch_id.expect("batch id");
+        let seq = store::next_seq(&conn, "main").unwrap();
+        store::insert_event(
+            &conn,
+            &Event::close_option(
+                "main",
+                "later-close",
+                seq,
+                date(),
+                OptionContract::new(
+                    "AAPL",
+                    store::parse_date("2026-02-20").unwrap(),
+                    150.0,
+                    Right::Put,
+                ),
+                1,
+                1.0,
+                0.0,
+            ),
+        )
+        .unwrap();
+        let failure = undo_import_batch_for(&conn, &batch_id).unwrap_err();
+        assert!(failure.contains("无法整批撤销"));
+        assert_eq!(store::list_events(&conn, "main").unwrap().len(), 2);
+        let batches = list_import_batches_for(&conn, "main").unwrap();
+        assert_eq!(batches[0].remaining, 1);
+        assert!(batches[0].undone_at.is_none());
     }
 
     #[test]

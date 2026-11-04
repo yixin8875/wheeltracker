@@ -29,7 +29,7 @@ export function AccountingPreferences({ settings, onSaved }: { settings: Account
   </section>;
 }
 
-export function CampaignTimeline({ events }: { events: EventRow[] }) {
+export function CampaignTimeline({ events, onUndo }: { events: EventRow[]; onUndo?: (id: string) => void }) {
   return <section className="panel">
     <div className="section-heading"><h2>战役事件时间轴</h2><span className="muted">{events.length} 笔交易 · 按交易日期排序</span></div>
     {!events.length ? <p className="empty">本轮暂无交易事件。</p> : <ol className="event-timeline">{events.map(event => {
@@ -41,6 +41,7 @@ export function CampaignTimeline({ events }: { events: EventRow[] }) {
         <div className="timeline-event"><strong>{labels[event.kind] ?? event.kind}</strong><span>{event.symbol}{option && ` ${event.expiry} ${event.strike}${event.right}`}</span>
           <p className="muted">{split ? `${event.splitNumerator} : ${event.splitDenominator}${event.splitCashInLieu != null ? ` · 零股补偿 ${money(event.splitCashInLieu)}` : ''}` : ['fee', 'adjustment'].includes(event.kind) ? money(event.amount) : `${event.qty} ${option ? '手' : '股'}`}{priced && ` · 每股 ${money(event.price)}`}{event.fees > 0 && ` · 费用 ${money(event.fees)}`}</p>
           {event.note && <p className="timeline-note">{event.note}</p>}
+          {onUndo && <button className="text-button timeline-undo" onClick={() => onUndo(event.id)}>撤销</button>}
         </div>
       </li>;
     })}</ol>}

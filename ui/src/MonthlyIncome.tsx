@@ -81,7 +81,7 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
 
   return <section className="panel">
     <div className="section-heading">
-      <div><h2><TrendingUp size={18}/> 收租月报</h2><span className="muted">已落袋口径 · UTC 月份</span></div>
+      <div><h2><TrendingUp size={18}/> 收租月报</h2><span className="muted">已落袋口径 · 美东交易日按月</span></div>
       <div className="toolbar">
         <label className="inline-select">年份<select aria-label="选择年份" value={year} onChange={event => setYear(event.target.value)}><option value="all">全部年份</option>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <button onClick={exportRows} disabled={!rows.length}>导出 CSV</button>

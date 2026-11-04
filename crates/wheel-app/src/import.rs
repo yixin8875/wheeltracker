@@ -174,6 +174,41 @@ pub struct ImportSummary {
     pub account_id: String,
     pub note_prefix: String,
     pub duplicate_count: usize,
+    /// `None` when the batch metadata could not be persisted after the events
+    /// were already committed; the import itself still succeeded.
+    pub batch_id: Option<String>,
+    pub batch_saved: bool,
+}
+
+/// A single import run, stored as JSON under a `settings` key so that a whole
+/// batch can be undone later without changing the database schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatch {
+    pub id: String,
+    pub account_id: String,
+    pub origin: String,
+    pub note_prefix: String,
+    pub created_at: String,
+    pub imported: usize,
+    pub event_ids: Vec<String>,
+    #[serde(default)]
+    pub undone_at: Option<String>,
+    #[serde(default)]
+    pub undone_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatchView {
+    pub id: String,
+    pub origin: String,
+    pub created_at: String,
+    pub imported: usize,
+    /// Events from this batch that are still active in the ledger.
+    pub remaining: usize,
+    pub undone_at: Option<String>,
+    pub undone_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1291,6 +1326,36 @@ pub fn build_preview(
         rows.push(row);
     }
 
+    let mut warnings = document.warnings.clone();
+    // Reports are committed in file order within a date. A same-day roll must
+    // close the old contract before opening the new one, so call that out
+    // before the user commits a file whose rows are the other way around.
+    let mut same_day: BTreeMap<(&str, &str), (bool, bool)> = BTreeMap::new();
+    for row in &rows {
+        let Some(event) = row.event.as_ref() else {
+            continue;
+        };
+        let flags = same_day
+            .entry((event.date.as_str(), event.symbol.as_str()))
+            .or_default();
+        if matches!(
+            event.kind.as_str(),
+            "option_close" | "option_expire" | "option_assign" | "shares_sell"
+        ) {
+            flags.0 = true;
+        }
+        if matches!(event.kind.as_str(), "option_open_short" | "shares_buy") {
+            flags.1 = true;
+        }
+    }
+    for ((date, symbol), (closes, opens)) in same_day {
+        if closes && opens {
+            warnings.push(format!(
+                "检测到 {symbol} 在 {date} 同日既有平仓/卖出又有开仓/买入：提交时按文件行序入账，请确认先平后开。"
+            ));
+        }
+    }
+
     ImportPreview {
         headers: document.headers.clone(),
         signature: document.signature.clone(),
@@ -1300,7 +1365,7 @@ pub fn build_preview(
         mapping_source: mapping_source.to_string(),
         rows,
         counts,
-        warnings: document.warnings.clone(),
+        warnings,
     }
 }
 
@@ -1333,6 +1398,7 @@ fn fingerprint(
     qty: u32,
     price: f64,
     fees: f64,
+    amount: f64,
 ) -> String {
     let mut parts = vec![
         account.to_string(),
@@ -1346,9 +1412,16 @@ fn fingerprint(
         canonical_number(price),
         canonical_number(fees),
     ];
-    // Keep fingerprints written before multiplier support identical.
+    // Keep fingerprints written before multiplier and amount support identical.
     if multiplier != 100 {
         parts.push(format!("m{multiplier}"));
+    }
+    // Fee and adjustment events carry their real value in `amount`; without it
+    // two same-day fees for the same symbol would look like duplicates. Other
+    // kinds ignore `amount` when stored, so including it there would stop an
+    // otherwise identical option/share row from being detected as a duplicate.
+    if matches!(kind, "fee" | "adjustment") && amount != 0.0 {
+        parts.push(format!("a{}", canonical_number(amount)));
     }
     let payload = parts.join("\u{1f}");
     format!("{:016x}", fnv1a(payload.as_bytes()))
@@ -1367,6 +1440,7 @@ pub fn fingerprint_candidate(event: &CandidateEvent, account: &str) -> String {
         event.qty,
         event.price,
         event.fees,
+        event.amount,
     )
 }
 
@@ -1394,6 +1468,7 @@ pub fn fingerprint_existing(event: &Event) -> String {
         event.qty,
         event.price,
         event.fees,
+        event.amount,
     )
 }
 
@@ -1714,6 +1789,53 @@ mod tests {
             fingerprint_candidate(&candidate, "main"),
             fingerprint_existing(&event)
         );
+    }
+
+    #[test]
+    fn fingerprint_includes_amount_so_same_day_fees_are_distinct() {
+        let fee = |amount: f64| CandidateEvent {
+            date: "2026-01-02".to_string(),
+            kind: "fee".to_string(),
+            symbol: "AAPL".to_string(),
+            qty: 0,
+            price: 0.0,
+            fees: 0.0,
+            amount,
+            expiry: None,
+            strike: None,
+            right: None,
+            multiplier: 100,
+            note: None,
+        };
+        let first = fee(2.0);
+        let second = fee(3.0);
+        assert_ne!(
+            fingerprint_candidate(&first, "main"),
+            fingerprint_candidate(&second, "main")
+        );
+        let event = Event::fee("main", "e1", 1, date!(2026 - 01 - 02), "AAPL", 2.0);
+        assert_eq!(
+            fingerprint_candidate(&first, "main"),
+            fingerprint_existing(&event)
+        );
+    }
+
+    #[test]
+    fn preview_warns_when_same_day_close_precedes_open_order_matters() {
+        let document = parse_document(
+            "日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n\
+             2026-01-02,Sell to Open,AAPL,1,2.00,0,2026-02-20,150,P\n\
+             2026-01-02,Buy to Close,AAPL,1,1.00,0,2026-02-20,150,P\n",
+            None,
+            None,
+        )
+        .unwrap();
+        let (mapping, _) = auto_map(&document.headers);
+        let preview = build_preview(&document, mapping, "detected", "main", &BTreeSet::new());
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("先平后开")));
     }
 
     #[test]

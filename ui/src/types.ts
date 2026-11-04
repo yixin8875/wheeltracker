@@ -67,4 +67,5 @@ export type RowStatus = 'ok' | 'warning' | 'duplicate' | 'error';
 export interface CandidateRow { rowNumber: number; line: number; status: RowStatus; messages: string[]; cells: string[]; raw: string; event: CandidateEvent | null; selectedByDefault: boolean }
 export interface ImportCounts { total: number; ok: number; warning: number; duplicate: number; error: number; selected: number }
 export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'vision'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
-export interface ImportSummary { imported: number; eventIds: string[]; accountId: string; notePrefix: string; duplicateCount: number }
+export interface ImportSummary { imported: number; eventIds: string[]; accountId: string; notePrefix: string; duplicateCount: number; batchId: string | null; batchSaved: boolean }
+export interface ImportBatch { id: string; origin: string; createdAt: string; imported: number; remaining: number; undoneAt: string | null; undoneCount: number }

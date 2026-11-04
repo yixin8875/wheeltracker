@@ -1,10 +1,12 @@
-import { useMemo, useState, type ClipboardEvent } from 'react';
+import { useEffect, useMemo, useState, type ClipboardEvent } from 'react';
 import { ArrowLeft, Check, Clipboard, Upload } from 'lucide-react';
 import { decodeCsvFile } from './csv';
-import { api, desktop, labels, money } from './lib';
+import { api, desktop, labels } from './lib';
 import type {
+  CandidateEvent,
   CandidateRow,
   ColumnMapping,
+  ImportBatch,
   ImportDateFormat,
   ImportDelimiter,
   ImportField,
@@ -68,6 +70,7 @@ const FIELDS: { id: ImportField; label: string }[] = [
 ];
 
 const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment'];
+const OPTION_KINDS = new Set(['option_open_short', 'option_close', 'option_expire', 'option_assign']);
 
 const STATUS: Record<CandidateRow['status'], string> = {
   ok: '可导入',
@@ -99,19 +102,42 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping | null>(null);
   const [selection, setSelection] = useState<Record<number, boolean>>({});
-  const [overrides, setOverrides] = useState<Record<number, string>>({});
+  const [edits, setEdits] = useState<Record<number, Partial<CandidateEvent>>>({});
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [pendingImage, setPendingImage] = useState<File | null>(null);
+  const [pendingImageUrl, setPendingImageUrl] = useState('');
+  const [batches, setBatches] = useState<ImportBatch[]>([]);
+  const [batchError, setBatchError] = useState('');
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [pendingBatch, setPendingBatch] = useState<ImportBatch | null>(null);
+
+  useEffect(() => () => {
+    if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
+  }, [pendingImageUrl]);
+
+  useEffect(() => {
+    reset();
+    void loadBatches();
+    // The account switch replaces the whole import context.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
 
   const rows = useMemo<CandidateRow[]>(
     () =>
       (preview?.rows ?? []).map(row => {
-        const kind = overrides[row.rowNumber];
-        return kind && row.event ? { ...row, event: { ...row.event, kind } } : row;
+        const edit = edits[row.rowNumber];
+        if (!edit || !row.event) return row;
+        return {
+          ...row,
+          status: 'warning' as const,
+          messages: ['已手动修改，提交时会重新校验。'],
+          event: { ...row.event, ...edit },
+        };
       }),
-    [preview, overrides]
+    [preview, edits]
   );
   const selectedRows = rows.filter(row => row.event && selection[row.rowNumber]);
   const duplicateSelected = selectedRows.filter(row => row.status === 'duplicate').length;
@@ -125,7 +151,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setPreview(result);
     setMapping(result.mapping);
     setSelection(initial);
-    setOverrides({});
+    setEdits({});
     setAllowDuplicates(false);
     setStep(nextStep);
   }
@@ -176,7 +202,13 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     void runPreview(paste);
   }
 
-  async function chooseImage(file: File | undefined) {
+  function clearPendingImage() {
+    setPendingImage(null);
+    setPendingImageUrl('');
+    setImageName('');
+  }
+
+  function stageImage(file: File | undefined) {
     if (!file) return;
     if (!desktop) {
       setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
@@ -191,10 +223,24 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
       setError('截图超过 5 MB 上限，请裁剪或压缩后再试。');
       return;
     }
+    setError('');
+    setInfo('');
+    setPendingImage(file);
+    setPendingImageUrl(URL.createObjectURL(file));
+    setImageName(file.name);
+  }
+
+  async function uploadPendingImage() {
+    if (!pendingImage || busy) return;
+    const file = pendingImage;
+    const mime = imageMime(file);
+    if (!mime) {
+      setError('仅支持 PNG、JPEG、WebP 或 GIF 截图。');
+      return;
+    }
     setBusy(true);
     setError('');
     setInfo('');
-    setImageName(file.name);
     try {
       const dataUrl = await readAsDataUrl(file);
       const data = dataUrl.split(',')[1] ?? '';
@@ -204,6 +250,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
       setOrigin('AI 截图');
       applyPreview(result, 'review');
       setInfo('识别完成。模型可能看错或漏行，请逐行核对日期、数量、价格与合约后再提交。');
+      clearPendingImage();
     } catch (failure) {
       setError(String(failure));
     } finally {
@@ -222,7 +269,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
         if (!type) continue;
         const blob = await item.getType(type);
         const extension = type.split('/')[1] ?? 'png';
-        await chooseImage(new File([blob], `clipboard.${extension}`, { type }));
+        stageImage(new File([blob], `clipboard.${extension}`, { type }));
         return;
       }
       setError('剪贴板中没有图片。');
@@ -236,7 +283,40 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     const file = item?.getAsFile();
     if (!file) return;
     event.preventDefault();
-    void chooseImage(file);
+    stageImage(file);
+  }
+
+  function updateEvent(rowNumber: number, patch: Partial<CandidateEvent>) {
+    setEdits(current => ({
+      ...current,
+      [rowNumber]: { ...current[rowNumber], ...patch },
+    }));
+  }
+
+  function changeKind(row: CandidateRow, kind: string) {
+    if (!row.event) return;
+    const patch: Partial<CandidateEvent> = { kind };
+    const option = OPTION_KINDS.has(kind);
+    if (!option) {
+      patch.expiry = null;
+      patch.strike = null;
+      patch.right = null;
+      patch.multiplier = 100;
+    }
+    if (kind === 'fee' || kind === 'adjustment') {
+      patch.qty = 0;
+      patch.price = 0;
+    }
+    if (kind === 'option_expire' || kind === 'option_assign') {
+      patch.price = 0;
+      patch.amount = 0;
+    }
+    updateEvent(row.rowNumber, patch);
+  }
+
+  function numberValue(raw: string, fallback = 0) {
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
   }
 
   function updateField(field: ImportField, raw: string) {
@@ -291,11 +371,47 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
         }
       });
       reset();
-      onCommitted(`已导入 ${summary.imported} 笔交易，账本已重算。`);
+      const message = summary.batchSaved
+        ? `已导入 ${summary.imported} 笔交易，账本已重算；可在“最近导入”整批撤销。`
+        : `已导入 ${summary.imported} 笔交易，账本已重算；批次记录未保存，无法整批撤销。`;
+      onCommitted(message);
+      void loadBatches();
     } catch (failure) {
       setError(String(failure));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadBatches() {
+    if (!desktop) return;
+    setBatchBusy(true);
+    setBatchError('');
+    try {
+      setBatches(await api<ImportBatch[]>('list_import_batches', { accountId }));
+    } catch (failure) {
+      setBatchError(String(failure));
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function undoBatch() {
+    if (!pendingBatch || batchBusy) return;
+    setBatchBusy(true);
+    setBatchError('');
+    try {
+      const result = await api<ImportBatch>('undo_import_batch', { batchId: pendingBatch.id });
+      setBatches(current => current.map(item => (item.id === result.id ? result : item)));
+      setPendingBatch(null);
+      const message = `已整批撤销 ${result.undoneCount} 笔交易，账本已重算。`;
+      setInfo(message);
+      onCommitted(message);
+    } catch (failure) {
+      setBatchError(String(failure));
+      setPendingBatch(null);
+    } finally {
+      setBatchBusy(false);
     }
   }
 
@@ -306,7 +422,8 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setPreview(null);
     setMapping(null);
     setSelection({});
-    setOverrides({});
+    setEdits({});
+    clearPendingImage();
     setError('');
     setInfo('');
   }
@@ -317,12 +434,12 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setFileName('');
     setEncoding('');
     setEncodingWarning('');
-    setImageName('');
     setOrigin('');
     setPreview(null);
     setMapping(null);
     setSelection({});
-    setOverrides({});
+    setEdits({});
+    clearPendingImage();
     setAllowDuplicates(false);
     setError('');
     setInfo('');
@@ -427,7 +544,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                   disabled={!desktop || busy}
                   onChange={event => {
                     const file = event.target.files?.[0];
-                    void chooseImage(file);
+                    stageImage(file);
                     event.target.value = '';
                   }}
                 />
@@ -447,6 +564,19 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                 <p>图片可能包含账户、持仓与交易信息。请只使用你信任的服务，并确认已在设置 → AI 识别中启用。</p>
                 <p>模型可能看错、漏行或把相似字符混淆。识别结果只是草稿，必须逐行核对后才能提交。</p>
               </div>
+              {pendingImage && (
+                <div className="alert warning vision-confirm" role="status">
+                  <strong>确认上传 “{imageName}”？</strong>
+                  <img src={pendingImageUrl} alt="待上传截图预览" className="vision-thumb"/>
+                  <p>目标服务：设置 → AI 识别中配置的 OpenAI 兼容视觉服务。文件大小约 {Math.max(1, Math.ceil(pendingImage.size / 1024))} KB。</p>
+                  <div className="toolbar">
+                    <button onClick={clearPendingImage} disabled={busy}>取消上传</button>
+                    <button className="primary" onClick={() => void uploadPendingImage()} disabled={busy}>
+                      {busy ? '正在识别…' : '确认上传并识别'}
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="form-actions">
                 <button onClick={reset} disabled={busy}>清空</button>
                 <button onClick={() => void readClipboardImage()} disabled={!desktop || busy}>从剪贴板读取</button>
@@ -455,11 +585,64 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                 )}
               </div>
               <p className="muted import-meta">
-                选择截图后会自动上传并识别，随后直接进入逐行确认；不会自动入账。
+                选择截图后先显示预览；只有点击“确认上传并识别”才会发送，识别结果不会自动入账。
               </p>
             </>
           )}
         </section>
+      )}
+
+      {step === 'source' && (
+        <section className="panel import-batches">
+          <div className="section-heading">
+            <div>
+              <h2>最近导入</h2>
+              <span className="muted">整批撤销会重算账本；原始记录仍保留在数据库中</span>
+            </div>
+            <button onClick={() => void loadBatches()} disabled={batchBusy}>刷新</button>
+          </div>
+          {batchError && <p className="negative" role="alert">{batchError}</p>}
+          {!batches.length ? <p className="empty">还没有导入批次。</p> : (
+            <div className="table-wrap"><table>
+              <thead><tr><th>批次</th><th>来源</th><th>时间（UTC）</th><th>导入</th><th>剩余</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>{batches.map(batch => {
+                const status = batch.undoneAt ? '已整批撤销' : batch.remaining === 0 ? '已全部逐笔撤销' : '可撤销';
+                return <tr key={batch.id}>
+                  <td><code>{batch.id}</code></td>
+                  <td>{batch.origin}</td>
+                  <td>{batch.createdAt.replace(' +00:00', ' UTC')}</td>
+                  <td>{batch.imported}</td>
+                  <td>{batch.remaining}</td>
+                  <td>{status}</td>
+                  <td>
+                    <button
+                      className="danger"
+                      disabled={batchBusy || Boolean(batch.undoneAt) || batch.remaining === 0}
+                      onClick={() => setPendingBatch(batch)}
+                    >
+                      整批撤销
+                    </button>
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table></div>
+          )}
+        </section>
+      )}
+
+      {pendingBatch && (
+        <div className="modal-backdrop">
+          <section role="dialog" aria-modal="true" aria-labelledby="batch-undo-title" className="modal">
+            <h2 id="batch-undo-title">确认整批撤销？</h2>
+            <p>将撤销批次 <strong>{pendingBatch.id.slice(-12)}</strong> 中仍有效的 {pendingBatch.remaining} 笔交易，并重算持仓与成本。如果后续交易依赖其中记录，系统会拒绝并保持原账本不变。原始记录仍保留在数据库中。</p>
+            <div className="toolbar">
+              <button autoFocus disabled={batchBusy} onClick={() => setPendingBatch(null)}>取消</button>
+              <button className="danger" disabled={batchBusy} onClick={() => void undoBatch()}>
+                {batchBusy ? '正在撤销…' : '确认整批撤销'}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {step === 'map' && preview && mapping && (
@@ -566,7 +749,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
               <thead>
                 <tr>
                   <th>选择</th><th>行</th><th>状态</th><th>类型</th><th>日期</th>
-                  <th>标的 / 合约</th><th>数量</th><th>价格</th><th>费用</th><th>说明</th>
+                  <th>标的 / 合约</th><th>数量</th><th>价格</th><th>费用</th><th>金额</th><th>说明</th>
                 </tr>
               </thead>
               <tbody>
@@ -587,26 +770,135 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                       <select
                         aria-label={`第 ${row.rowNumber} 行类型`}
                         value={row.event?.kind ?? ''}
-                        disabled={!row.event}
-                        onChange={event => setOverrides(current => ({ ...current, [row.rowNumber]: event.target.value }))}
+                        disabled={!row.event || busy}
+                        onChange={event => changeKind(row, event.target.value)}
                       >
                         {!row.event && <option value="">—</option>}
                         {KINDS.map(kind => <option key={kind} value={kind}>{labels[kind]}</option>)}
                       </select>
                     </td>
-                    <td>{row.event?.date ?? '—'}</td>
                     <td>
                       {row.event ? (
-                        <>
-                          {row.event.symbol}
-                          {row.event.expiry && <small className="muted"> {row.event.expiry} {row.event.strike}{row.event.right}</small>}
-                          {row.event.multiplier !== 100 && <small className="muted"> · {row.event.multiplier} 股/手</small>}
-                        </>
+                        <input
+                          type="date"
+                          className="import-cell-input"
+                          aria-label={`第 ${row.rowNumber} 行日期`}
+                          value={row.event.date}
+                          disabled={busy}
+                          onChange={event => updateEvent(row.rowNumber, { date: event.target.value })}
+                        />
                       ) : '—'}
                     </td>
-                    <td>{row.event?.qty ?? '—'}</td>
-                    <td>{row.event ? money(row.event.price) : '—'}</td>
-                    <td>{row.event ? money(row.event.fees) : '—'}</td>
+                    <td>
+                      {row.event ? (
+                        <div className="import-contract">
+                          <input
+                            type="text"
+                            className="import-cell-input"
+                            aria-label={`第 ${row.rowNumber} 行标的`}
+                            value={row.event.symbol}
+                            disabled={busy}
+                            onChange={event => updateEvent(row.rowNumber, { symbol: event.target.value })}
+                          />
+                          {OPTION_KINDS.has(row.event.kind) && <>
+                            <input
+                              type="date"
+                              className="import-cell-input"
+                              aria-label={`第 ${row.rowNumber} 行到期日`}
+                              value={row.event.expiry ?? ''}
+                              disabled={busy}
+                              onChange={event => updateEvent(row.rowNumber, { expiry: event.target.value || null })}
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              className="import-cell-input import-number"
+                              aria-label={`第 ${row.rowNumber} 行行权价`}
+                              value={row.event.strike ?? ''}
+                              disabled={busy}
+                              onChange={event => updateEvent(row.rowNumber, { strike: event.target.value === '' ? null : numberValue(event.target.value) })}
+                            />
+                            <select
+                              className="import-cell-input"
+                              aria-label={`第 ${row.rowNumber} 行看涨看跌`}
+                              value={row.event.right ?? ''}
+                              disabled={busy}
+                              onChange={event => updateEvent(row.rowNumber, { right: event.target.value || null })}
+                            >
+                              <option value="">—</option>
+                              <option value="P">Put</option>
+                              <option value="C">Call</option>
+                            </select>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              className="import-cell-input import-number"
+                              aria-label={`第 ${row.rowNumber} 行乘数`}
+                              value={row.event.multiplier}
+                              disabled={busy}
+                              onChange={event => updateEvent(row.rowNumber, { multiplier: Math.max(1, Math.trunc(numberValue(event.target.value, 1))) })}
+                            />
+                          </>}
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td>
+                      {row.event ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="import-cell-input import-number"
+                          aria-label={`第 ${row.rowNumber} 行数量`}
+                          value={row.event.qty}
+                          disabled={busy}
+                          onChange={event => updateEvent(row.rowNumber, { qty: Math.max(0, Math.trunc(numberValue(event.target.value))) })}
+                        />
+                      ) : '—'}
+                    </td>
+                    <td>
+                      {row.event ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="import-cell-input import-number"
+                          aria-label={`第 ${row.rowNumber} 行价格`}
+                          value={row.event.price}
+                          disabled={busy}
+                          onChange={event => updateEvent(row.rowNumber, { price: numberValue(event.target.value) })}
+                        />
+                      ) : '—'}
+                    </td>
+                    <td>
+                      {row.event ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="import-cell-input import-number"
+                          aria-label={`第 ${row.rowNumber} 行费用`}
+                          value={row.event.fees}
+                          disabled={busy}
+                          onChange={event => updateEvent(row.rowNumber, { fees: numberValue(event.target.value) })}
+                        />
+                      ) : '—'}
+                    </td>
+                    <td>
+                      {row.event ? (
+                        <input
+                          type="number"
+                          step="any"
+                          className="import-cell-input import-number"
+                          aria-label={`第 ${row.rowNumber} 行金额`}
+                          value={row.event.amount}
+                          disabled={busy}
+                          onChange={event => updateEvent(row.rowNumber, { amount: numberValue(event.target.value) })}
+                        />
+                      ) : '—'}
+                    </td>
                     <td className="import-message">{row.messages.length ? row.messages.join(' ') : row.raw}</td>
                   </tr>
                 ))}

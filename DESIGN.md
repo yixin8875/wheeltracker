@@ -630,7 +630,7 @@ add_event(req: NewEventReq) -> EventId
 delete_event(event_id) -> ()          // 软删除 + 重建
 rebuild_all(account_id) -> RebuildReport
 list_ledger(filter: LedgerFilter) -> LedgerPage
-monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按 UTC 月份
+monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按美东交易日月份
 list_positions(account_id) -> PositionsView
 preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
 import_preview(req: ImportPreviewReq) -> ImportPreview
@@ -653,7 +653,7 @@ restore_status() -> RestoreStatus
 ### 8.5 P3 体验闭环
 
 - **到期提醒**：前端由 `positions.daysLeft` 与 `settings.reminderLeadDays` 推导；`<0` 过期，`<=min(3, lead)` 紧急，`<=lead` 即将到期。侧栏徽标、仪表盘卡片、日历共用同一口径，不注册系统通知。
-- **到期日历**：纯 `Date.UTC` 的周一起始 42 格月历；选中日列出合约，顶部汇总未来 30 天。账本日期统一使用后端 UTC `asOf`。
+- **到期日历**：周一起始的 42 格月历（网格用 `Date.UTC` 仅作无时区日期运算）；选中日列出合约，顶部汇总未来 30 天。账本日期统一使用后端的**美东交易日** `asOf`。
 - **战役对比**：按战役聚合，已实现收益 = `realizedPnl`（回退为权利金 + 分红 + 股票盈亏 + 现金调整）；峰值投入取逐日「未平仓 Put 占用资金 + 当日持股纯股票成本」的最大值；收益率为两者之比，投入为 0 时留空。进行中战役不含未平仓权利金与股票浮盈亏。
 - **Excel**：`ui/src/xlsx.ts` 手写 STORE-only ZIP 与 OOXML（CRC32、UTF-8 文件名、inlineStr、冻结首行、金额/百分比 `numFmt`），不引入依赖、不生成 `<f>` 公式；`export.ts` 组装台账、交易记录、持仓、战役四表。
 - **自动备份**：应用启动及后台线程每 30 分钟读取 UTC 日期，`lastAutoBackupDay` 相同则跳过；恢复 marker 存在时跳过。成功生成 `auto-*.sqlite` 后更新日期，再按 `autoBackupKeep` 清理旧自动备份；手动备份与 `pre-restore-*` 不受影响。
@@ -684,7 +684,7 @@ restore_status() -> RestoreStatus
 - **创建**：仅手动备份支持加密。先 `VACUUM INTO` 生成普通快照，读入内存加密后原子替换为 `.sqlite.enc`，随后删除明文快照；任何一步失败都清理中间文件。自动备份与 `pre-restore-*` 安全快照保持普通 SQLite。
 - **校验**：`validate_backup` 对加密文件先在备份目录解密到临时文件，再做 `integrity_check` 与必需表/列检查，完成后删除临时文件。
 - **恢复**：暂存时解密到 `restore/staged-<stamp>.sqlite` 并校验，marker 升级为 version 2 并记录 `stagedFile`；下次启动 `apply_pending` 直接使用该副本，替换成功或失败后都删除明文副本，加密备份本身保留。version 1 marker 继续按原路径恢复。
-- **JSON 导出**：`export_json` 输出 `wheel-export` version 1 文档，包含所有账户（含仅存在于事件表的账户 ID）、全部未删除事件（`occurredAt` 为 `YYYY-MM-DD` UTC）、报价与设置；事件按日期、账户、seq 排序。JSON 仅供查看与迁移，不能替代 SQLite 快照恢复。
+- **JSON 导出**：`export_json` 输出 `wheel-export` version 1 文档，包含所有账户（含仅存在于事件表的账户 ID）、全部未删除事件（`occurredAt` 为 `YYYY-MM-DD` 美东交易日）、报价与设置；事件按日期、账户、seq 排序。JSON 仅供查看与迁移，不能替代 SQLite 快照恢复。
 
 ### 8.9 P4 拆股与合约乘数
 
@@ -707,10 +707,10 @@ restore_status() -> RestoreStatus
 
 ### 8.11 P5 发布工程
 
-- **版本单一来源**：workspace `Cargo.toml` 为 `0.3.0`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
+- **版本单一来源**：workspace `Cargo.toml` 为 `0.4.1`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
 - **安装包**：Tauri `bundle.targets = ["nsis"]`，`installMode = currentUser`，简体中文 / English 语言选择，开始菜单 `Wheel Tracker`，lzma 压缩；`licenseFile` 指向 MIT `LICENSE`，并设置 publisher / copyright / Finance 分类 / 中英文描述。
 - **CSP**：生产 `default-src 'self'`，`connect-src` 仅 `ipc:` 与 `http://ipc.localhost`，图片允许 `data:` / `blob:`，样式允许内联；`devCsp` 额外放行 Vite 的 `127.0.0.1:1420` HTTP / WebSocket 与开发期内联脚本。
-- **数据库保护**：当前 schema `user_version = 2`；更高版本数据库拒绝打开；备份校验同样拒绝 `user_version > 2` 的快照并提示升级应用，避免旧版破坏新数据。
+- **数据库保护**：当前 schema `user_version = 3`；更高版本数据库拒绝打开；备份校验同样拒绝更高版本快照并提示升级应用，避免旧版破坏新数据。
 - **发布产物**：`scripts/release.py` 依次执行版本检查、`cargo test --workspace`、clippy、前端构建与 NSIS 打包，然后在 `dist/release/` 写出 `<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（产品、版本、git 提交、UTC 构建时间、目标三元组、文件名、大小、SHA-256、`signing: "unsigned"`、`updater: "not-configured"`）。产物目录不纳入版本控制。
 - **自动化**：`.github/workflows/windows-ci.yml` 在 push / PR / 手动触发时运行 Rust 测试、clippy 与前端构建；Playwright 依赖 Edge 与开发服务器，暂为本地 / 人工门禁。安装、覆盖升级、卸载与 CSP 冒烟见 `docs/release-checklist.md`。
 - **边界**：不做代码签名、自动更新、单实例、日志上传或崩溃上报；安装包未签名，SmartScreen 提示写入发布说明。
@@ -728,7 +728,7 @@ trait ImportAdapter {
 struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 ```
 
-**任何导入结果都必须经过人工确认页**，可逐条改、可丢弃，确认后才写库。
+**任何导入结果都必须经过人工确认页**，可逐行修改日期、类型、标的、数量、价格、费用、合约与乘数，可丢弃，确认后才写库；每次提交生成批次 ID，支持整批撤销。
 
 ### 9.1 手工录入
 
@@ -756,9 +756,11 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 - **日期**：`YYYY-MM-DD`、`YYYY/M/D`、`YYYY年M月D日` 规范化为 `YYYY-MM-DD`；`M/D/YYYY` 按美式解析并显式提示。
 - **类型**：STO / BTC / 到期 / 指派 / 买卖股票 / 分红 / 费用 / 调整；做多期权（Buy to Open、Sell to Close）明确拒绝，不静默归类。
 - **映射持久化**：表头顺序敏感签名，保存于 `settings` 的 `importMapping:v1:<signature>`。
-- **去重**：账户 + 日期 + 类型 + 标的 + 到期 + 行权价 + C/P + 数量 + 价格 + 费用，数值规范到 6 位小数；重复行默认不勾选，提交时在互斥锁内重查。
-- **提交**：按 `(日期, 文件行号)` 稳定排序，复用 `append_requests` 的单一事务重放；任一行非法整批回滚；备注前缀 `导入:<来源>`。
-- **预览边界**：预览只读，不做逐行持仓模拟；平仓/指派缺少持仓等跨行错误在提交重放时拒绝整批。
+- **行内编辑**：确认页可修改日期、标的、合约字段、数量、价格、费用与金额；修改过的行重新校验并标记「已手动修改」，提交时仍由后端完整重放。
+- **去重**：账户 + 日期 + 类型 + 标的 + 到期 + 行权价 + C/P + 乘数 + 数量 + 价格 + 费用；费用与现金调整额外包含 `amount`，数值规范到 6 位小数；重复行默认不勾选，提交时在互斥锁内重查。
+- **提交**：按 `(日期, 文件行号)` 稳定排序，复用 `append_requests` 的单一事务重放；任一行非法整批回滚；备注前缀 `导入:<来源>`。返回批次 ID，批次元数据存于 `settings` 的 `importBatch:v1:<id>` 与账户索引 `importBatchIndex:v1:<account>`，不新增 schema。
+- **整批撤销**：批次撤销复用 `delete_events`；先校验剩余历史可重放，再原子软删除整批事件。若后续交易依赖该批次，拒绝撤销并提示先撤销后面的平仓、卖出或拆股。
+- **预览边界**：预览只读，不做逐行持仓模拟；同日同标的平仓 / 开仓混排时提示「先平后开」，平仓/指派缺少持仓等跨行错误在提交重放时拒绝整批。
 
 ---
 
@@ -771,7 +773,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图识别（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
 | **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
-| **P5 发布** ✅ | 版本统一 0.3.0、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI | 可分发安装包 | 已完成（不签名、不自动更新） |
+| **P5 发布** ✅ | 版本统一 0.4.1、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI | 可分发安装包 | 已完成（不签名、不自动更新） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

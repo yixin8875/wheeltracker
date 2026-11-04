@@ -23,7 +23,7 @@
 
 ## 口径
 
-- 净收租：已了结期权行的 `net_premium`，按 `closed_at` 的 UTC 年 / 月入账。
+- 净收租：已了结期权行的 `net_premium`，按 `closed_at` 的美东交易日年 / 月入账。
 - 股票已实现盈亏：`DerivedState.event_share_pnl`，按卖出、Call 指派或拆股零股补偿的事件日入账；Put 指派买入股票不计盈亏。
 - 分红：`event_dividends`，按事件日入账；费用与现金调整取 `amount`，按事件日入账。
 - 合计 = 净收租 + 股票已实现盈亏 + 分红 − 费用 + 现金调整。

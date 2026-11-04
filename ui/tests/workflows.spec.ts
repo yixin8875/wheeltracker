@@ -34,8 +34,8 @@ async function setup(page: Page) {
           if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
           return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
-        case 'positions': return [{ ...position, multiplier: state.testMultiplier ?? position.multiplier }];
-        case 'list_events': return [...(state.testSplit ? [splitEvent] : []), { id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
+        case 'positions': return [...(state.testExtraPositions ?? []), { ...position, multiplier: state.testMultiplier ?? position.multiplier }];
+        case 'list_events': return [...(state.testExtraEvents ?? []), ...(state.testSplit ? [splitEvent] : []), { id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
         case 'monthly_income': return state.testMonthly ?? {
           months: [
             { month: '2025-12', premium: 50, dividends: 0, fees: 0, adjustments: 0, total: 50, cumulative: 50, closedEntries: 1 },
@@ -156,6 +156,9 @@ async function setup(page: Page) {
           return 'saved';
         }
         case 'add_events': return ['close', 'open'];
+        case 'delete_event':
+          if (state.testRejectDelete) throw new Error('deletion would invalidate event history');
+          return true;
         case 'backup_now': return args.password ? 'test-only/backups/snapshot.sqlite.enc' : 'test-only/backups/snapshot.sqlite';
         case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.4.1', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
         case 'rebuild': return { events: 1, campaigns: 1, entries: 1, issues: [] };
@@ -172,7 +175,16 @@ async function setup(page: Page) {
             counts: { total: 4, ok: 1, warning: 1, duplicate: 1, error: 1, selected: 2 },
             warnings: ['已自动识别 5 个字段；请确认列映射后再导入。'] };
         }
-        case 'import_commit': return { imported: (args.req as any).rows.length, eventIds: (args.req as any).rows.map((row: any) => `import-${row.rowNumber}`), accountId: 'main', notePrefix: '导入:粘贴文本', duplicateCount: 1 };
+        case 'import_commit': return { imported: (args.req as any).rows.length, eventIds: (args.req as any).rows.map((row: any) => `import-${row.rowNumber}`), accountId: 'main', notePrefix: '导入:粘贴文本', duplicateCount: 1, batchId: 'batch-import-1', batchSaved: true };
+        case 'list_import_batches': return [...(state.testImportBatches ?? [])];
+        case 'undo_import_batch': {
+          const batch = (state.testImportBatches ?? []).find((item: any) => item.id === args.batchId);
+          if (!batch) throw new Error('导入批次不存在或已被清理。');
+          batch.undoneAt = '2026-11-04 09:00:00 +00:00';
+          batch.undoneCount = batch.remaining;
+          batch.remaining = 0;
+          return { ...batch };
+        }
         case 'import_save_mapping': return true;
         case 'get_vision_settings': return { ...state.testVision };
         case 'set_vision_settings': {
@@ -297,6 +309,8 @@ test('manual price fallback and settings responsibilities are separate', async (
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByLabel('分红计入有效成本')).toBeVisible();
   await expect(page.getByRole('heading', { name: '交易事件日志' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '交易记录', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '收租台账', exact: true }).click();
   await page.getByRole('button', { name: '交易记录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '交易事件日志' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: '校准标的' })).toHaveCount(0);
@@ -329,9 +343,46 @@ test('failed write retains values and permits correction', async ({ page }) => {
   await expect(page.getByRole('alert')).toContainText('insufficient shares'); await expect(page.getByLabel('标的代码')).toHaveValue('TEST');
   await expect(page.getByRole('button', { name: '保存交易', exact: true })).toBeEnabled();
 });
+test('put and call assignment previews show cash and post-assignment holdings', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testExtraPositions = [{ campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20' }];
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await page.getByLabel('交易类型').selectOption('option_assign');
+  await page.getByLabel('选择当前持仓').selectOption('0');
+  const preview = page.locator('.assignment-preview');
+  await expect(preview.getByRole('heading', { name: '指派预览' })).toBeVisible();
+  await expect(preview).toContainText('指派后持股');
+  await expect(preview).toContainText('200 股');
+  await expect(preview).toContainText('指派后成本 A');
+  await expect(preview).toContainText('-$15,000.00');
+  await page.getByLabel('选择当前持仓').selectOption('1');
+  await expect(preview).toContainText('剩余持股');
+  await expect(preview).toContainText('0 股');
+  await expect(preview).toContainText('本次股票已实现盈亏');
+  await expect(preview).toContainText('$1,000.00');
+});
+
+test('stock split preview shows new shares, costs and adjusted contracts', async ({ page }) => {
+  await setup(page);
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await page.getByLabel('交易类型').selectOption('stock_split');
+  await page.getByLabel('标的代码').fill('TEST');
+  const preview = page.locator('.assignment-preview');
+  await expect(preview.getByRole('heading', { name: '拆股预览' })).toBeVisible();
+  await expect(preview).toContainText('拆股后股数');
+  await expect(preview).toContainText('200 股');
+  await expect(preview).toContainText('$75.00');
+  const adjusted = preview.getByRole('row').filter({ hasText: 'TEST 2026-02-20 150P' });
+  await expect(adjusted).toContainText('75');
+  await expect(adjusted).toContainText('200');
+});
+
 test('overdue expiry prefills its date and rolling submits two legs', async ({ page }) => {
   await setup(page); await page.getByRole('button', { name: '当前持仓', exact: true }).click(); await page.getByRole('button', { name: '到期作废', exact: true }).click();
-  await expect(page.getByLabel('交易日期')).toHaveValue('2026-02-20'); await page.getByLabel('交易类型').selectOption('option_close');
+  await expect(page.getByLabel('交易日（美东）')).toHaveValue('2026-02-20'); await page.getByLabel('交易类型').selectOption('option_close');
   await page.getByLabel('每股权利金 / 平仓价').fill('1'); await page.getByLabel('滚动：平仓后同时开出新合约').check();
   await page.getByLabel('新到期日').fill('2026-12-18'); await page.getByLabel('新行权价').fill('145'); await page.getByLabel('新每股权利金').fill('3'); await page.getByLabel('新开仓费用').fill('1.5');
   await page.getByRole('button', { name: '保存交易', exact: true }).click(); await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
@@ -468,6 +519,9 @@ test('CSV import wizard maps columns, blocks duplicates and commits selected row
   await expect(duplicate).not.toBeChecked();
   await expect(page.getByLabel('选择第 4 行')).toBeDisabled();
   await page.getByLabel('第 1 行类型').selectOption('shares_buy');
+  await page.getByLabel('第 1 行日期').fill('2026-01-04');
+  await page.getByLabel('第 1 行标的').fill('MSFT');
+  await page.getByLabel('第 1 行价格').fill('155.5');
   await duplicate.check();
   const commitButton = page.getByRole('button', { name: '确认导入 3 笔' });
   await expect(commitButton).toBeDisabled();
@@ -481,6 +535,31 @@ test('CSV import wizard maps columns, blocks duplicates and commits selected row
   expect(commit.args.req.origin).toBe('粘贴文本');
   expect(commit.args.req.rows.map((row: any) => row.rowNumber)).toEqual([1, 2, 3]);
   expect(commit.args.req.rows[0].event.kind).toBe('shares_buy');
+  expect(commit.args.req.rows[0].event.date).toBe('2026-01-04');
+  expect(commit.args.req.rows[0].event.symbol).toBe('MSFT');
+  expect(commit.args.req.rows[0].event.price).toBe(155.5);
+  expect(commit.args.req.rows[0].event.expiry).toBeNull();
+});
+
+test('import batch list can undo a whole batch with confirmation', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testImportBatches = [
+      { id: 'batch-import-1', origin: 'broker.csv', createdAt: '2026-11-04 08:00:00 +00:00', imported: 2, remaining: 2, undoneAt: null, undoneCount: 0 },
+    ];
+  });
+  await page.getByRole('button', { name: '导入', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '最近导入', exact: true })).toBeVisible();
+  await expect(page.getByText('broker.csv')).toBeVisible();
+  await expect(page.getByText('batch-import-1')).toBeVisible();
+  await page.getByRole('button', { name: '整批撤销', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '确认整批撤销？' })).toBeVisible();
+  await page.getByRole('button', { name: '确认整批撤销', exact: true }).click();
+  await expect(page.locator('.alert.success').first()).toContainText('已整批撤销 2 笔交易');
+  const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'undo_import_batch'));
+  expect(call.args.batchId).toBe('batch-import-1');
+  await expect(page.getByText('已整批撤销', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '整批撤销', exact: true })).toBeDisabled();
 });
 
 test('AI screenshot import skips text editing and commits through the vision preview', async ({ page }) => {
@@ -490,6 +569,10 @@ test('AI screenshot import skips text editing and commits through the vision pre
   await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
   await expect(page.getByText('截图会发送到你配置的云端视觉服务')).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('synthetic-image') });
+  await expect(page.getByText('确认上传 “shot.png”？')).toBeVisible();
+  await expect(page.getByAltText('待上传截图预览')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === 'vision_import_preview'))).toBe(false);
+  await page.getByRole('button', { name: '确认上传并识别', exact: true }).click();
   await expect(page.getByRole('heading', { name: '逐行确认' })).toBeVisible();
   await expect(page.getByText('已从云端视觉（gpt-4o）识别 1 笔交易，请核对后导入。')).toBeVisible();
   await expect(page.getByText('来源截图：shot.png')).toBeVisible();
@@ -511,6 +594,7 @@ test('AI screenshot import sends the user to settings when recognition is not en
   await page.getByRole('button', { name: '导入', exact: true }).click();
   await page.getByRole('button', { name: 'AI 截图', exact: true }).click();
   await page.locator('input[type="file"]').setInputFiles({ name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('synthetic-image') });
+  await page.getByRole('button', { name: '确认上传并识别', exact: true }).click();
   await expect(page.getByText('AI 截图识别未启用，请前往设置 → AI 识别。')).toBeVisible();
   await page.getByRole('button', { name: '前往设置 → AI 识别', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
@@ -668,7 +752,7 @@ test('backup list validates, rejects corruption, and stages a restore for restar
   await expect(page.locator('.validation-values')).toContainText('3');
   await page.getByRole('button', { name: '恢复此备份…' }).click();
   await expect(page.getByRole('dialog')).toContainText('pre-restore-*.sqlite');
-  await page.getByRole('button', { name: '确认恢复并重启' }).click();
+  await page.getByRole('button', { name: '确认安排恢复' }).click();
   await expect(page.locator('.alert.error')).toContainText('已安排从 wheel-1767225600000000000-0.sqlite 恢复账本');
   expect(await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'stage_restore').args.fileName)).toBe('wheel-1767225600000000000-0.sqlite');
 });
@@ -698,7 +782,7 @@ test('encrypted backup is created and restored only with its password', async ({
   await expect(page.locator('.restore-validation')).toContainText('校验通过');
   await page.getByRole('button', { name: '恢复此备份…' }).click();
   await expect(page.getByRole('dialog')).toContainText('暂存时会用恢复密码解密');
-  await page.getByRole('button', { name: '确认恢复并重启' }).click();
+  await page.getByRole('button', { name: '确认安排恢复' }).click();
   await expect(page.locator('.alert.error')).toContainText('已安排从 wheel-1767225600000000000-3.sqlite.enc 恢复账本');
   const staged = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'stage_restore'));
   expect(staged.args.password).toBe('correct horse');
@@ -870,16 +954,47 @@ test('non-integral split ratio surfaces a readable error and keeps the form', as
   await page.getByLabel('比例 · 分子').fill('4');
   await page.getByLabel('比例 · 分母').fill('3');
   await page.getByRole('button', { name: '保存交易', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('4:3');
+  await expect(page.locator('.alert.error')).toContainText('4:3');
   await expect(page.getByLabel('比例 · 分子')).toHaveValue('4');
   await expect(page.getByRole('button', { name: '保存交易', exact: true })).toBeEnabled();
+});
+
+test('event log filters fees, shows the amount, and explains audit retention on undo', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testExtraEvents = [{ id: 'fee-ev', date: '2026-01-05', kind: 'fee', symbol: 'TEST', qty: 0, price: 0, fees: 0, amount: 12.5, note: '账户管理费', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.getByRole('button', { name: '收租台账', exact: true }).click();
+  await page.getByRole('button', { name: '交易记录', exact: true }).click();
+  await page.getByLabel('事件类型筛选').selectOption('fee');
+  const row = page.getByRole('row').filter({ hasText: '账户管理费' });
+  await expect(row).toContainText('$12.50');
+  await expect(page.getByRole('row').filter({ hasText: '买入股票' })).toHaveCount(0);
+  await row.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('button', { name: '确认撤销', exact: true }).click();
+  await expect(page.locator('.alert.success')).toContainText('原始记录保留在数据库中');
+  const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'delete_event'));
+  expect(call.args.eventId).toBe('fee-ev');
+});
+
+test('campaign timeline can undo an event with confirmation', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '查看战役' }).click();
+  const timeline = page.locator('section').filter({ has: page.getByRole('heading', { name: '战役事件时间轴' }) });
+  await timeline.getByRole('button', { name: '撤销', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: '确认撤销这笔交易？' })).toBeVisible();
+  await page.getByRole('button', { name: '确认撤销', exact: true }).click();
+  await expect(page.locator('.alert.success')).toContainText('当前界面与导出不再展示');
+  const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'delete_event'));
+  expect(call.args.eventId).toBe('buy');
 });
 
 test('split ratio appears in the event log and campaign timeline', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => { (window as any).testSplit = true; });
   await page.getByRole('button', { name: '刷新账本', exact: true }).click();
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '收租台账', exact: true }).click();
   await page.getByRole('button', { name: '交易记录', exact: true }).click();
   const row = page.getByRole('row').filter({ hasText: '拆股 / 合股' });
   await expect(row).toContainText('2 : 1');

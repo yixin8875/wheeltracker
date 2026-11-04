@@ -88,76 +88,70 @@ pub enum EngineError {
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EngineError::MissingContract { event } => {
-                write!(f, "event {event} is an option event but has no contract")
+            EngineError::MissingContract { .. } => {
+                write!(f, "这笔期权交易缺少合约信息（到期日、行权价或方向）。")
             }
-            EngineError::InvalidQuantity { event } => {
-                write!(f, "event {event} has quantity 0")
+            EngineError::InvalidQuantity { .. } => {
+                write!(f, "交易数量必须大于 0。")
             }
-            EngineError::DuplicateEventId { id } => write!(f, "duplicate event id {id}"),
-            EngineError::NoOpenPosition { event, contract } => {
-                write!(
-                    f,
-                    "event {event} references {contract} but no position is open"
-                )
+            EngineError::DuplicateEventId { id } => write!(f, "交易编号重复：{id}。"),
+            EngineError::NoOpenPosition { contract, .. } => {
+                write!(f, "合约 {contract} 当前没有未平仓持仓，无法平仓或指派。")
             }
             EngineError::InsufficientOpenQty {
-                event,
                 contract,
                 have,
                 need,
+                ..
             } => write!(
                 f,
-                "event {event} needs {need} contracts of {contract}, only {have} open"
+                "合约 {contract} 当前只有 {have} 手未平仓，本次需要 {need} 手。"
             ),
             EngineError::InsufficientShares {
-                event,
                 symbol,
                 have,
                 need,
+                ..
             } => write!(
                 f,
-                "event {event} needs {need} shares of {symbol}, only {have} held"
+                "股票 {symbol} 当前只有 {have} 股，本次需要 {need} 股。"
             ),
-            EngineError::NoActiveCampaign { event, symbol } => {
-                write!(f, "event {event} needs an active campaign for {symbol}")
+            EngineError::NoActiveCampaign { symbol, .. } => {
+                write!(f, "{symbol} 当前没有进行中的战役，无法记录这笔交易。")
             }
-            EngineError::MissingSplitTerms { event } => {
-                write!(f, "event {event} is a split but has no split terms")
+            EngineError::MissingSplitTerms { .. } => {
+                write!(f, "拆股交易缺少拆股比例。")
             }
-            EngineError::InvalidSplitTerms { event } => {
-                write!(f, "event {event} has invalid split terms")
+            EngineError::InvalidSplitTerms { .. } => {
+                write!(f, "拆股比例无效：分子与分母必须为正整数。")
             }
             EngineError::NonIntegralOptionAdjustment {
-                event,
                 contract,
                 numerator,
                 denominator,
+                ..
             } => write!(
                 f,
-                "event {event} cannot adjust {contract} by {numerator}:{denominator}: \
-                 the per-contract multiplier would not be a whole number"
+                "按 {numerator}:{denominator} 拆股后，合约 {contract} 的每手股数不是整数，无法自动调整；请手动录入调整后的合约。"
             ),
             EngineError::FractionalSplitNeedsCashInLieu {
-                event,
                 symbol,
                 exact_shares,
+                ..
             } => write!(
                 f,
-                "event {event} leaves {exact_shares} {symbol} shares; enter the broker's \
-                 cash-in-lieu amount to record the fractional share"
+                "拆股后产生 {exact_shares} 股 {symbol} 零股，请填写券商的零股现金补偿金额（没有补偿可填 0）。"
             ),
-            EngineError::UnexpectedCashInLieu { event } => write!(
+            EngineError::UnexpectedCashInLieu { .. } => write!(
                 f,
-                "event {event} has a cash-in-lieu amount but the split produces no fraction"
+                "本次拆股没有产生零股，不能填写零股现金补偿。"
             ),
-            EngineError::SplitOverflow { event } => {
-                write!(f, "event {event} produces shares outside the supported range")
+            EngineError::SplitOverflow { .. } => {
+                write!(f, "拆股后的股数超出支持范围。")
             }
-            EngineError::AdjustedContractRequired { event, contract } => write!(
+            EngineError::AdjustedContractRequired { contract, .. } => write!(
                 f,
-                "event {event} opens {contract} with a pre-split contract; use the adjusted \
-                 strike and multiplier"
+                "合约 {contract} 是拆股前的旧合约，请使用调整后的行权价和每手股数录入。"
             ),
         }
     }
