@@ -1325,6 +1325,85 @@ fn save_mapping_for(
     Ok(true)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextImportReq {
+    pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+/// Parse an email / pasted broker confirmation and return the same preview
+/// shape as CSV import, so the wizard can reuse review and commit unchanged.
+#[tauri::command]
+pub fn text_import_preview(
+    state: State<'_, AppState>,
+    req: TextImportReq,
+) -> Result<crate::import::ImportPreview, String> {
+    let conn = state.conn();
+    text_preview_for(&conn, req)
+}
+
+fn text_preview_for(
+    conn: &rusqlite::Connection,
+    req: TextImportReq,
+) -> Result<crate::import::ImportPreview, String> {
+    let extraction = crate::text_import::extract(&req.text, req.source.as_deref())?;
+    let csv_req = ImportPreviewReq {
+        text: extraction.csv.clone(),
+        delimiter: Some(crate::import::Delimiter::Comma),
+        mapping: Some(text_mapping()),
+        has_header: Some(true),
+        account_id: req.account_id,
+    };
+    let mut preview = preview_for(conn, csv_req)?;
+    let mut warnings = extraction.warnings;
+    warnings.insert(
+        0,
+        format!(
+            "已从{}识别 {} 笔交易，请核对后导入。",
+            extraction.template,
+            extraction.trades.len()
+        ),
+    );
+    warnings.extend(preview.warnings);
+    preview.warnings = warnings;
+    preview.mapping_source = "text".to_string();
+    Ok(preview)
+}
+
+fn text_mapping() -> crate::import::ColumnMapping {
+    use crate::import::{ColumnMapping, DateFormat, Delimiter, Field};
+    let fields = std::collections::BTreeMap::from([
+        (Field::Date, 0),
+        (Field::Kind, 1),
+        (Field::Symbol, 2),
+        (Field::Qty, 3),
+        (Field::Price, 4),
+        (Field::Fees, 5),
+        (Field::Expiry, 6),
+        (Field::Strike, 7),
+        (Field::Right, 8),
+        (Field::Note, 9),
+    ]);
+    ColumnMapping {
+        fields,
+        date_format: DateFormat::YearMonthDay,
+        delimiter: Some(Delimiter::Comma),
+        has_header: Some(true),
+    }
+}
+
+#[tauri::command]
+pub fn ocr_image(data: String, mime: String) -> Result<String, String> {
+    let extension = crate::ocr::extension_for_mime(&mime)
+        .ok_or_else(|| "仅支持 PNG、JPEG、WebP、BMP、GIF 或 TIFF 截图".to_string())?;
+    let bytes = crate::ocr::decode_image(&data)?;
+    crate::ocr::recognize(&bytes, extension)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1927,6 +2006,48 @@ mod tests {
         assert!(events
             .iter()
             .all(|event| event.note.starts_with("导入:broker.csv")));
+    }
+
+    #[test]
+    fn text_import_preview_maps_email_trades_and_flags_duplicates() {
+        let conn = db();
+        let text = "\
+Trade Date: 2026-01-02
+SOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00
+Fees: 1.00
+";
+        let preview = text_preview_for(
+            &conn,
+            TextImportReq {
+                text: text.to_string(),
+                source: Some("schwab.eml".to_string()),
+                account_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.rows.len(), 1);
+        let event = preview.rows[0].event.as_ref().unwrap();
+        assert_eq!(event.kind, "option_open_short");
+        assert_eq!(event.symbol, "AAPL");
+        assert_eq!(event.qty, 1);
+        assert_eq!(event.price, 2.0);
+        assert_eq!(event.fees, 1.0);
+        assert_eq!(event.expiry.as_deref(), Some("2026-02-20"));
+        assert_eq!(event.strike, Some(150.0));
+        assert!(preview.warnings[0].contains("Schwab"));
+        assert_eq!(preview.mapping_source, "text");
+
+        commit_for(&conn, commit_request(commit_rows(&preview), false)).unwrap();
+        let again = text_preview_for(
+            &conn,
+            TextImportReq {
+                text: text.to_string(),
+                source: Some("schwab.eml".to_string()),
+                account_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(again.counts.duplicate, 1);
     }
 
     #[test]

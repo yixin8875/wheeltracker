@@ -9,6 +9,8 @@
 - 快速录入：期权生命周期、股票买卖、分红、费用、现金调整；Ctrl+N 打开。
 - 滚动录入：BTC + STO 一次提交，任何一条失败则整体回滚。
 - CSV 导入：选择文件或粘贴文本，自动识别中英文表头；三步确认列映射与逐行结果，重复行默认排除，任一行非法则整批不入账。
+- 邮件导入：选择 `.eml` / `.txt` 或粘贴正文，本地解码 multipart、base64、quoted-printable 与 HTML；按 Schwab、Fidelity、IBKR、富途、老虎和通用成交确认抽取，无法确定的行会说明并跳过，确认后复用 CSV 的校验与事务入账。
+- 截图 OCR：调用 Windows 内置 `Windows.Media.Ocr`（离线），可选择图片或在页面内 Ctrl+V 粘贴；识别文字先展示为可编辑文本，修正后再解析。OCR 数字可能出错，必须逐行核对。
 - 战役详情：A / B / C′ 三轨成本阶梯图、数据表、股票批次、本轮收租及按日期排序的事件时间轴。
 - 成本设置：可将累计分红计入 B / C′ 成本，设置保存在 SQLite，历史成本图随口径重算。
 - Call 指派预览：逐个合约独立模拟全部未平仓手数被指派，拆分股票盈亏、期权收益、分红和现金调整；部分指派明确展示剩余持仓。
@@ -120,8 +122,8 @@ python -I scripts/desktop_acceptance.py --release
 
 手动备份时可填写加密密码：留空生成普通 `.sqlite`，填写 8–128 位密码则生成 `.sqlite.enc`。加密备份在列表中带锁标记，校验与恢复都必须输入同一密码；暂存时会解密出临时副本，替换完成或失败后都会删除明文副本，原加密备份保留。密码不会保存，遗失后无法恢复。每日自动备份与恢复前安全快照始终为普通 SQLite。
 
-CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默认排除，确认后可强制导入。JSON 导出包含所有账户的完整事件日志、报价与设置，适合审阅和迁移，但不能直接恢复；完整备份应使用 SQLite 快照。
+CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默认排除，确认后可强制导入。邮件与截图导入都在本地完成：邮件正文不联网，截图通过系统临时目录调用本机 OCR，结束后删除临时图片与脚本；识别结果不会上传。JSON 导出包含所有账户的完整事件日志、报价与设置，适合审阅和迁移，但不能直接恢复；完整备份应使用 SQLite 快照。
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md) 与 [P4 备份加密验收](docs/P4-backup-encryption.md)。截图 OCR、邮件导入、拆股和系统通知尚未实现。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md) 与 [P4 OCR / 邮件导入验收](docs/P4-ocr-email.md)。拆股与系统通知尚未实现。

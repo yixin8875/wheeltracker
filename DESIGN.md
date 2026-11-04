@@ -628,9 +628,11 @@ list_ledger(filter: LedgerFilter) -> LedgerPage
 monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按 UTC 月份
 list_positions(account_id) -> PositionsView
 preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
-import_csv(path, mapping) -> ImportPreview
-import_text(text) -> Vec<ParsedEvent>
-confirm_import(events) -> ImportResult
+import_preview(req: ImportPreviewReq) -> ImportPreview
+import_commit(req: ImportCommitReq) -> ImportSummary
+import_save_mapping(signature, mapping) -> bool
+text_import_preview(req: TextImportReq) -> ImportPreview   // 邮件 / OCR 文本
+ocr_image(data: String, mime: String) -> String             // Windows 内置 OCR
 set_price(symbol, date, close)
 export_report(range, format) -> Path
 backup_now(password: Option<String>) -> Path      // 有密码时生成 .sqlite.enc
@@ -696,18 +698,23 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 
 ### 9.2 截图 OCR
 
-- 窗口内粘贴/拖入截图 → 本地 OCR → 正则+模板抽取字段。
-- MVP 引擎：**Windows.Media.Ocr**（系统自带、离线、零依赖；用户是 Win11）。
-- 跨平台备选：`tesseract.js`（WASM，包体大）、云端视觉 API（需联网）。
-- 抽取失败时降级为「原文 + 手动填表」，绝不猜。
-- 抽取字段：标的、到期、行权价、C/P、方向、手数、价格、费用、日期。
-- 置信度低于阈值 → 黄色高亮必填项。
+已实现（Windows）：
+
+- 导入向导「截图 OCR」：选择 PNG / JPEG / WebP / BMP / GIF / TIFF（≤10 MB），或在页面内 Ctrl+V 粘贴；也可从剪贴板读取。
+- 引擎：**Windows.Media.Ocr**（系统自带、离线）。`ocr` 模块把图片与一段 PowerShell 5.1 WinRT 脚本写入 `%TEMP%/wheel-ocr-<pid>-<nanos>/`，无窗口启动，最多等待 45 秒，读取 UTF-8 识别结果后删除整个临时目录。
+- 识别文字先回填到可编辑文本框，不直接入库；用户修正日期、数量、价格、到期日与行权价后再解析。OCR 不保证数字准确，抽取器对缺失字段只警告并跳过，绝不猜。
+- 文本随后走 9.3 的抽取器与 CSV 预览 / 提交管线。非 Windows 平台明确返回「截图 OCR 仅支持 Windows」。
 
 ### 9.3 邮件导入
 
-- MVP：粘贴邮件正文，或导入 `.eml` / `.txt`，按券商模板解析。
-- 模板注册表：`IbkrEmailParser`、`FutuEmailParser`、`SchwabEmailParser`…每个模板一组正则 + 字段映射 + 样例测试。
-- Phase 3：IMAP 定时拉取（Rust `imap` crate），按发件人过滤，只读不删。
+已实现（本地解析，不联网）：
+
+- 输入：`.eml` / `.txt` 或粘贴正文；`text_import` 解码 MIME `multipart/*`（优先 `text/plain`，否则 HTML）、base64、quoted-printable，并把 HTML 表格转成制表符 / 换行文本。非 UTF-8 字符集给出警告，不猜测编码。
+- 模板识别：Schwab、Fidelity、IBKR、富途、老虎与「通用邮件」；模板只影响备注与提示，字段抽取使用同一组通用规则，便于处理同一券商的不同邮件版式。
+- 字段：交易日期（含 `Trade Date` / `成交日期`、上一行日期、月名日期）、方向（STO / BTC / 到期 / 指派 / 买卖股票 / 分红）、合约（`AAPL 02/20/2026 150 P`、月名格式或 OCC 代码）、数量、价格（`@`、`Price`、`成交价`、`at`）、费用（下一行也可）、分红金额与每股金额。
+- 保守边界：缺少日期 / 数量 / 价格 / 合约的行逐条警告并跳过；做多期权明确拒绝；同封邮件完全重复的记录合并；持仓相关跨行错误仍由提交重放拒绝整批。
+- 输出：固定表头 CSV（`日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌,备注`），因此复用 9.4 的映射、去重、逐行预览与单事务提交；备注格式 `导入:<来源> · <模板> · 第 N 行`。
+- 未实现：IMAP 定时拉取、附件 PDF 解析。Phase 3 若加入 IMAP，仍应只读、按发件人过滤，并复用同一抽取器。
 
 ### 9.4 CSV 对账单
 
@@ -730,9 +737,9 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 |---|---|---|---|
 | **P0 内核** ✅ | `wheel-core` 领域模型 + 重放引擎 + 不变量断言 + golden/property 测试 | `cargo test` 全绿（16 项 + 文档测试），`cargo run --example demo` 可重放示例 | 已完成 |
 | **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
-| **P2 导入** 🟡 | CSV 映射向导 + 去重（已完成）；截图 OCR + 邮件文本解析（未做） | 历史数据可批量补录 | CSV 已完成 |
+| **P2 导入** 🟢 | CSV 映射向导 + 去重、截图 OCR、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
-| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出（已完成）+ OCR / 邮件导入 + 拆股支持 + 云端同步 | 进阶 | 进行中 |
+| **P4 扩展** 🟡 | 多账户、收租月报、备份加密与 JSON 导出、OCR / 邮件导入（已完成）+ 拆股支持 + 云端同步 | 进阶 | 进行中 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

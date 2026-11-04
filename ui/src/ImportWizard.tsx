@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { ArrowLeft, Check, Upload } from 'lucide-react';
+import { useMemo, useState, type ClipboardEvent } from 'react';
+import { ArrowLeft, Check, Clipboard, Upload } from 'lucide-react';
 import { decodeCsvFile } from './csv';
 import { api, desktop, labels, money } from './lib';
 import type {
@@ -13,12 +13,44 @@ import type {
 } from './types';
 
 type Step = 'source' | 'map' | 'review';
+type Mode = 'csv' | 'email' | 'ocr';
+
+const MODES: { id: Mode; label: string }[] = [
+  { id: 'csv', label: 'CSV 文件' },
+  { id: 'email', label: '邮件' },
+  { id: 'ocr', label: '截图 OCR' }
+];
 
 const STEPS: { id: Step; label: string }[] = [
   { id: 'source', label: '选择文件' },
   { id: 'map', label: '确认列映射' },
   { id: 'review', label: '逐行确认' }
 ];
+
+const TEXT_STEPS: { id: Step; label: string }[] = [
+  { id: 'source', label: '选择来源' },
+  { id: 'review', label: '逐行确认' }
+];
+
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+  bmp: 'image/bmp', gif: 'image/gif', tif: 'image/tiff', tiff: 'image/tiff'
+};
+
+function imageMime(file: File) {
+  if (file.type.startsWith('image/')) return file.type;
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_MIME[extension] ?? '';
+}
+
+function readAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('无法读取图片文件。'));
+    reader.readAsDataURL(file);
+  });
+}
 
 const FIELDS: { id: ImportField; label: string }[] = [
   { id: 'date', label: '交易日期' },
@@ -48,15 +80,22 @@ const STATUS: Record<CandidateRow['status'], string> = {
 const MAPPING_SOURCE = {
   detected: '自动识别',
   saved: '已保存的映射',
-  manual: '手动映射'
+  manual: '手动映射',
+  text: '邮件 / OCR 文本'
 } as const;
 
 export function ImportWizard({ accountId, onCommitted }: { accountId: string; onCommitted: (message: string) => void }) {
+  const [mode, setMode] = useState<Mode>('csv');
   const [step, setStep] = useState<Step>('source');
   const [paste, setPaste] = useState('');
   const [fileName, setFileName] = useState('');
   const [encoding, setEncoding] = useState('');
   const [encodingWarning, setEncodingWarning] = useState('');
+  const [emailText, setEmailText] = useState('');
+  const [emailName, setEmailName] = useState('');
+  const [ocrText, setOcrText] = useState('');
+  const [ocrName, setOcrName] = useState('');
+  const [origin, setOrigin] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping | null>(null);
   const [selection, setSelection] = useState<Record<number, boolean>>({});
@@ -78,6 +117,19 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
   const duplicateSelected = selectedRows.filter(row => row.status === 'duplicate').length;
   const canCommit = desktop && !busy && selectedRows.length > 0 && (duplicateSelected === 0 || allowDuplicates);
 
+  function applyPreview(result: ImportPreview, nextStep: Step) {
+    const initial: Record<number, boolean> = {};
+    for (const row of result.rows) {
+      if (row.event) initial[row.rowNumber] = row.selectedByDefault;
+    }
+    setPreview(result);
+    setMapping(result.mapping);
+    setSelection(initial);
+    setOverrides({});
+    setAllowDuplicates(false);
+    setStep(nextStep);
+  }
+
   async function runPreview(text: string, nextMapping?: ColumnMapping) {
     if (!desktop) {
       setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
@@ -90,16 +142,28 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
       const result = await api<ImportPreview>('import_preview', {
         req: { text, mapping: nextMapping ?? undefined, accountId }
       });
-      const initial: Record<number, boolean> = {};
-      for (const row of result.rows) {
-        if (row.event) initial[row.rowNumber] = row.selectedByDefault;
-      }
-      setPreview(result);
-      setMapping(result.mapping);
-      setSelection(initial);
-      setOverrides({});
-      setAllowDuplicates(false);
-      setStep('map');
+      applyPreview(result, 'map');
+    } catch (failure) {
+      setError(String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runTextPreview(text: string, source: string, nextOrigin: string) {
+    if (!desktop) {
+      setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setInfo('');
+    try {
+      const result = await api<ImportPreview>('text_import_preview', {
+        req: { text, source, accountId }
+      });
+      setOrigin(nextOrigin);
+      applyPreview(result, 'review');
     } catch (failure) {
       setError(String(failure));
     } finally {
@@ -131,6 +195,100 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
       return;
     }
     void runPreview(paste);
+  }
+
+  async function chooseEmail(file: File | undefined) {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setError('邮件文件超过 8 MB 上限。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setInfo('');
+    try {
+      const decoded = await decodeCsvFile(file);
+      setEmailText(decoded.text);
+      setEmailName(file.name);
+      setEncoding(decoded.encoding);
+      setEncodingWarning(decoded.warning ?? '');
+      await runTextPreview(decoded.text, file.name, file.name);
+    } catch (failure) {
+      setError(String(failure));
+      setBusy(false);
+    }
+  }
+
+  function parseEmail() {
+    if (!emailText.trim()) {
+      setError('请先选择邮件文件或粘贴邮件内容。');
+      return;
+    }
+    void runTextPreview(emailText, emailName || '粘贴邮件', emailName || '邮件导入');
+  }
+
+  async function chooseImage(file: File | undefined) {
+    if (!file) return;
+    const mime = imageMime(file);
+    if (!mime) {
+      setError('仅支持 PNG、JPEG、WebP、BMP、GIF 或 TIFF 图片。');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('图片超过 10 MB 上限。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setInfo('');
+    setOcrName(file.name);
+    try {
+      const dataUrl = await readAsDataUrl(file);
+      const data = dataUrl.split(',')[1] ?? '';
+      const text = await api<string>('ocr_image', { data, mime });
+      setOcrText(text);
+      setInfo('识别完成。OCR 可能有误，请先核对并修正日期、数量、价格与合约，再解析。');
+    } catch (failure) {
+      setError(String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function readClipboardImage() {
+    setError('');
+    setInfo('');
+    try {
+      if (!navigator.clipboard?.read) throw new Error('unsupported');
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(value => value.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const extension = type.split('/')[1] ?? 'png';
+        await chooseImage(new File([blob], `clipboard.${extension}`, { type }));
+        return;
+      }
+      setError('剪贴板中没有图片。');
+    } catch {
+      setError('无法读取剪贴板。请改用选择截图文件，或点击下方区域后按 Ctrl+V。');
+    }
+  }
+
+  function handleImagePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const item = Array.from(event.clipboardData.items).find(entry => entry.type.startsWith('image/'));
+    const file = item?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    void chooseImage(file);
+  }
+
+  function parseOcr() {
+    if (!ocrText.trim()) {
+      setError('请先选择截图并确认识别文字。');
+      return;
+    }
+    void runTextPreview(ocrText, ocrName || '截图', '截图 OCR');
   }
 
   function updateField(field: ImportField, raw: string) {
@@ -179,7 +337,9 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
       const summary = await api<ImportSummary>('import_commit', {
         req: {
           accountId,
-          origin: fileName || '粘贴文本',
+          origin: mode === 'csv'
+            ? (fileName || '粘贴文本')
+            : (origin || (mode === 'email' ? '邮件导入' : '截图 OCR')),
           allowDuplicates,
           rows: selectedRows.map(row => ({ rowNumber: row.rowNumber, event: row.event! }))
         }
@@ -193,12 +353,29 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
     }
   }
 
+  function switchMode(next: Mode) {
+    if (next === mode) return;
+    setMode(next);
+    setStep('source');
+    setPreview(null);
+    setMapping(null);
+    setSelection({});
+    setOverrides({});
+    setError('');
+    setInfo('');
+  }
+
   function reset() {
     setStep('source');
     setPaste('');
     setFileName('');
     setEncoding('');
     setEncodingWarning('');
+    setEmailText('');
+    setEmailName('');
+    setOcrText('');
+    setOcrName('');
+    setOrigin('');
     setPreview(null);
     setMapping(null);
     setSelection({});
@@ -210,8 +387,20 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
 
   return (
     <div className="import-page">
+      <div className="settings-tabs import-modes" aria-label="导入方式">
+        {MODES.map(item => (
+          <button
+            key={item.id}
+            aria-pressed={mode === item.id}
+            disabled={busy}
+            onClick={() => switchMode(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
       <div className="wizard-steps" aria-label="导入步骤">
-        {STEPS.map((item, index) => (
+        {(mode === 'csv' ? STEPS : TEXT_STEPS).map((item, index) => (
           <span key={item.id} className={step === item.id ? 'active' : ''} aria-current={step === item.id ? 'step' : undefined}>
             {index + 1}. {item.label}
           </span>
@@ -224,46 +413,154 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
 
       {step === 'source' && (
         <section className="panel">
-          <div className="section-heading">
-            <h2>选择 CSV</h2>
-            <span className="muted">逗号 / 分号 / 制表符 · UTF-8 或 GB18030 · 最多 5000 行</span>
-          </div>
-          <label className="file-drop">
-            <Upload size={24} />
-            <strong>{fileName || '选择 CSV 文件'}</strong>
-            <span className="muted">点击选择文件，或把 CSV 内容粘贴到下方</span>
-            <input
-              type="file"
-              accept=".csv,.txt,text/csv"
-              disabled={!desktop || busy}
-              onChange={event => {
-                const file = event.target.files?.[0];
-                void chooseFile(file);
-                event.target.value = '';
-              }}
-            />
-          </label>
-          {(encoding || encodingWarning) && (
-            <p className="muted import-meta">
-              {encoding && <>编码：{encoding}</>}
-              {encodingWarning && <> · {encodingWarning}</>}
-            </p>
+          {mode === 'csv' && (
+            <>
+              <div className="section-heading">
+                <h2>选择 CSV</h2>
+                <span className="muted">逗号 / 分号 / 制表符 · UTF-8 或 GB18030 · 最多 5000 行</span>
+              </div>
+              <label className="file-drop">
+                <Upload size={24} />
+                <strong>{fileName || '选择 CSV 文件'}</strong>
+                <span className="muted">点击选择文件，或把 CSV 内容粘贴到下方</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt,text/csv"
+                  disabled={!desktop || busy}
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    void chooseFile(file);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              {(encoding || encodingWarning) && (
+                <p className="muted import-meta">
+                  {encoding && <>编码：{encoding}</>}
+                  {encodingWarning && <> · {encodingWarning}</>}
+                </p>
+              )}
+              <label className="full import-paste">
+                粘贴 CSV 文本
+                <textarea
+                  rows={10}
+                  value={paste}
+                  onChange={event => setPaste(event.target.value)}
+                  placeholder={'日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n2026-01-02,卖出开仓,AAPL,1,2.00,1.00,2026-02-20,150,P'}
+                />
+              </label>
+              <div className="form-actions">
+                <button onClick={reset} disabled={busy}>清空</button>
+                <button className="primary" onClick={parsePasted} disabled={!desktop || busy || !paste.trim()}>
+                  {busy ? '解析中…' : '解析预览'}
+                </button>
+              </div>
+            </>
           )}
-          <label className="full import-paste">
-            粘贴 CSV 文本
-            <textarea
-              rows={10}
-              value={paste}
-              onChange={event => setPaste(event.target.value)}
-              placeholder={'日期,方向,代码,数量,价格,费用,到期日,行权价,看涨看跌\n2026-01-02,卖出开仓,AAPL,1,2.00,1.00,2026-02-20,150,P'}
-            />
-          </label>
-          <div className="form-actions">
-            <button onClick={reset} disabled={busy}>清空</button>
-            <button className="primary" onClick={parsePasted} disabled={!desktop || busy || !paste.trim()}>
-              {busy ? '解析中…' : '解析预览'}
-            </button>
-          </div>
+
+          {mode === 'email' && (
+            <>
+              <div className="section-heading">
+                <h2>导入邮件</h2>
+                <span className="muted">.eml / .txt · MIME、base64、HTML · 最多 8 MB</span>
+              </div>
+              <label className="file-drop">
+                <Upload size={24} />
+                <strong>{emailName || '选择邮件文件'}</strong>
+                <span className="muted">点击选择 .eml 或 .txt，或把邮件内容粘贴到下方</span>
+                <input
+                  type="file"
+                  accept=".eml,.txt,message/rfc822,text/plain"
+                  disabled={!desktop || busy}
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    void chooseEmail(file);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              <p className="muted import-meta">
+                支持 Schwab、Fidelity、IBKR、富途、老虎与通用成交确认；无法确定的行会在预览中说明并跳过。
+              </p>
+              {(encoding || encodingWarning) && (
+                <p className="muted import-meta">
+                  {encoding && <>编码：{encoding}</>}
+                  {encodingWarning && <> · {encodingWarning}</>}
+                </p>
+              )}
+              <label className="full import-paste">
+                粘贴邮件正文或 .eml 内容
+                <textarea
+                  rows={10}
+                  value={emailText}
+                  onChange={event => setEmailText(event.target.value)}
+                  placeholder={'Trade Date: 2026-01-02\nSOLD TO OPEN 1 AAPL 2026-02-20 150 P @ 2.00\nFees: 1.00'}
+                />
+              </label>
+              <div className="form-actions">
+                <button onClick={reset} disabled={busy}>清空</button>
+                <button className="primary" onClick={parseEmail} disabled={!desktop || busy || !emailText.trim()}>
+                  {busy ? '解析中…' : '解析邮件'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === 'ocr' && (
+            <>
+              <div className="section-heading">
+                <h2>截图 OCR</h2>
+                <span className="muted">Windows 内置 OCR · PNG / JPEG / WebP / BMP · 最多 10 MB</span>
+              </div>
+              <label className="file-drop">
+                <Upload size={24} />
+                <strong>{ocrName || '选择截图文件'}</strong>
+                <span className="muted">点击选择图片，或在下方区域按 Ctrl+V 粘贴截图</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/bmp,image/gif,image/tiff"
+                  disabled={!desktop || busy}
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    void chooseImage(file);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              <div
+                className="ocr-paste"
+                tabIndex={0}
+                role="button"
+                aria-label="粘贴截图"
+                onPaste={handleImagePaste}
+              >
+                <Clipboard size={20} />
+                <span>在此区域按 Ctrl+V 粘贴截图</span>
+              </div>
+              <p className="muted import-meta">
+                OCR 结果可能有误。请先修正日期、数量、价格、到期日与行权价，再解析；读取失败时可改用 CSV 或邮件导入。
+              </p>
+              <div className="form-actions">
+                <button onClick={reset} disabled={busy}>清空</button>
+                <button onClick={() => void readClipboardImage()} disabled={!desktop || busy}>从剪贴板读取</button>
+              </div>
+              <label className="full import-paste">
+                识别文字（可修改）
+                <textarea
+                  rows={10}
+                  value={ocrText}
+                  onChange={event => setOcrText(event.target.value)}
+                  placeholder={'SOLD TO OPEN 1 AAPL 02/20/2026 150 P @ 2.00\nTrade Date: 2026-01-02'}
+                />
+              </label>
+              <div className="form-actions">
+                <span className="muted">请核对识别文字后再解析。</span>
+                <button className="primary" onClick={parseOcr} disabled={!desktop || busy || !ocrText.trim()}>
+                  {busy ? '解析中…' : '解析识别文本'}
+                </button>
+              </div>
+            </>
+          )}
         </section>
       )}
 
@@ -350,13 +647,20 @@ export function ImportWizard({ accountId, onCommitted }: { accountId: string; on
               共 {preview.counts.total} 行 · 可导入 {preview.counts.ok + preview.counts.warning} · 重复 {preview.counts.duplicate} · 错误 {preview.counts.error}
             </span>
           </div>
+          {preview.warnings.length > 0 && (
+            <div className="alert warning" role="status">
+              {preview.warnings.map(warning => <div key={warning}>{warning}</div>)}
+            </div>
+          )}
           <div className="alert warning" role="status">
             提交时会按账本顺序整体校验；任一行不合法，整批都不会入账。
           </div>
           <div className="toolbar import-toolbar">
             <button onClick={() => selectAll(true)} disabled={busy}>全选可导入</button>
             <button onClick={() => selectAll(false)} disabled={busy}>清空选择</button>
-            <button onClick={() => setStep('map')} disabled={busy}><ArrowLeft size={16} />返回映射</button>
+            <button onClick={() => setStep(mode === 'csv' ? 'map' : 'source')} disabled={busy}>
+              <ArrowLeft size={16} />{mode === 'csv' ? '返回映射' : '返回来源'}
+            </button>
           </div>
           <div className="table-wrap">
             <table className="import-table">
