@@ -70,3 +70,13 @@
 - 干净安装、覆盖升级、卸载与 SmartScreen 提示未在本环境自动验证，按[发布检查清单](release-checklist.md)人工执行。
 - 安装包未签名；升级需手动覆盖安装；无自动更新。
 - CI 工作流尚未在 GitHub Actions 上实际运行；Playwright 仍为本地门禁。
+
+## 0.4.0 发布记录（2026-11-04）
+
+- **内容**：账户归档 / 恢复与空账户删除；数据库 schema 升至 v3（`accounts.archived_at`）。
+- **版本**：workspace、`Cargo.lock`、`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.4.0`。
+- **产物**：`target/release/bundle/nsis/Wheel Tracker_0.4.0_x64-setup.exe`，4,684,781 字节（4.47 MiB）。
+- **SHA-256**：`b065f41fc8677c40c8ceb2e44f2f70066fe5b1dea0919fe7db09c32e7bbfd67e`；`dist/release/` 下 sidecar 与 manifest 一致。
+- **验证**：116 app + 27 core 场景 + 2 core 单元 + 1 文档测试；clippy；前端构建；Playwright 42 项。
+- **脚本修复**：Windows 下 `npm` 为 `.cmd` shim，`release.py` 通过 `cmd /c` 启动，避免 `FileNotFoundError`。
+- **兼容性**：0.4.0 数据库 schema 为 3，已发布的 0.3.0（schema 2）无法打开新库；升级请使用 0.4.0 安装包覆盖。

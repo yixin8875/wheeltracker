@@ -75,7 +75,7 @@ npm --prefix ui run desktop:build -- --debug --no-bundle
 npm --prefix ui run desktop:build -- --bundles nsis
 ```
 
-输出：`target/release/bundle/nsis/Wheel Tracker_0.3.0_x64-setup.exe`。本轮已成功构建；安装与原生完整流程的验收状态见[桌面验收记录](docs/desktop-acceptance.md)。
+输出：`target/release/bundle/nsis/Wheel Tracker_0.4.0_x64-setup.exe`。本轮已成功构建；安装与原生完整流程的验收状态见[桌面验收记录](docs/desktop-acceptance.md)。
 
 单独预览前端：
 

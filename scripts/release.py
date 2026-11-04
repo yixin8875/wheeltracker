@@ -94,6 +94,9 @@ def check_versions() -> str:
 
 def run(command: list[str], env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(command))
+    # npm is a .cmd shim on Windows; CreateProcess needs cmd.exe to launch it.
+    if os.name == "nt" and command[0] == "npm":
+        command = [os.environ.get("ComSpec", "cmd.exe"), "/c", *command]
     subprocess.run(command, cwd=ROOT, env=env, check=True)
 
 

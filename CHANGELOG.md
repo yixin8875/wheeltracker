@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
 ### Added
 
 - 账户归档 / 恢复：`set_account_archived(accountId, archived)` 把账户从侧栏切换器隐藏但保留全部数据；至少保留一个可用账户
