@@ -88,7 +88,7 @@ async function setup(page: Page) {
         case 'set_price': state.testPrices = [{ symbol: args.symbol, date: args.date, close: args.close, source: '手动', quotedAt: null }]; return null;
         case 'app_info':
           if (state.testRejectMetadata) throw new Error('metadata read failed');
-          return { version: '0.2.0', dbPath: 'test-only/wheel.db' };
+          return { version: '0.3.0', dbPath: 'test-only/wheel.db' };
         case 'list_accounts': return [...state.testAccounts];
         case 'create_account': {
           if (state.testAccounts.some((account: any) => account.name === args.name)) throw new Error('账户名称已存在。');
@@ -142,7 +142,7 @@ async function setup(page: Page) {
         }
         case 'add_events': return ['close', 'open'];
         case 'backup_now': return args.password ? 'test-only/backups/snapshot.sqlite.enc' : 'test-only/backups/snapshot.sqlite';
-        case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.2.0', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
+        case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.3.0', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
         case 'rebuild': return { events: 1, campaigns: 1, entries: 1, issues: [] };
         case 'import_preview': {
           const mapping = (args.req as any).mapping ?? { fields: { date: 0, action: 1, symbol: 2, qty: 3, price: 4 }, dateFormat: 'auto', delimiter: 'comma', hasHeader: true };

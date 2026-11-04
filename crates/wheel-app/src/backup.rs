@@ -276,6 +276,15 @@ fn validate_sqlite(path: &Path, file_name: &str) -> Result<BackupValidation> {
     if !integrity.is_empty() && integrity != "ok" {
         issues.push(format!("SQLite 完整性检查返回 {integrity}"));
     }
+    let user_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+    if user_version > store::SCHEMA_VERSION {
+        issues.push(format!(
+            "备份由更新版本创建（schema {user_version}），请升级应用后再恢复；当前最多支持 {}",
+            store::SCHEMA_VERSION
+        ));
+    }
     for table in REQUIRED_TABLES {
         let exists: bool = conn
             .query_row(
@@ -458,6 +467,33 @@ mod tests {
         assert!(remaining.contains(&"wheel-1-0.sqlite".into()));
         assert!(remaining.contains(&"pre-restore-1-0.sqlite".into()));
         assert!(remaining.contains(&"auto-not-a-number.sqlite".into()));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_backups_from_a_newer_schema() {
+        let directory = temp_dir("newer-schema");
+        let conn = conn_at(&directory);
+        store::ensure_account(&conn, "main", "Test").unwrap();
+        let backups = dir_for(&directory.join("wheel.db")).unwrap();
+        let path = create(&conn, &backups, MANUAL_PREFIX, 43).unwrap();
+        {
+            let newer = Connection::open(&path).unwrap();
+            newer
+                .execute_batch(&format!(
+                    "PRAGMA user_version = {};",
+                    store::SCHEMA_VERSION + 1
+                ))
+                .unwrap();
+        }
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let validation = validate(&backups, &file_name).unwrap();
+        assert!(!validation.valid);
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.contains("请升级应用")));
+        drop(conn);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

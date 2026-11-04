@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - 年度报表：新增 `annual_report(accountId)` 命令，按 UTC 年份聚合已实现净收租、股票已实现盈亏、分红、费用与现金调整；只返回有活动的年份与月份，月份在年度内累计，标的按合计绝对值降序
@@ -42,9 +44,17 @@
 - 导入去重指纹（账户 + 日期 + 类型 + 标的 + 到期 + 行权价 + C/P + 数量 + 价格 + 费用），重复行默认不勾选，确认后可强制导入
 - 导入整批复用既有事务写入路径：按日期稳定排序、任一行非法则整批回滚，备注自动标注 `导入:<来源>`
 - `wheel-app` 新增 `import` 模块与 `import_preview` / `import_commit` / `import_save_mapping` 命令；`settings` 表增加通用键值读写，用于保存列映射
+- `scripts/release.py`：版本一致性检查、离线测试 / clippy / 前端构建、NSIS 打包，并生成 `dist/release/<installer>.sha256` 与 `release-manifest.json`
+- `docs/release-checklist.md`：安装、覆盖升级、卸载、CSP 与已知限制的逐项发布检查
+- `.github/workflows/windows-ci.yml`：push / PR / 手动触发时运行 Rust 测试、clippy 与前端构建
+- 新增 MIT `LICENSE`（Copyright © 2026 Wheel Tracker contributors），随安装包分发
 
 ### Changed
 
+- 版本统一为 `0.3.0`：workspace / `Cargo.lock` / `tauri.conf.json` / `ui/package.json` / `ui/package-lock.json` 一致，`wheel-core` 与 `wheel-app` 继承 workspace 版本
+- NSIS 安装包配置：currentUser、简体中文 / English 语言选择器、开始菜单 `Wheel Tracker`、lzma、MIT `LICENSE` 与 publisher / copyright / Finance 分类 / 中英文描述
+- 安全策略：生产 CSP 仅允许 `'self'`、Tauri IPC 与 `data:` / `blob:` 图片，样式允许内联；开发 CSP 额外放行 Vite 的 `127.0.0.1:1420`
+- 备份校验拒绝 `user_version` 高于当前 schema 的快照，并提示先升级应用
 - 导航新增「年度报表」；`reload` 并行加载年度报表，收租月报保持不变
 - 「记一笔」新增交易类型「拆股 / 合股」：拆股模式只显示日期、标的、比例与零股补偿；期权表单显示「1 手 = N 股」并在选择持仓时回填乘数
 - 台账、持仓、交易记录与 Excel / CSV 导出增加「每手股数」列；拆股事件在事件日志与战役时间轴显示比例与零股补偿

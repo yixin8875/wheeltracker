@@ -1,0 +1,29 @@
+name: windows-ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install frontend dependencies
+        run: npm ci --prefix ui
+      - name: Rust tests
+        run: cargo test --workspace
+      - name: Clippy
+        run: cargo clippy -p wheel-app --no-deps -- -D warnings
+      - name: Frontend build
+        run: npm --prefix ui run build
+      # Playwright needs Microsoft Edge and a running dev server; it stays a
+      # local/manual gate until the runner image is pinned.

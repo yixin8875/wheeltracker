@@ -703,6 +703,16 @@ restore_status() -> RestoreStatus
 - **前端**：导航新增「年度报表」，默认最新年份；汇总卡展示年度合计、净收租、股票盈亏、分红、费用与调整；柱形为月度合计、折线为年度累计；月度明细与按标的归因各一张表；CSV 导出含月度段、年度合计与标的段，Excel 导出「年度月度」「年度标的」两张工作表。
 - **边界**：只读报表，不替代收租月报；不是税务申报表，不做短期 / 长期分类或 wash sale。
 
+### 8.11 P5 发布工程
+
+- **版本单一来源**：workspace `Cargo.toml` 为 `0.3.0`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
+- **安装包**：Tauri `bundle.targets = ["nsis"]`，`installMode = currentUser`，简体中文 / English 语言选择，开始菜单 `Wheel Tracker`，lzma 压缩；`licenseFile` 指向 MIT `LICENSE`，并设置 publisher / copyright / Finance 分类 / 中英文描述。
+- **CSP**：生产 `default-src 'self'`，`connect-src` 仅 `ipc:` 与 `http://ipc.localhost`，图片允许 `data:` / `blob:`，样式允许内联；`devCsp` 额外放行 Vite 的 `127.0.0.1:1420` HTTP / WebSocket 与开发期内联脚本。
+- **数据库保护**：当前 schema `user_version = 2`；更高版本数据库拒绝打开；备份校验同样拒绝 `user_version > 2` 的快照并提示升级应用，避免旧版破坏新数据。
+- **发布产物**：`scripts/release.py` 依次执行版本检查、`cargo test --workspace`、clippy、前端构建与 NSIS 打包，然后在 `dist/release/` 写出 `<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（产品、版本、git 提交、UTC 构建时间、目标三元组、文件名、大小、SHA-256、`signing: "unsigned"`、`updater: "not-configured"`）。产物目录不纳入版本控制。
+- **自动化**：`.github/workflows/windows-ci.yml` 在 push / PR / 手动触发时运行 Rust 测试、clippy 与前端构建；Playwright 依赖 Edge 与开发服务器，暂为本地 / 人工门禁。安装、覆盖升级、卸载与 CSP 冒烟见 `docs/release-checklist.md`。
+- **边界**：不做代码签名、自动更新、单实例、日志上传或崩溃上报；安装包未签名，SmartScreen 提示写入发布说明。
+
 ---
 
 ## 9. 数据导入
@@ -770,6 +780,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图、邮件文本解析（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
 | **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图 / 邮件导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
+| **P5 发布** ✅ | 版本统一 0.3.0、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI | 可分发安装包 | 已完成（不签名、不自动更新） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

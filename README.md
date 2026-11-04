@@ -75,7 +75,7 @@ npm --prefix ui run desktop:build -- --debug --no-bundle
 npm --prefix ui run desktop:build -- --bundles nsis
 ```
 
-输出：`target/release/bundle/nsis/Wheel Tracker_0.2.0_x64-setup.exe`。本轮已成功构建；安装与原生完整流程的验收状态见[桌面验收记录](docs/desktop-acceptance.md)。
+输出：`target/release/bundle/nsis/Wheel Tracker_0.3.0_x64-setup.exe`。本轮已成功构建；安装与原生完整流程的验收状态见[桌面验收记录](docs/desktop-acceptance.md)。
 
 单独预览前端：
 
@@ -115,6 +115,22 @@ python -I scripts/desktop_acceptance.py --release
 
 需先准备 tauri-driver 和与 WebView2 匹配的 EdgeDriver。Debug/Release 各 17 项原生检查已通过；环境、驱动准备、原始报告及未覆盖边界见[桌面验收记录](docs/desktop-acceptance.md)。
 
+## 发布
+
+一条命令完成版本一致性检查、测试、前端构建、NSIS 打包与哈希清单：
+
+```bash
+python -I scripts/release.py
+```
+
+先跑检查但不重新打包：
+
+```bash
+python -I scripts/release.py --no-build
+```
+
+产物在 `dist/release/`：`<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（版本、提交、UTC 构建时间、目标、文件大小、SHA-256）。安装包未签名、不包含自动更新；安装、覆盖升级、卸载与 CSP 冒烟按[发布检查清单](docs/release-checklist.md)执行。MIT 许可证见 `LICENSE`。
+
 ## 数据与备份
 
 桌面程序使用平台应用数据目录下的 `wheel.db`，实际路径可在“设置”中查看。备份写入数据库旁的 `backups/`，成功后显示完整路径；文件时间按 UTC 显示。重要备份应另存到其他设备。
@@ -129,4 +145,4 @@ CSV / Excel 导出是报表；CSV 导入用于补录历史交易，重复行默�
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)。系统通知尚未实现。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉 / 邮件导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)、[P5 发布工程验收](docs/P5-release.md)。系统通知尚未实现。
