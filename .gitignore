@@ -6,7 +6,11 @@
 node_modules/
 dist/
 .ui/
+/ui/test-results/
+/ui/playwright-report/
+/crates/wheel-app/gen/
 *.log
+__pycache__/
 
 # Local data and backups (never commit user financial data)
 *.db

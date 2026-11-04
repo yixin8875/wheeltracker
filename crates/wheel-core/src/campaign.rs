@@ -81,14 +81,22 @@ impl Campaign {
 
     /// Track B: effective cost per share, net of realized premium.
     pub fn cost_b(&self, include_dividends: bool) -> Option<f64> {
-        let dividends = if include_dividends { self.dividends } else { 0.0 };
+        let dividends = if include_dividends {
+            self.dividends
+        } else {
+            0.0
+        };
         self.cost_a()
             .map(|_| (self.cost_total - self.premium_realized - dividends) / self.shares as f64)
     }
 
     /// Track C': theoretical cost including premium from still-open options.
     pub fn cost_c(&self, include_dividends: bool) -> Option<f64> {
-        let dividends = if include_dividends { self.dividends } else { 0.0 };
+        let dividends = if include_dividends {
+            self.dividends
+        } else {
+            0.0
+        };
         self.cost_a().map(|_| {
             (self.cost_total - self.premium_realized - self.premium_open - dividends)
                 / self.shares as f64

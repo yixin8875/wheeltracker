@@ -600,7 +600,7 @@ optiontrader/
 │   │   └── tests/scenarios/
 │   ├── wheel-import/          # CSV / OCR / 邮件解析
 │   └── wheel-app/             # Tauri 二进制
-│       ├── src/{main,commands,notify,backup}.rs
+│       ├── src/{main,commands,store,views,backup,restore,import,market}.rs
 │       └── tauri.conf.json
 ├── ui/
 │   ├── src/
@@ -630,7 +630,22 @@ confirm_import(events) -> ImportResult
 set_price(symbol, date, close)
 export_report(range, format) -> Path
 backup_now() -> Path
+set_preferences(reminder_lead_days, auto_backup_enabled, auto_backup_keep) -> SettingsView
+list_backups() -> Vec<BackupEntry>
+validate_backup(file_name) -> BackupValidation   // 只读 + integrity_check
+stage_restore(file_name) -> PendingRestore       // 写 marker，不立即替换
+restore_status() -> RestoreStatus
 ```
+
+### 8.5 P3 体验闭环
+
+- **到期提醒**：前端由 `positions.daysLeft` 与 `settings.reminderLeadDays` 推导；`<0` 过期，`<=min(3, lead)` 紧急，`<=lead` 即将到期。侧栏徽标、仪表盘卡片、日历共用同一口径，不注册系统通知。
+- **到期日历**：纯 `Date.UTC` 的周一起始 42 格月历；选中日列出合约，顶部汇总未来 30 天。账本日期统一使用后端 UTC `asOf`。
+- **战役对比**：按战役聚合，已实现收益 = `realizedPnl`（回退为权利金 + 分红 + 股票盈亏 + 现金调整）；峰值投入取逐日「未平仓 Put 占用资金 + 当日持股纯股票成本」的最大值；收益率为两者之比，投入为 0 时留空。进行中战役不含未平仓权利金与股票浮盈亏。
+- **Excel**：`ui/src/xlsx.ts` 手写 STORE-only ZIP 与 OOXML（CRC32、UTF-8 文件名、inlineStr、冻结首行、金额/百分比 `numFmt`），不引入依赖、不生成 `<f>` 公式；`export.ts` 组装台账、交易记录、持仓、战役四表。
+- **自动备份**：应用启动及后台线程每 30 分钟读取 UTC 日期，`lastAutoBackupDay` 相同则跳过；恢复 marker 存在时跳过。成功生成 `auto-*.sqlite` 后更新日期，再按 `autoBackupKeep` 清理旧自动备份；手动备份与 `pre-restore-*` 不受影响。
+- **恢复协议**：`restore/pending.json` 只存文件名、安全快照名与请求时间。暂存时先只读校验备份，再用 `VACUUM INTO` 生成 `pre-restore-*.sqlite`，最后原子写 marker。下次启动在 `store::open` 之前执行 `apply_pending`：重新校验 → 归档 `wheel.db` 与 WAL/SHM/journal → 复制为临时文件并校验 → 替换 `wheel.db`；任一步失败回滚并隔离 marker，回滚失败则中止启动，绝不静默新建空库。成功保留最近 3 组归档。marker 存在期间所有写入命令返回「已安排恢复，请重启应用」。
+- **偏好**：`reminderLeadDays`（0–60，默认 7）、`autoBackupEnabled`（默认开）、`autoBackupKeep`（1–100，默认 7）存于 `settings` 键值表，严格解析，非法值不会部分写入。
 
 ---
 
@@ -668,8 +683,16 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 
 ### 9.4 CSV 对账单
 
-- 向导式列映射：自动识别常见表头，人工确认列对应关系，保存映射模板。
-- 支持去重：按「账户 + 日期 + 合约 + 手数 + 价格」做指纹，导入前提示疑似重复。
+已实现（通用列映射，不绑定券商）：
+
+- **输入**：桌面文件选择（`.csv` / `.txt`）或直接粘贴；RFC4180 引号与引号内换行、BOM/CRLF；上限 8 MB、5000 行、64 列。前端优先严格 UTF-8，失败回退 GB18030。
+- **字段**：交易日期、类型（规范值）或方向/买卖、标的、OCC 合约代码、数量、价格、费用、金额、到期日、行权价、看涨/看跌、备注；中英文别名自动识别，歧义表头提示人工确认。
+- **日期**：`YYYY-MM-DD`、`YYYY/M/D`、`YYYY年M月D日` 规范化为 `YYYY-MM-DD`；`M/D/YYYY` 按美式解析并显式提示。
+- **类型**：STO / BTC / 到期 / 指派 / 买卖股票 / 分红 / 费用 / 调整；做多期权（Buy to Open、Sell to Close）明确拒绝，不静默归类。
+- **映射持久化**：表头顺序敏感签名，保存于 `settings` 的 `importMapping:v1:<signature>`。
+- **去重**：账户 + 日期 + 类型 + 标的 + 到期 + 行权价 + C/P + 数量 + 价格 + 费用，数值规范到 6 位小数；重复行默认不勾选，提交时在互斥锁内重查。
+- **提交**：按 `(日期, 文件行号)` 稳定排序，复用 `append_requests` 的单一事务重放；任一行非法整批回滚；备注前缀 `导入:<来源>`。
+- **预览边界**：预览只读，不做逐行持仓模拟；平仓/指派缺少持仓等跨行错误在提交重放时拒绝整批。
 
 ---
 
@@ -678,9 +701,9 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | 阶段 | 内容 | 交付 | 估算 |
 |---|---|---|---|
 | **P0 内核** ✅ | `wheel-core` 领域模型 + 重放引擎 + 不变量断言 + golden/property 测试 | `cargo test` 全绿（16 项 + 文档测试），`cargo run --example demo` 可重放示例 | 已完成 |
-| **P1 MVP** | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 1.5–2 周 |
-| **P2 导入** | CSV 映射向导 + 截图 OCR + 邮件文本解析 + 去重 | 历史数据可批量补录 | 1 周 |
-| **P3 体验** | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 | 完整闭环 | 1 周 |
+| **P1 MVP** ✅ | Tauri 壳 + SQLite + 快速录入 + 仪表盘 + 标的详情 + 收租台账 + 手动价格 | 可日常使用的桌面应用 | 已完成 |
+| **P2 导入** 🟡 | CSV 映射向导 + 去重（已完成）；截图 OCR + 邮件文本解析（未做） | 历史数据可批量补录 | CSV 已完成 |
+| **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
 | **P4 扩展** | 多账户 + SQLCipher 加密 + IMAP 自动拉取 + 拆股支持 + 云端同步 | 进阶 | 按需 |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。

@@ -30,20 +30,56 @@ fn main() {
     let c205 = call(date!(2026 - 06 - 19), 205.0);
 
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p200.clone(), 1, 5.0, 1.5)
-            .note("卖 Put 200P @5.00"),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p200.clone(),
+            1,
+            5.0,
+            1.5,
+        )
+        .note("卖 Put 200P @5.00"),
         Event::expire_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 20), p200, 1)
             .note("200P 到期作废"),
-        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 02 - 25), p195.clone(), 1, 6.0, 1.5)
-            .note("卖 Put 195P @6.00"),
+        Event::sell_option(
+            ACCOUNT,
+            "e3",
+            3,
+            date!(2026 - 02 - 25),
+            p195.clone(),
+            1,
+            6.0,
+            1.5,
+        )
+        .note("卖 Put 195P @6.00"),
         Event::assign_option(ACCOUNT, "e4", 4, date!(2026 - 03 - 20), p195, 1, 0.0)
             .note("195P 被指派，买入 100 股"),
-        Event::sell_option(ACCOUNT, "e5", 5, date!(2026 - 03 - 25), c200.clone(), 1, 4.0, 1.5)
-            .note("卖 Call 200C @4.00"),
+        Event::sell_option(
+            ACCOUNT,
+            "e5",
+            5,
+            date!(2026 - 03 - 25),
+            c200.clone(),
+            1,
+            4.0,
+            1.5,
+        )
+        .note("卖 Call 200C @4.00"),
         Event::expire_option(ACCOUNT, "e6", 6, date!(2026 - 04 - 17), c200, 1)
             .note("200C 到期作废"),
-        Event::sell_option(ACCOUNT, "e7", 7, date!(2026 - 05 - 15), c205.clone(), 1, 3.0, 1.5)
-            .note("卖 Call 205C @3.00"),
+        Event::sell_option(
+            ACCOUNT,
+            "e7",
+            7,
+            date!(2026 - 05 - 15),
+            c205.clone(),
+            1,
+            3.0,
+            1.5,
+        )
+        .note("卖 Call 205C @3.00"),
         Event::assign_option(ACCOUNT, "e8", 8, date!(2026 - 06 - 19), c205, 1, 0.0)
             .note("205C 被行权，股票被 call 走"),
     ];

@@ -69,7 +69,10 @@ impl fmt::Display for EngineError {
             }
             EngineError::DuplicateEventId { id } => write!(f, "duplicate event id {id}"),
             EngineError::NoOpenPosition { event, contract } => {
-                write!(f, "event {event} references {contract} but no position is open")
+                write!(
+                    f,
+                    "event {event} references {contract} but no position is open"
+                )
             }
             EngineError::InsufficientOpenQty {
                 event,
@@ -106,6 +109,8 @@ pub struct DerivedState {
     pub positions: Vec<OptionPosition>,
     pub lots: Vec<ShareLot>,
     pub premium_entries: Vec<PremiumEntry>,
+    /// Campaign actually affected by each successfully replayed event.
+    pub event_campaigns: HashMap<EventId, String>,
 }
 
 impl DerivedState {
@@ -283,6 +288,7 @@ struct Builder {
     active: HashMap<String, usize>,
     next_campaign_id: u32,
     seen_ids: HashSet<String>,
+    event_campaigns: HashMap<EventId, String>,
 }
 
 impl Builder {
@@ -297,6 +303,7 @@ impl Builder {
             active: HashMap::new(),
             next_campaign_id: 0,
             seen_ids: HashSet::new(),
+            event_campaigns: HashMap::new(),
         }
     }
 
@@ -306,6 +313,7 @@ impl Builder {
                 id: event.id.clone(),
             });
         }
+        let before = self.active_campaign_idx(&event.symbol);
         match event.kind {
             EventKind::Option(OptionAction::OpenShort) => self.open_short(event),
             EventKind::Option(OptionAction::Close) => {
@@ -320,16 +328,18 @@ impl Builder {
             EventKind::Dividend => self.dividend(event),
             EventKind::Fee => self.adjust_cash(event, -event.amount),
             EventKind::Adjustment => self.adjust_cash(event, event.amount),
+        }?;
+        if let Some(idx) = before.or_else(|| self.active_campaign_idx(&event.symbol)) {
+            self.event_campaigns
+                .insert(event.id.clone(), self.campaigns[idx].id.clone());
         }
+        Ok(())
     }
 
     fn open_short(&mut self, event: &Event) -> Result<(), EngineError> {
-        let contract = event
-            .contract
-            .clone()
-            .ok_or(EngineError::MissingContract {
-                event: event.id.clone(),
-            })?;
+        let contract = event.contract.clone().ok_or(EngineError::MissingContract {
+            event: event.id.clone(),
+        })?;
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -380,24 +390,21 @@ impl Builder {
     }
 
     fn close_position(&mut self, event: &Event, status: EntryStatus) -> Result<(), EngineError> {
-        let contract = event
-            .contract
-            .clone()
-            .ok_or(EngineError::MissingContract {
-                event: event.id.clone(),
-            })?;
+        let contract = event.contract.clone().ok_or(EngineError::MissingContract {
+            event: event.id.clone(),
+        })?;
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
             });
         }
 
-        let campaign_idx = self
-            .campaign_for_contract(&contract)
-            .ok_or_else(|| EngineError::NoOpenPosition {
-                event: event.id.clone(),
-                contract: contract.display(),
-            })?;
+        let campaign_idx =
+            self.campaign_for_contract(&contract)
+                .ok_or_else(|| EngineError::NoOpenPosition {
+                    event: event.id.clone(),
+                    contract: contract.display(),
+                })?;
         let campaign_id = self.campaigns[campaign_idx].id.clone();
         let key = contract.id();
         let have = self.open_qty(&campaign_id, &key);
@@ -437,24 +444,21 @@ impl Builder {
     }
 
     fn assign(&mut self, event: &Event) -> Result<(), EngineError> {
-        let contract = event
-            .contract
-            .clone()
-            .ok_or(EngineError::MissingContract {
-                event: event.id.clone(),
-            })?;
+        let contract = event.contract.clone().ok_or(EngineError::MissingContract {
+            event: event.id.clone(),
+        })?;
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
             });
         }
 
-        let campaign_idx = self
-            .campaign_for_contract(&contract)
-            .ok_or_else(|| EngineError::NoOpenPosition {
-                event: event.id.clone(),
-                contract: contract.display(),
-            })?;
+        let campaign_idx =
+            self.campaign_for_contract(&contract)
+                .ok_or_else(|| EngineError::NoOpenPosition {
+                    event: event.id.clone(),
+                    contract: contract.display(),
+                })?;
         let campaign_id = self.campaigns[campaign_idx].id.clone();
         let key = contract.id();
         let have = self.open_qty(&campaign_id, &key);
@@ -577,12 +581,12 @@ impl Builder {
                 event: event.id.clone(),
             });
         }
-        let campaign_idx =
-            self.active_campaign_idx(&event.symbol)
-                .ok_or_else(|| EngineError::NoActiveCampaign {
-                    event: event.id.clone(),
-                    symbol: event.symbol.clone(),
-                })?;
+        let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
+            EngineError::NoActiveCampaign {
+                event: event.id.clone(),
+                symbol: event.symbol.clone(),
+            }
+        })?;
         let campaign_id = self.campaigns[campaign_idx].id.clone();
         let held = self.campaigns[campaign_idx].shares;
         if held < event.qty {
@@ -613,12 +617,12 @@ impl Builder {
     }
 
     fn dividend(&mut self, event: &Event) -> Result<(), EngineError> {
-        let campaign_idx =
-            self.active_campaign_idx(&event.symbol)
-                .ok_or_else(|| EngineError::NoActiveCampaign {
-                    event: event.id.clone(),
-                    symbol: event.symbol.clone(),
-                })?;
+        let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
+            EngineError::NoActiveCampaign {
+                event: event.id.clone(),
+                symbol: event.symbol.clone(),
+            }
+        })?;
         let shares = if event.qty > 0 {
             event.qty
         } else {
@@ -632,12 +636,12 @@ impl Builder {
     }
 
     fn adjust_cash(&mut self, event: &Event, delta: f64) -> Result<(), EngineError> {
-        let campaign_idx =
-            self.active_campaign_idx(&event.symbol)
-                .ok_or_else(|| EngineError::NoActiveCampaign {
-                    event: event.id.clone(),
-                    symbol: event.symbol.clone(),
-                })?;
+        let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
+            EngineError::NoActiveCampaign {
+                event: event.id.clone(),
+                symbol: event.symbol.clone(),
+            }
+        })?;
         self.campaigns[campaign_idx].adjustments += delta;
         self.campaigns[campaign_idx].cash_flow += delta;
         Ok(())
@@ -749,11 +753,7 @@ impl Builder {
             .find(|p| p.campaign_id == campaign_id && p.contract.id() == contract_key)
         {
             position.open_qty = qty;
-            position.avg_credit_per_share = if qty > 0 {
-                weighted / qty as f64
-            } else {
-                0.0
-            };
+            position.avg_credit_per_share = if qty > 0 { weighted / qty as f64 } else { 0.0 };
         }
         self.positions.retain(|p| p.open_qty > 0);
     }
@@ -933,6 +933,44 @@ impl Builder {
             positions: self.positions,
             lots: self.lots,
             premium_entries: self.entries,
+            event_campaigns: self.event_campaigns,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::date;
+
+    #[test]
+    fn event_campaigns_keep_closing_assignment_and_same_day_reopening_separate() {
+        let at = date!(2026 - 01 - 02);
+        let call = OptionContract::new("AAPL", date!(2026 - 02 - 20), 110.0, Right::Call);
+        let mut events = vec![
+            Event::buy_shares("main", "buy", 1, at, "AAPL", 100, 100.0, 0.0),
+            Event::sell_option("main", "open", 2, at, call.clone(), 1, 2.0, 0.0),
+            Event::dividend("main", "dividend", 3, at, "AAPL", 1.0, 100),
+            Event::fee("main", "fee", 4, at, "AAPL", 2.0),
+            Event::adjustment("main", "adjustment", 5, at, "AAPL", -3.0),
+            Event::assign_option("main", "assignment", 6, at, call.clone(), 1, 0.0),
+            Event::buy_shares("main", "reopen", 7, at, "AAPL", 100, 120.0, 0.0),
+            Event::sell_option("main", "new-call", 8, at, call.clone(), 1, 2.0, 0.0),
+            Event::close_option("main", "close-call", 9, at, call, 1, 1.0, 0.0),
+            Event::buy_shares("other", "other-account", 1, at, "AAPL", 100, 1.0, 0.0),
+        ];
+        // Replay order, rather than the input vector or calendar date alone, owns events.
+        events.reverse();
+        let state = replay("main", &events, Settings::default()).unwrap();
+        assert_eq!(state.event_campaigns.len(), 9);
+        for id in ["buy", "open", "dividend", "fee", "adjustment", "assignment"] {
+            assert_eq!(state.event_campaigns[id], "main#c0");
+        }
+        for id in ["reopen", "new-call", "close-call"] {
+            assert_eq!(state.event_campaigns[id], "main#c1");
+        }
+        assert!(!state.campaign("main#c0").unwrap().is_active());
+        assert!(state.campaign("main#c1").unwrap().is_active());
+        assert!(state.check_invariants().is_empty());
     }
 }

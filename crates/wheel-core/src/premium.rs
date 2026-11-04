@@ -60,7 +60,8 @@ impl PremiumEntry {
     }
 
     pub fn days_held(&self) -> Option<i64> {
-        self.closed_at.map(|closed| (closed - self.opened_at).whole_days())
+        self.closed_at
+            .map(|closed| (closed - self.opened_at).whole_days())
     }
 
     pub fn annualized_return(&self) -> Option<f64> {

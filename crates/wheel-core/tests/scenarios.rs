@@ -131,7 +131,16 @@ fn walkthrough_matches_design_document() {
 fn t1_expired_put_moves_premium_to_realized() {
     let p = put(date!(2026 - 02 - 20), 200.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p.clone(), 1, 5.0, 1.5),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            5.0,
+            1.5,
+        ),
         Event::expire_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 20), p, 1),
     ];
     let state = run(&events);
@@ -151,7 +160,16 @@ fn t1_expired_put_moves_premium_to_realized() {
 fn t2_assignment_builds_share_lot_and_cost_b() {
     let p = put(date!(2026 - 03 - 20), 195.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 02 - 25), p.clone(), 1, 6.0, 1.5),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 02 - 25),
+            p.clone(),
+            1,
+            6.0,
+            1.5,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), p, 1, 0.0),
     ];
     let state = run(&events);
@@ -169,9 +187,27 @@ fn t3_expired_call_lowers_cost_b_not_cost_a() {
     let p = put(date!(2026 - 03 - 20), 195.0);
     let c = call(date!(2026 - 04 - 17), 200.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 02 - 25), p.clone(), 1, 6.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 02 - 25),
+            p.clone(),
+            1,
+            6.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), p, 1, 0.0),
-        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 03 - 25), c.clone(), 1, 4.0, 1.5),
+        Event::sell_option(
+            ACCOUNT,
+            "e3",
+            3,
+            date!(2026 - 03 - 25),
+            c.clone(),
+            1,
+            4.0,
+            1.5,
+        ),
         Event::expire_option(ACCOUNT, "e4", 4, date!(2026 - 04 - 17), c, 1),
     ];
     let state = run(&events);
@@ -187,7 +223,16 @@ fn t5_roll_nets_both_legs_without_double_counting() {
     let p1 = put(date!(2026 - 02 - 20), 100.0);
     let p2 = put(date!(2026 - 03 - 20), 95.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p1.clone(), 1, 3.0, 1.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p1.clone(),
+            1,
+            3.0,
+            1.0,
+        ),
         Event::close_option(ACCOUNT, "e2", 2, date!(2026 - 01 - 20), p1, 1, 1.0, 1.0),
         Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 01 - 20), p2, 1, 4.0, 1.0),
     ];
@@ -205,7 +250,16 @@ fn t5_roll_nets_both_legs_without_double_counting() {
 fn t6_partial_close_splits_ledger_and_releases_proportionally() {
     let p = put(date!(2026 - 03 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p.clone(), 2, 3.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            2,
+            3.0,
+            0.0,
+        ),
         Event::close_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), p, 1, 1.0, 0.0),
     ];
     let state = run(&events);
@@ -229,7 +283,16 @@ fn t6_partial_close_splits_ledger_and_releases_proportionally() {
 fn t7_multi_contract_uses_multiplier() {
     let p = put(date!(2026 - 03 - 20), 50.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 02 - 25), p.clone(), 3, 2.0, 3.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 02 - 25),
+            p.clone(),
+            3,
+            2.0,
+            3.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), p, 3, 0.0),
     ];
     let state = run(&events);
@@ -245,7 +308,16 @@ fn t7_multi_contract_uses_multiplier() {
 fn t8_early_assignment_uses_actual_date() {
     let p = put(date!(2026 - 03 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 02 - 25), p.clone(), 1, 2.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 02 - 25),
+            p.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 10), p, 1, 0.0),
     ];
     let state = run(&events);
@@ -265,9 +337,27 @@ fn t9_second_campaign_starts_with_empty_pool() {
     let c1 = call(date!(2026 - 03 - 20), 105.0);
     let p2 = put(date!(2026 - 04 - 20), 98.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p1.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p1.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 20), p1, 1, 0.0),
-        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 02 - 25), c1.clone(), 1, 2.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e3",
+            3,
+            date!(2026 - 02 - 25),
+            c1.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e4", 4, date!(2026 - 03 - 20), c1, 1, 0.0),
         Event::sell_option(ACCOUNT, "e5", 5, date!(2026 - 03 - 25), p2, 1, 3.0, 0.0),
     ];
@@ -292,9 +382,27 @@ fn t10_negative_effective_cost_is_allowed() {
     let p = put(date!(2026 - 02 - 20), 100.0);
     let c = call(date!(2026 - 03 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 20), p, 1, 0.0),
-        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 02 - 25), c.clone(), 1, 120.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e3",
+            3,
+            date!(2026 - 02 - 25),
+            c.clone(),
+            1,
+            120.0,
+            0.0,
+        ),
         Event::expire_option(ACCOUNT, "e4", 4, date!(2026 - 03 - 20), c, 1),
     ];
     let state = run(&events);
@@ -309,7 +417,16 @@ fn t10_negative_effective_cost_is_allowed() {
 fn dividends_only_affect_cost_when_enabled() {
     let p = put(date!(2026 - 02 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 20), p, 1, 0.0),
         Event::dividend(ACCOUNT, "e3", 3, date!(2026 - 02 - 27), "AAPL", 0.25, 100),
     ];
@@ -348,7 +465,16 @@ fn replay_is_order_independent_and_idempotent() {
 fn duplicate_event_id_is_rejected() {
     let p = put(date!(2026 - 02 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "dup", 1, date!(2026 - 01 - 05), p.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "dup",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::sell_option(ACCOUNT, "dup", 2, date!(2026 - 01 - 06), p, 1, 5.0, 0.0),
     ];
     let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
@@ -362,7 +488,16 @@ fn duplicate_event_id_is_rejected() {
 fn closing_more_contracts_than_open_is_rejected() {
     let p = put(date!(2026 - 02 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), p.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            p.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::close_option(ACCOUNT, "e2", 2, date!(2026 - 01 - 10), p, 2, 1.0, 0.0),
     ];
     let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
@@ -376,7 +511,16 @@ fn closing_more_contracts_than_open_is_rejected() {
 fn calling_away_without_shares_is_rejected() {
     let c = call(date!(2026 - 03 - 20), 100.0);
     let events = vec![
-        Event::sell_option(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), c.clone(), 1, 5.0, 0.0),
+        Event::sell_option(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            c.clone(),
+            1,
+            5.0,
+            0.0,
+        ),
         Event::assign_option(ACCOUNT, "e2", 2, date!(2026 - 03 - 20), c, 1, 0.0),
     ];
     let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
