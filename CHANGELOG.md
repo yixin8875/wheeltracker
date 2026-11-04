@@ -3,11 +3,23 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.5.5] - 2026-11-04
 
 ### Added
 
 - 应用启动时检查 GitHub Release，并通过 Tauri updater 下载、验签、安装新版本，完成后可一键重启
+- 推送 `main` 后自动递增补丁版本、提交版本号、打 tag、构建并发布 GitHub Release；发布失败可从 Actions 手动重跑
+
+### Changed
+
+- 发布产物新增 `.exe.sig` 与 `latest.json`，应用内更新使用 minisign 公钥验签，签名不符不会安装
+- 更新下载复用系统代理；仅支持 Windows x64
+
+## [0.5.2] - 2026-11-04
+
+### Changed
+
+- 重新设计应用图标：亮蓝圆角底、白色轮盘环与 W，安装包、窗口、侧栏品牌与 favicon 统一
 
 ## [0.5.1] - 2026-11-04
 

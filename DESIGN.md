@@ -713,7 +713,7 @@ restore_status() -> RestoreStatus
 
 ### 8.11 P5 发布工程
 
-- **版本单一来源**：workspace `Cargo.toml` 为 `0.5.1`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
+- **版本单一来源**：workspace `Cargo.toml` 为 `0.5.5`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
 - **安装包**：Tauri `bundle.targets = ["nsis"]`，`installMode = currentUser`，简体中文 / English 语言选择，开始菜单 `Wheel Tracker`，lzma 压缩；`licenseFile` 指向 MIT `LICENSE`，并设置 publisher / copyright / Finance 分类 / 中英文描述。
 - **CSP**：生产 `default-src 'self'`，`connect-src` 仅 `ipc:` 与 `http://ipc.localhost`，图片允许 `data:` / `blob:`，样式允许内联；`devCsp` 额外放行 Vite 的 `127.0.0.1:1420` HTTP / WebSocket 与开发期内联脚本。
 - **数据库保护**：当前 schema `user_version = 3`；更高版本数据库拒绝打开；备份校验同样拒绝更高版本快照并提示升级应用，避免旧版破坏新数据。
@@ -779,7 +779,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图识别（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
 | **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
-| **P5 发布** ✅ | 版本统一 0.5.1、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI | 可分发安装包 | 已完成（不签名、不自动更新） |
+| **P5 发布** ✅ | 版本统一 0.5.5、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI、GitHub Release 签名自动更新 | 可分发安装包 | 已完成（无 Authenticode 代码签名；自动更新经 minisign 验签） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 
