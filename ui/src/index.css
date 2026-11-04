@@ -51,7 +51,7 @@ kbd { font-size: 10px; color: #767b84; border: 1px solid #d9dce1; background: #f
   padding: 26px 12px 20px; display: flex; flex-direction: column; position: fixed; height: 100vh;
 }
 .brand { display: flex; gap: 10px; align-items: center; padding: 0 10px 24px; font-weight: 650; font-size: 16px; letter-spacing: -.3px; }
-.brand > svg { color: #ffffff; background: #17649c; border-radius: 9px; padding: 5px; width: 36px; height: 36px; }
+.brand-mark { display: block; flex-shrink: 0; width: 36px; height: 36px; }
 .brand small { display: block; font-weight: 400; letter-spacing: 0; font-size: 11px; margin-top: 5px; }
 .sidebar nav { display: grid; gap: 18px; overflow-y: auto; padding-right: 2px; }
 .nav-group { display: grid; gap: 2px; }
