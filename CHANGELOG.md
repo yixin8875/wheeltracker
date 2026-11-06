@@ -3,6 +3,12 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- 交易记录支持修改：台账 → 交易记录 → 修改，保留原记录 ID 与序号，保存前重新回放整本账；后续交易依赖该记录时拒绝修改并提示先撤销后续交易
+
 ## [0.5.5] - 2026-11-04
 
 ### Added

@@ -159,6 +159,9 @@ async function setup(page: Page) {
         case 'delete_event':
           if (state.testRejectDelete) throw new Error('deletion would invalidate event history');
           return true;
+        case 'update_event':
+          if (state.testRejectUpdate) throw new Error('修改后的事件历史无效；如果后续交易依赖这条记录，请先撤销后续交易');
+          return args.eventId;
         case 'backup_now': return args.password ? 'test-only/backups/snapshot.sqlite.enc' : 'test-only/backups/snapshot.sqlite';
         case 'export_json': return JSON.stringify({ format: 'wheel-export', version: 1, appVersion: '0.5.0', exportedAt: '2026-11-04 00:00:00 +00:00', accounts: [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01' }], settings: { includeDividendsInCost: false, reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 }, events: [{ accountId: 'main', id: 'ev', seq: 1, occurredAt: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 1, amount: 0, note: 'synthetic' }], prices: [{ symbol: 'TEST', date: '2026-11-03', close: 160, source: '手动', quotedAt: null }] }, null, 2);
         case 'rebuild': return { events: 1, campaigns: 1, entries: 1, issues: [] };
@@ -979,6 +982,53 @@ test('event log filters fees, shows the amount, and explains audit retention on 
   await expect(page.locator('.alert.success')).toContainText('原始记录保留在数据库中');
   const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'delete_event'));
   expect(call.args.eventId).toBe('fee-ev');
+});
+
+test('event log can edit an existing record and cancel back to the list', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testExtraEvents = [{ id: 'fee-ev', date: '2026-01-05', kind: 'fee', symbol: 'TEST', qty: 0, price: 0, fees: 0, amount: 12.5, note: '账户管理费', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.getByRole('button', { name: '收租台账', exact: true }).click();
+  await page.getByRole('button', { name: '交易记录', exact: true }).click();
+  await page.getByLabel('事件类型筛选').selectOption('fee');
+  const row = page.getByRole('row').filter({ hasText: '账户管理费' });
+
+  await row.getByRole('button', { name: '修改', exact: true }).click();
+  await expect(page.locator('h1')).toHaveText('修改交易');
+  await expect(page.getByLabel('美元金额')).toHaveValue('12.5');
+  await page.getByRole('button', { name: '取消修改', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '交易事件日志' })).toBeVisible();
+
+  await row.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('美元金额').fill('15.75');
+  await page.getByLabel('备注').fill('已修正费用');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.locator('.alert.success')).toContainText('交易已修改');
+  const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'update_event'));
+  expect(call.args.eventId).toBe('fee-ev');
+  expect(call.args.req.amount).toBe(15.75);
+  expect(call.args.req.note).toBe('已修正费用');
+  await expect(page.getByRole('heading', { name: '交易事件日志' })).toBeVisible();
+});
+
+test('editing a record surfaces a dependency rejection without leaving the form', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testExtraEvents = [{ id: 'buy-ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
+    (window as any).testRejectUpdate = true;
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.getByRole('button', { name: '收租台账', exact: true }).click();
+  await page.getByRole('button', { name: '交易记录', exact: true }).click();
+  const row = page.getByRole('row').filter({ hasText: '本轮买入' });
+  await row.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('股数').fill('90');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.locator('.alert.error')).toContainText('先撤销后续交易');
+  await expect(page.locator('h1')).toHaveText('修改交易');
+  await expect(page.getByLabel('股数')).toHaveValue('90');
 });
 
 test('campaign timeline can undo an event with confirmation', async ({ page }) => {

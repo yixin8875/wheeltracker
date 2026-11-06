@@ -62,6 +62,7 @@ export default function App() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [initial, setInitial] = useState<Partial<NewEvent>>();
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [entryKey, setEntryKey] = useState(0);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false); const [archive, setArchive] = useState(false); const [symbol, setSymbol] = useState('');
@@ -119,7 +120,31 @@ export default function App() {
     api<Detail>('campaign_detail', { campaignId: selected, accountId }).then(result => { if (current === detailGeneration.current) setDetail(result); }).catch(failure => { if (current === detailGeneration.current) setError(String(failure)); });
     return () => { detailGeneration.current++; };
   }, [selected, data, accountId]);
-  const startEntry = useCallback((prefill?: Partial<NewEvent>) => { setInitial(prefill); setEntryKey(key => key + 1); setPage('entry'); }, []);
+  const startEntry = useCallback((prefill?: Partial<NewEvent>) => { setEditingId(null); setInitial(prefill); setEntryKey(key => key + 1); setPage('entry'); }, []);
+  function editEvent(event: EventRow) {
+    setEditingId(event.id);
+    setInitial({
+      date: event.date,
+      kind: event.kind,
+      symbol: event.symbol,
+      qty: event.qty,
+      price: event.price,
+      fees: event.fees,
+      amount: event.amount,
+      expiry: event.expiry ?? '',
+      strike: event.strike ?? 0,
+      right: event.right ?? 'P',
+      multiplier: event.multiplier ?? 100,
+      splitNumerator: event.splitNumerator ?? 2,
+      splitDenominator: event.splitDenominator ?? 1,
+      splitCashInLieu: event.splitCashInLieu ?? undefined,
+      note: event.note,
+    });
+    setEntryKey(key => key + 1);
+    setPage('entry');
+  }
+  function cancelEdit() { setEditingId(null); setInitial(undefined); setPage('ledger'); setLedgerTab('events'); }
+  function editSaved(message: string) { saved(message); setEditingId(null); setInitial(undefined); setPage('ledger'); setLedgerTab('events'); }
   useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startEntry(); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, [startEntry]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   function openCampaign(id: string) { setSelected(id); setPage('detail'); }
@@ -153,7 +178,7 @@ export default function App() {
   const reminders = reminderPositions(positions, leadDays);
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
   const asOf = data?.asOf ?? today();
-  const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : navigationItems.find(item => item.id === page)?.label;
+  const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : page === 'entry' && editingId ? '修改交易' : navigationItems.find(item => item.id === page)?.label;
   return <div className="app-shell"><aside className="sidebar"><div className="brand"><img className="brand-mark" src="/wheel-icon.png" alt="" width={36} height={36}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(group => <div className="nav-group" role="group" aria-labelledby={`nav-${group.id}`} key={group.id}>
       <p className="nav-group-title" id={`nav-${group.id}`}>{group.title}</p>
       {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
@@ -181,9 +206,9 @@ export default function App() {
         <button aria-pressed={ledgerTab === 'entries'} onClick={() => setLedgerTab('entries')}>收租明细</button>
         <button aria-pressed={ledgerTab === 'events'} onClick={() => setLedgerTab('events')}>交易记录</button>
       </div>
-      {ledgerTab === 'entries' ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/> : <EventLog events={events} onUndo={setPendingDelete}/>}
+      {ledgerTab === 'entries' ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/> : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent}/>}
     </>}
-    {page === 'entry' && <EntryForm key={entryKey} initial={initial} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={saved}/>}
+    {page === 'entry' && <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved}/>}
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
     {page === 'reports' && !unavailable && <>

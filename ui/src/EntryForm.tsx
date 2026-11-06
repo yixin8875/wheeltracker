@@ -3,8 +3,9 @@ import { api, labels, money, percent, today } from './lib';
 import type { Campaign, NewEvent, Position } from './types';
 import { SymbolPicker } from './SymbolPicker';
 import { QuoteReference } from './MarketData';
-export function EntryForm({ initial, positions, campaigns, includeDividendsInCost = false, accountId, onSaved }: { initial?: Partial<NewEvent>; positions: Position[]; campaigns: Campaign[]; includeDividendsInCost?: boolean; accountId: string; onSaved: (message: string) => void }) {
+export function EntryForm({ initial, eventId, onCancel, positions, campaigns, includeDividendsInCost = false, accountId, onSaved }: { initial?: Partial<NewEvent>; eventId?: string; onCancel?: () => void; positions: Position[]; campaigns: Campaign[]; includeDividendsInCost?: boolean; accountId: string; onSaved: (message: string) => void }) {
   const defaults: NewEvent = { date: today(), kind: 'option_open_short', symbol: '', qty: 1, price: 0, fees: 0, amount: 0, expiry: '', strike: 0, right: 'P', multiplier: 100, splitNumerator: 2, splitDenominator: 1, note: '' };
+  const editing = Boolean(eventId);
   const [form, setForm] = useState<NewEvent>({ ...defaults, ...initial }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [keep, setKeep] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [roll, setRoll] = useState(false);
@@ -77,22 +78,29 @@ export function EntryForm({ initial, positions, campaigns, includeDividendsInCos
       const req = { ...form, accountId, symbol: form.symbol.trim().toUpperCase(), ...(!option ? { expiry: undefined, strike: undefined, right: undefined, multiplier: undefined } : {}), ...(!hasPrice ? { price: 0 } : {}), ...(!hasFees ? { fees: 0 } : {}), ...(split ? { qty: 0, amount: 0 } : { splitNumerator: undefined, splitDenominator: undefined, splitCashInLieu: undefined }) };
       if (rolling) {
         await api<string[]>('add_events', { reqs: [req, { ...req, kind: 'option_open_short', ...next }] });
+      } else if (eventId) {
+        await api<string>('update_event', { eventId, req });
       } else {
         await api<string>('add_event', { req });
       }
-      if (keep) {
-        setForm({ ...defaults, date: form.date, symbol: form.symbol, kind: form.kind, right: form.right });
-        setNext({ expiry: '', strike: 0, price: 0, fees: 0 });
-      } else {
+      if (editing) {
         setSubmitted(true);
+        onSaved('交易已修改，持仓与成本已重算。');
+      } else {
+        if (keep) {
+          setForm({ ...defaults, date: form.date, symbol: form.symbol, kind: form.kind, right: form.right });
+          setNext({ expiry: '', strike: 0, price: 0, fees: 0 });
+        } else {
+          setSubmitted(true);
+        }
+        onSaved('交易已保存，持仓与成本已重算。');
       }
-      onSaved('交易已保存，持仓与成本已重算。');
     } catch (failure) { setError(String(failure)); } finally { setBusy(false); }
   }
   function choosePosition(index: string) { const position = positions[Number(index)]; if (!position) return; setForm(previous => ({ ...previous, symbol: position.symbol, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier, qty: position.openQty, date: previous.kind === 'option_expire' ? position.expiry : previous.date })); }
-  return <section className="panel entry-panel"><div className="section-heading"><h2>记录交易</h2><span className="muted">{split ? 'USD · 新股数 = 旧股数 × 分子 ÷ 分母' : `USD · 1 手 = ${multiplier} 股`}</span></div><form onSubmit={save}>
+  return <section className="panel entry-panel"><div className="section-heading"><h2>{editing ? '修改交易' : '记录交易'}</h2><span className="muted">{editing ? '保留原记录 ID 与序号 · 保存前重新回放整本账' : split ? 'USD · 新股数 = 旧股数 × 分子 ÷ 分母' : `USD · 1 手 = ${multiplier} 股`}</span></div><form onSubmit={save}>
     {error && <div className="alert error" role="alert">保存失败：{error}</div>}
-    {form.kind === 'option_close' && <label className="check"><input type="checkbox" checked={roll} onChange={e => setRoll(e.target.checked)}/>滚动：平仓后同时开出新合约</label>}
+    {!editing && form.kind === 'option_close' && <label className="check"><input type="checkbox" checked={roll} onChange={e => setRoll(e.target.checked)}/>滚动：平仓后同时开出新合约</label>}
     <div className="form-grid"><label>交易类型<select value={form.kind} onChange={e => update('kind', e.target.value)}>{Object.keys(labels).filter(key => key.startsWith('option_') || ['stock_split', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment'].includes(key)).map(kind => <option key={kind} value={kind}>{labels[kind]}</option>)}</select></label>
     <label>交易日（美东）<input type="date" required value={form.date} onChange={e => update('date', e.target.value)}/></label>
     {option && form.kind !== 'option_open_short' && <label className="full">选择当前持仓<select defaultValue="" onChange={e => choosePosition(e.target.value)}><option value="" disabled>选择合约以自动填写</option>{positions.map((position, i) => <option key={position.contract} value={i}>{position.contract} · {position.openQty} 手</option>)}</select></label>}
@@ -146,6 +154,6 @@ export function EntryForm({ initial, positions, campaigns, includeDividendsInCos
     {split && <p className="muted">例：2 : 1 表示 1 股拆为 2 股，反向拆股用 1 : 10。未平仓期权的行权价与每手股数会自动调整；出现零股时须填写现金补偿（可填 0），系统不保留小数股。</p>}
     {form.kind === 'adjustment' && <p className="muted">现金调整计入战役收支，不覆盖持股数或股票成本。</p>}
     {form.kind === 'option_expire' && <p className="muted">确认合约已到期作废后录入；被指派的合约请使用“指派 / 行权”。</p>}
-    <div className="form-actions"><label className="check"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)}/>保存后继续录入</label><button type="submit" className="primary" disabled={busy || submitted}>{submitted ? '已保存' : busy ? '保存中…' : '保存交易'}</button></div>
+    <div className="form-actions">{!editing && <label className="check"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)}/>保存后继续录入</label>}<button type="submit" className="primary" disabled={busy || submitted}>{submitted ? '已保存' : busy ? '保存中…' : editing ? '保存修改' : '保存交易'}</button>{editing && onCancel && <button type="button" onClick={onCancel} disabled={busy}>取消修改</button>}</div>
   </form></section>;
 }

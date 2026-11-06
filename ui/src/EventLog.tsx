@@ -26,7 +26,7 @@ function amountLabel(event: EventRow) {
   return '—';
 }
 
-export function EventLog({ events, onUndo }: { events: EventRow[]; onUndo: (id: string) => void }) {
+export function EventLog({ events, onUndo, onEdit }: { events: EventRow[]; onUndo: (id: string) => void; onEdit: (event: EventRow) => void }) {
   const [symbol, setSymbol] = useState('');
   const [kind, setKind] = useState('');
   const [from, setFrom] = useState('');
@@ -47,7 +47,7 @@ export function EventLog({ events, onUndo }: { events: EventRow[]; onUndo: (id: 
 
   return <section className="panel">
     <div className="section-heading">
-      <div><h2>交易事件日志</h2><span className="muted">{filtered.length} / {events.length} 笔 · 撤销前会重新校验后续交易</span></div>
+      <div><h2>交易事件日志</h2><span className="muted">{filtered.length} / {events.length} 笔 · 修改与撤销前都会重新校验后续交易</span></div>
       <button onClick={exportRows} disabled={!filtered.length}>导出交易 CSV</button>
     </div>
     <div className="filters">
@@ -67,10 +67,10 @@ export function EventLog({ events, onUndo }: { events: EventRow[]; onUndo: (id: 
         <td>{feeLabel(event)}</td>
         <td>{amountLabel(event)}</td>
         <td className="note-cell">{event.note}</td>
-        <td><button onClick={() => onUndo(event.id)}>撤销</button></td>
+        <td><div className="row-actions"><button onClick={() => onEdit(event)}>修改</button><button onClick={() => onUndo(event.id)}>撤销</button></div></td>
       </tr>)}</tbody>
     </table></div>
     {!filtered.length && <p className="empty">{events.length ? '没有符合筛选条件的事件。' : '暂无交易记录。'}</p>}
-    <p className="footnote">撤销不会物理删除记录：原始数据仍保留在数据库中用于审计，但撤销后不再出现在当前界面、CSV 或 JSON 导出中。</p>
+    <p className="footnote">修改会保留原记录的 ID 与序号，并在保存前重新回放整本账；若后续交易依赖这条记录，会拒绝修改并提示先撤销后续交易。撤销不会物理删除记录：原始数据仍保留在数据库中用于审计，但撤销后不再出现在当前界面、CSV 或 JSON 导出中。</p>
   </section>;
 }

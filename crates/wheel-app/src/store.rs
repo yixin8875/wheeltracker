@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use time::macros::format_description;
 use time::Date;
 use wheel_core::{
@@ -548,6 +548,23 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
     Ok(events)
 }
 
+/// Read one live event by id, including events outside the current account view.
+pub fn get_event(conn: &Connection, event_id: &str) -> Result<Option<Event>> {
+    let account_id: Option<String> = conn
+        .query_row(
+            "SELECT account_id FROM events WHERE id = ?1 AND deleted_at IS NULL",
+            params![event_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match account_id {
+        Some(account_id) => Ok(list_events(conn, &account_id)?
+            .into_iter()
+            .find(|event| event.id == event_id)),
+        None => Ok(None),
+    }
+}
+
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
     insert_events(conn, std::slice::from_ref(event))
 }
@@ -576,8 +593,8 @@ pub fn insert_events(conn: &Connection, batch: &[Event]) -> Result<()> {
     Ok(())
 }
 
-fn write_event(conn: &Connection, event: &Event) -> Result<()> {
-    let (expiry, strike, right, multiplier) = match &event.contract {
+fn contract_columns(event: &Event) -> (Option<String>, Option<f64>, Option<String>, Option<i64>) {
+    match &event.contract {
         Some(contract) => (
             Some(format_date(contract.expiry)),
             Some(contract.strike),
@@ -585,16 +602,23 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
             Some(contract.multiplier as i64),
         ),
         None => (None, None, None, None),
-    };
+    }
+}
 
-    let (split_numerator, split_denominator, split_cash_in_lieu) = match event.split {
+fn split_columns(event: &Event) -> (Option<i64>, Option<i64>, Option<f64>) {
+    match event.split {
         Some(terms) => (
             Some(i64::from(terms.numerator)),
             Some(i64::from(terms.denominator)),
             terms.cash_in_lieu,
         ),
         None => (None, None, None),
-    };
+    }
+}
+
+fn write_event(conn: &Connection, event: &Event) -> Result<()> {
+    let (expiry, strike, right, multiplier) = contract_columns(event);
+    let (split_numerator, split_denominator, split_cash_in_lieu) = split_columns(event);
 
     conn.execute(
         "INSERT INTO events (id, account_id, seq, occurred_at, kind, symbol, expiry, strike,
@@ -626,6 +650,66 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
     )
     .context("写入交易")?;
     Ok(())
+}
+
+/// Replace one live event's fields while keeping its id, sequence and account.
+/// The account history is replayed before the row is written, so an edit that
+/// would invalidate later events is refused and the database stays unchanged.
+pub fn update_event(conn: &Connection, event: &Event) -> Result<bool> {
+    validate_event(event)?;
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let account_id: Option<String> = tx
+        .query_row(
+            "SELECT account_id FROM events WHERE id = ?1 AND deleted_at IS NULL",
+            params![event.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(account_id) = account_id else {
+        return Ok(false);
+    };
+    if account_id != event.account_id {
+        bail!("不能把交易改到其他账户");
+    }
+    let mut events = list_events(&tx, &account_id)?;
+    let Some(current) = events.iter_mut().find(|current| current.id == event.id) else {
+        return Ok(false);
+    };
+    *current = event.clone();
+    replay_checked(&account_id, &events, get_settings(&tx)?)
+        .context("修改后的事件历史无效；如果后续交易依赖这条记录，请先撤销后续交易")?;
+
+    let (expiry, strike, right, multiplier) = contract_columns(event);
+    let (split_numerator, split_denominator, split_cash_in_lieu) = split_columns(event);
+    tx.execute(
+        "UPDATE events
+         SET occurred_at = ?2, kind = ?3, symbol = ?4, expiry = ?5, strike = ?6,
+             right = ?7, multiplier = ?8, qty = ?9, price = ?10, fees = ?11,
+             amount = ?12, note = ?13, split_numerator = ?14,
+             split_denominator = ?15, split_cash_in_lieu = ?16
+         WHERE id = ?1 AND deleted_at IS NULL",
+        params![
+            event.id,
+            format_date(event.occurred_at),
+            kind_to_str(event.kind),
+            event.symbol,
+            expiry,
+            strike,
+            right,
+            multiplier,
+            event.qty as i64,
+            event.price,
+            event.fees,
+            event.amount,
+            event.note,
+            split_numerator,
+            split_denominator,
+            split_cash_in_lieu,
+        ],
+    )
+    .context("修改交易")?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Validate the remaining history before retaining a tombstone for audit/sequence identity.
@@ -1115,6 +1199,37 @@ mod tests {
         assert!(delete_event(&conn, "buy").unwrap());
         assert_eq!(count_events(&conn, "main").unwrap(), 0);
         assert_eq!(next_seq(&conn, "main").unwrap(), 3);
+    }
+
+    #[test]
+    fn update_event_replaces_fields_without_changing_identity() {
+        let conn = db();
+        let original = buy("buy", 1);
+        insert_event(&conn, &original).unwrap();
+        let mut corrected = original.clone();
+        corrected.price = 149.5;
+        corrected.fees = 2.5;
+        corrected.note = "修正成交价".to_string();
+        assert!(update_event(&conn, &corrected).unwrap());
+        assert_eq!(list_events(&conn, "main").unwrap(), vec![corrected]);
+        assert_eq!(next_seq(&conn, "main").unwrap(), 2);
+        assert!(!update_event(&conn, &buy("missing", 2)).unwrap());
+    }
+
+    #[test]
+    fn update_event_refuses_to_break_later_dependencies() {
+        let conn = db();
+        insert_event(&conn, &buy("buy", 1)).unwrap();
+        let sell = Event::sell_shares("main", "sell", 2, at(), "AAPL", 100, 160.0, 0.0);
+        insert_event(&conn, &sell).unwrap();
+        let mut oversell = buy("buy", 1);
+        oversell.qty = 50;
+        let failure = update_event(&conn, &oversell).unwrap_err();
+        assert!(format!("{failure:#}").contains("修改后的事件历史无效"));
+        assert_eq!(
+            list_events(&conn, "main").unwrap(),
+            vec![buy("buy", 1), sell]
+        );
     }
 
     #[test]

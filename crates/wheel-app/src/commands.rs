@@ -965,6 +965,34 @@ pub fn add_events(
     append_requests(&conn, reqs)
 }
 
+#[tauri::command]
+pub fn update_event(
+    state: State<'_, AppState>,
+    event_id: String,
+    req: NewEventReq,
+) -> Result<String, String> {
+    ensure_no_pending_restore(&state)?;
+    update_event_for(&state.conn(), &event_id, req)
+}
+
+/// Correct one live event in place. Id, sequence and account are preserved; the
+/// complete history is replayed before writing, so dependent later events block
+/// the edit instead of silently producing a broken ledger.
+fn update_event_for(
+    conn: &rusqlite::Connection,
+    event_id: &str,
+    req: NewEventReq,
+) -> Result<String, String> {
+    let existing = store::get_event(conn, event_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "要修改的交易不存在或已撤销。".to_string())?;
+    let event = build_event(&req, &existing.account_id, &existing.id, existing.seq)?;
+    if !store::update_event(conn, &event).map_err(|error| format!("{error:#}"))? {
+        return Err("要修改的交易不存在或已撤销。".to_string());
+    }
+    Ok(existing.id)
+}
+
 fn append_requests(
     conn: &rusqlite::Connection,
     reqs: Vec<NewEventReq>,
@@ -2475,6 +2503,25 @@ mod tests {
         assert!(error.contains("已安排恢复"), "unexpected error: {error}");
         assert!(error.contains("重启应用"), "unexpected error: {error}");
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn update_event_corrects_price_and_rejects_missing_records() {
+        let conn = db();
+        let ids = append_requests(&conn, vec![request()]).unwrap();
+        let mut corrected = request();
+        corrected.price = 2.75;
+        corrected.note = Some("修正权利金".to_string());
+        assert_eq!(
+            update_event_for(&conn, &ids[0], corrected).unwrap(),
+            ids[0]
+        );
+        let events = store::list_events(&conn, "main").unwrap();
+        assert_eq!(events[0].price, 2.75);
+        assert_eq!(events[0].note, "修正权利金");
+        assert_eq!(events[0].seq, 1);
+        let failure = update_event_for(&conn, "missing", request()).unwrap_err();
+        assert!(failure.contains("不存在或已撤销"));
     }
 
     #[test]

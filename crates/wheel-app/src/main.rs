@@ -96,6 +96,7 @@ fn main() {
             commands::list_events,
             commands::add_events,
             commands::add_event,
+            commands::update_event,
             commands::delete_event,
             commands::set_price,
             commands::list_prices,
