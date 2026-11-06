@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, type LucideIcon } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
 import type { Account, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
@@ -12,6 +12,7 @@ import type { AccountingSettings } from './types';
 import { ImportWizard } from './ImportWizard';
 import { ReminderCard, ReminderPreferences, reminderPositions } from './Reminders';
 import { ExpiryCalendar } from './ExpiryCalendar';
+import { ExpiryCenter } from './ExpiryCenter';
 import { CampaignCompare } from './CampaignCompare';
 import { SettingsData } from './SettingsData';
 import { VisionSettings } from './VisionSettings';
@@ -22,7 +23,7 @@ import { AnnualReportPage } from './AnnualReport';
 import { Updater } from './Updater';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
 type NavGroup = { id: string; title: string; items: NavItem[] };
@@ -37,6 +38,7 @@ const navigation: NavGroup[] = [
     { id: 'import', label: '导入', icon: Upload },
   ] },
   { id: 'review', title: '复盘', items: [
+    { id: 'expiry', label: '到期处理', icon: AlarmClock },
     { id: 'calendar', label: '到期日历', icon: CalendarDays },
     { id: 'reports', label: '报告', icon: ChartColumn },
     { id: 'market', label: '行情', icon: Activity },
@@ -183,7 +185,7 @@ export default function App() {
   const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : page === 'entry' && editingId ? '修改交易' : navigationItems.find(item => item.id === page)?.label;
   return <div className="app-shell"><aside className="sidebar"><div className="brand"><img className="brand-mark" src="/wheel-icon.png" alt="" width={36} height={36}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(group => <div className="nav-group" role="group" aria-labelledby={`nav-${group.id}`} key={group.id}>
       <p className="nav-group-title" id={`nav-${group.id}`}>{group.title}</p>
-      {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'positions' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'positions' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
+      {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'expiry' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'expiry' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
     </div>)}</nav><div className="sidebar-bottom"><div className="connection-line"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}</div><label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small><button className={`sidebar-settings ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Settings size={16}/>设置</button></div></aside>
     <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
@@ -198,7 +200,7 @@ export default function App() {
     {page === 'dashboard' && !unavailable && <>
       <div className="summary-strip"><div><span>已落袋净收租</span><strong>{money(data?.summary.premiumRealized ?? 0)}</strong><small>已经了结的期权净收入</small></div><div><span>未平仓净权利金</span><strong>{money(data?.summary.premiumOpen ?? 0)}</strong><small>{data?.summary.openContracts ?? 0} 手合约仍待了结</small></div><div><span>Put 资金义务</span><strong>{money(data?.summary.collateral ?? 0)}</strong><small>按行权价计算</small></div><div><span>进行中的战役</span><strong>{data?.summary.activeCampaigns ?? 0}<em> 个</em></strong><small>持股共 {data?.summary.sharesHeld ?? 0} 股</small></div></div>
       {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)}/>}
-      <ReminderCard positions={positions} leadDays={leadDays} onOpenPositions={() => setPage('positions')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign}/>
+      <ReminderCard positions={positions} leadDays={leadDays} onOpenExpiry={() => setPage('expiry')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign}/>
       <div className="section-heading"><h2>我的战役 <span className="count">{campaigns.length}</span></h2><div className="toolbar"><input aria-label="筛选标的" placeholder="搜索标的…" value={symbol} onChange={e => setSymbol(e.target.value)}/><label className="check"><input type="checkbox" checked={archive} onChange={e => setArchive(e.target.checked)}/>显示已结束</label></div></div>
       <div className="campaign-grid">{campaigns.map(campaign => <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)}/>)}</div>
       {!campaigns.length && <div className="empty panel"><Layers size={36}/><h2>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</h2><p>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</p><button className="primary" onClick={() => startEntry()}>记录第一笔交易</button></div>}
@@ -213,6 +215,7 @@ export default function App() {
     </>}
     {page === 'entry' && <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved}/>}
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
+    {page === 'expiry' && !unavailable && <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} onEntry={initial => startEntry(initial)} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')}/>}
     {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
     {page === 'reports' && !unavailable && <>
       <div className="settings-tabs" aria-label="报告分类">

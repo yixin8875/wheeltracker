@@ -5,6 +5,7 @@ mod commands;
 mod crypto;
 mod import;
 mod market;
+mod notifications;
 mod restore;
 mod store;
 mod trade_text;
@@ -16,7 +17,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rusqlite::Connection;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
 
 pub struct AppState {
     pub conn: Mutex<Connection>,
@@ -46,10 +49,95 @@ fn stamp() -> i128 {
     time::OffsetDateTime::now_utc().unix_timestamp_nanos()
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Tray menu and icon. Left-click restores the window; the menu offers an
+/// explicit expiry check and a real quit path while the window is hidden.
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
+    let check = MenuItem::with_id(app, "check_expiry", "检查到期", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &check, &separator, &quit])?;
+    let mut builder = TrayIconBuilder::with_id("main")
+        .tooltip("Wheel Tracker")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main_window(app),
+            "check_expiry" => {
+                let state = app.state::<AppState>();
+                let Some(conn) = state.try_conn() else {
+                    return;
+                };
+                match notifications::check_and_notify(&conn, |title, body| {
+                    notifications::send(app, title, body)
+                }) {
+                    Ok(summary) => {
+                        notifications::update_tray_tooltip(app, &summary);
+                        if summary.notified == 0 {
+                            let body = if summary.total == 0 {
+                                "当前没有到期提醒。".to_string()
+                            } else {
+                                format!(
+                                    "{} 个到期提醒（{} 个已过期，{} 个今天到期）。",
+                                    summary.total, summary.overdue, summary.today
+                                )
+                            };
+                            let _ = notifications::send(app, "Wheel Tracker · 到期检查", &body);
+                        }
+                    }
+                    Err(error) => eprintln!("expiry check failed: {error:#}"),
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let hide = state
+                    .try_conn()
+                    .map(|conn| {
+                        store::get_preferences(&conn)
+                            .map(|preferences| preferences.close_to_tray)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if hide {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -71,6 +159,29 @@ fn main() {
                 data_dir: dir.display().to_string(),
             });
 
+            setup_tray(app)?;
+
+            let expiry_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                // Give the window and database a moment to settle, then check
+                // hourly. Notifications are deduplicated inside the scanner.
+                std::thread::sleep(Duration::from_secs(5));
+                loop {
+                    let state = expiry_handle.state::<AppState>();
+                    if let Some(conn) = state.try_conn() {
+                        match notifications::check_and_notify(&conn, |title, body| {
+                            notifications::send(&expiry_handle, title, body)
+                        }) {
+                            Ok(summary) => {
+                                notifications::update_tray_tooltip(&expiry_handle, &summary)
+                            }
+                            Err(error) => eprintln!("expiry check failed: {error:#}"),
+                        }
+                    }
+                    std::thread::sleep(Duration::from_secs(60 * 60));
+                }
+            });
+
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30 * 60));
@@ -89,6 +200,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::dashboard,
             commands::cash_movements,
+            commands::check_expiries,
+            commands::send_test_notification,
             commands::campaign_detail,
             commands::ledger,
             commands::monthly_income,

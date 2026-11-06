@@ -191,6 +191,8 @@ pub struct Preferences {
     pub reminder_lead_days: i64,
     pub auto_backup_enabled: bool,
     pub auto_backup_keep: u32,
+    pub system_notifications_enabled: bool,
+    pub close_to_tray: bool,
 }
 
 pub const DEFAULT_REMINDER_LEAD_DAYS: i64 = 7;
@@ -203,6 +205,8 @@ impl Default for Preferences {
             reminder_lead_days: DEFAULT_REMINDER_LEAD_DAYS,
             auto_backup_enabled: true,
             auto_backup_keep: DEFAULT_AUTO_BACKUP_KEEP,
+            system_notifications_enabled: false,
+            close_to_tray: false,
         }
     }
 }
@@ -235,10 +239,29 @@ pub fn get_preferences(conn: &Connection) -> Result<Preferences> {
     if !(1..=100).contains(&auto_backup_keep) {
         bail!("自动备份保留数量必须在 1 到 100 之间");
     }
+    let system_notifications_enabled =
+        match get_setting_value(conn, "systemNotificationsEnabled")? {
+            Some(value) => match value.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => bail!("已保存的系统通知开关无效 `{value}`"),
+            },
+            None => defaults.system_notifications_enabled,
+        };
+    let close_to_tray = match get_setting_value(conn, "closeToTray")? {
+        Some(value) => match value.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => bail!("已保存的关闭到托盘设置无效 `{value}`"),
+        },
+        None => defaults.close_to_tray,
+    };
     Ok(Preferences {
         reminder_lead_days,
         auto_backup_enabled,
         auto_backup_keep,
+        system_notifications_enabled,
+        close_to_tray,
     })
 }
 
@@ -268,6 +291,24 @@ pub fn set_preferences(conn: &Connection, preferences: Preferences) -> Result<Pr
         &tx,
         "autoBackupKeep",
         &preferences.auto_backup_keep.to_string(),
+    )?;
+    set_setting_value(
+        &tx,
+        "systemNotificationsEnabled",
+        if preferences.system_notifications_enabled {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
+    set_setting_value(
+        &tx,
+        "closeToTray",
+        if preferences.close_to_tray {
+            "true"
+        } else {
+            "false"
+        },
     )?;
     tx.commit()?;
     Ok(preferences)
@@ -1578,6 +1619,8 @@ mod tests {
             reminder_lead_days: 14,
             auto_backup_enabled: false,
             auto_backup_keep: 3,
+            system_notifications_enabled: true,
+            close_to_tray: true,
         };
         {
             let conn = open(&path).unwrap();
@@ -1603,6 +1646,8 @@ mod tests {
             reminder_lead_days: 10,
             auto_backup_enabled: true,
             auto_backup_keep: 5,
+            system_notifications_enabled: false,
+            close_to_tray: false,
         };
         set_preferences(&conn, original).unwrap();
         for invalid in [

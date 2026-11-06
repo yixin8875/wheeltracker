@@ -201,7 +201,7 @@
 | 同一标的重复战役 | 持股清空且无持仓后自动开新战役，旧战役归档 |
 | 纯卖 Put 从未被指派 | 战役保持 active，权利金持续累积，等待指派 |
 | 手工改历史 | 生成 `ADJUSTMENT` 事件，不直接改原事件（保留审计链） |
-| 期权到期日当天未标记 | 应用按日期自动把过期未处理持仓标红，提示「已到期，请标记作废或指派」 |
+| 期权到期日当天未标记 | 应用按日期自动把过期未处理持仓标红；「到期处理中心」按已过期 / 今天 / 3 天内 / 提醒期分组，提示「已到期，请标记作废或指派」 |
 
 ### 3.5 账户现金与 Put 覆盖
 
@@ -274,7 +274,9 @@ account_cash = Σ 全部 event_cash
 
 3. **战役对比**：同一标的历次战役的收益率/天数散点
 
-4. **到期日历**：未来 30 天到期的合约，按日期排布
+4. **到期处理中心**：按紧急程度分组列出提醒期内的合约，可预填平仓 / 作废 / 指派，并可手动检查系统通知
+
+5. **到期日历**：未来 30 天到期的合约，按日期排布
 
 ---
 
@@ -484,6 +486,7 @@ wheel-core/
 日常
 ├─ 仪表盘       ← 默认页，所有标的一览；进入标的详情（时间轴 + 成本阶梯图 + 事件列表）
 ├─ 当前持仓     ← 股票持仓 / 期权持仓（含到期倒计时）
+├─ 到期处理     ← 按紧急程度分组 + 检查系统通知
 └─ 记一笔       ← 快速录入（快捷键 Ctrl+N）
 账本
 ├─ 收租台账     ← 收租明细 / 交易记录两个页签；全量表格 + 筛选 + 汇总 + 撤销
@@ -601,7 +604,7 @@ wheel-core/
 │  ├── wheel-core（领域引擎，纯逻辑 + 测试）  │
 │  ├── store（sqlx + SQLite）                 │
 │  ├── import（CSV / AI 截图解析）            │
-│  ├── notify（到期提醒）                     │
+│  ├── notifications（到期扫描 / 系统通知 / 托盘） │
 │  └── backup（自动备份 / 导出）              │
 └─────────────────────────────────────────────┘
                    │
@@ -673,7 +676,10 @@ set_price(symbol, date, close)
 export_report(range, format) -> Path
 backup_now(password: Option<String>) -> Path      // 有密码时生成 .sqlite.enc
 export_json() -> String                          // 全账户事件 + 报价 + 设置
-set_preferences(reminder_lead_days, auto_backup_enabled, auto_backup_keep) -> SettingsView
+set_preferences(reminder_lead_days, auto_backup_enabled, auto_backup_keep,
+                system_notifications_enabled, close_to_tray) -> SettingsView
+check_expiries() -> CheckSummary     // 扫描全部未归档账户，按阶段去重后发一条汇总通知
+send_test_notification() -> ()       // 设置页验证 Windows 通知权限
 list_backups() -> Vec<BackupEntry>               // 含 encrypted 标志
 validate_backup(file_name, password: Option<String>) -> BackupValidation
 stage_restore(file_name, password: Option<String>) -> PendingRestore  // 写 marker，不立即替换
@@ -682,13 +688,15 @@ restore_status() -> RestoreStatus
 
 ### 8.5 P3 体验闭环
 
-- **到期提醒**：前端由 `positions.daysLeft` 与 `settings.reminderLeadDays` 推导；`<0` 过期，`<=min(3, lead)` 紧急，`<=lead` 即将到期。侧栏徽标、仪表盘卡片、日历共用同一口径，不注册系统通知。
+- **到期提醒**：后端 `notifications::scan` 重放每个未归档账户，复用 `views::position` 得到 `daysLeft`；`<0` 过期，`0` 今天，`<=min(3, lead)` 紧急，其余 `<=lead` 即将到期。侧栏徽标、到期处理中心、仪表盘卡片、日历与系统通知共用同一口径。
+- **通知去重**：按 `账户|合约|到期日|阶段` 记录发送日期，存于 settings 键值 JSON（90 天保留、最多 500 条）；同一合约同一阶段只发一次，进入下一阶段会再次提醒。发送失败不记为已发送。
+- **系统通知与托盘**：默认关闭系统通知；托盘图标常驻，左键恢复窗口，菜单提供打开、检查到期与退出。后台线程启动 5 秒后检查一次，此后每小时一次。开启「关闭窗口时隐藏到托盘」后，关闭按钮只隐藏窗口，退出需用托盘菜单。
 - **到期日历**：周一起始的 42 格月历（网格用 `Date.UTC` 仅作无时区日期运算）；选中日列出合约，顶部汇总未来 30 天。账本日期统一使用后端的**美东交易日** `asOf`。
 - **战役对比**：按战役聚合，已实现收益 = `realizedPnl`（回退为权利金 + 分红 + 股票盈亏 + 现金调整）；峰值投入取逐日「未平仓 Put 占用资金 + 当日持股纯股票成本」的最大值；收益率为两者之比，投入为 0 时留空。进行中战役不含未平仓权利金与股票浮盈亏。
 - **Excel**：`ui/src/xlsx.ts` 手写 STORE-only ZIP 与 OOXML（CRC32、UTF-8 文件名、inlineStr、冻结首行、金额/百分比 `numFmt`），不引入依赖、不生成 `<f>` 公式；`export.ts` 组装台账、交易记录、持仓、战役四表。
 - **自动备份**：应用启动及后台线程每 30 分钟读取 UTC 日期，`lastAutoBackupDay` 相同则跳过；恢复 marker 存在时跳过。成功生成 `auto-*.sqlite` 后更新日期，再按 `autoBackupKeep` 清理旧自动备份；手动备份与 `pre-restore-*` 不受影响。
 - **恢复协议**：`restore/pending.json` 只存文件名、安全快照名与请求时间。暂存时先只读校验备份，再用 `VACUUM INTO` 生成 `pre-restore-*.sqlite`，最后原子写 marker。下次启动在 `store::open` 之前执行 `apply_pending`：重新校验 → 归档 `wheel.db` 与 WAL/SHM/journal → 复制为临时文件并校验 → 替换 `wheel.db`；任一步失败回滚并隔离 marker，回滚失败则中止启动，绝不静默新建空库。成功保留最近 3 组归档。marker 存在期间所有写入命令返回「已安排恢复，请重启应用」。
-- **偏好**：`reminderLeadDays`（0–60，默认 7）、`autoBackupEnabled`（默认开）、`autoBackupKeep`（1–100，默认 7）存于 `settings` 键值表，严格解析，非法值不会部分写入。
+- **偏好**：`reminderLeadDays`（0–60，默认 7）、`autoBackupEnabled`（默认开）、`autoBackupKeep`（1–100，默认 7）、`systemNotificationsEnabled`（默认关）、`closeToTray`（默认关）存于 `settings` 键值表，严格解析，非法值不会部分写入。
 
 ### 8.6 P4 多账户
 

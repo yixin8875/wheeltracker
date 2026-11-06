@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use wheel_core::{DerivedState, Event, EventKind, OptionContract, Right};
 
-use crate::{backup, restore, store, views, AppState};
+use crate::{backup, notifications, restore, store, views, AppState};
 
 fn account_or_default(account_id: Option<String>) -> String {
     account_id
@@ -48,6 +48,8 @@ pub struct SettingsView {
     pub reminder_lead_days: i64,
     pub auto_backup_enabled: bool,
     pub auto_backup_keep: u32,
+    pub system_notifications_enabled: bool,
+    pub close_to_tray: bool,
 }
 
 fn settings_view(
@@ -60,6 +62,8 @@ fn settings_view(
         reminder_lead_days: preferences.reminder_lead_days,
         auto_backup_enabled: preferences.auto_backup_enabled,
         auto_backup_keep: preferences.auto_backup_keep,
+        system_notifications_enabled: preferences.system_notifications_enabled,
+        close_to_tray: preferences.close_to_tray,
     })
 }
 
@@ -88,6 +92,8 @@ pub fn set_preferences(
     reminder_lead_days: i64,
     auto_backup_enabled: bool,
     auto_backup_keep: u32,
+    system_notifications_enabled: bool,
+    close_to_tray: bool,
 ) -> Result<SettingsView, String> {
     ensure_no_pending_restore(&state)?;
     let conn = state.conn();
@@ -95,6 +101,8 @@ pub fn set_preferences(
         reminder_lead_days,
         auto_backup_enabled,
         auto_backup_keep,
+        system_notifications_enabled,
+        close_to_tray,
     };
     store::set_preferences(&conn, preferences).map_err(|error| error.to_string())?;
     let settings = store::get_settings(&conn).map_err(|error| error.to_string())?;
@@ -969,6 +977,31 @@ pub fn list_events(
     let events = store::list_events(&conn, &account_or_default(account_id))
         .map_err(|error| error.to_string())?;
     Ok(events.into_iter().map(event_view).collect())
+}
+
+/// Manual "check now" entry used by the tray and the expiry centre. The hourly
+/// worker calls the same scanner in the background.
+#[tauri::command]
+pub fn check_expiries(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<notifications::CheckSummary, String> {
+    let conn = state.conn();
+    let summary = notifications::check_and_notify(&conn, |title, body| {
+        notifications::send(&app, title, body)
+    })
+    .map_err(|error| format!("{error:#}"))?;
+    notifications::update_tray_tooltip(&app, &summary);
+    Ok(summary)
+}
+
+#[tauri::command]
+pub fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    notifications::send(
+        &app,
+        "Wheel Tracker · 测试通知",
+        "系统通知已可用；到期提醒会在这里出现。",
+    )
 }
 
 #[tauri::command]
@@ -2709,14 +2742,18 @@ mod tests {
                 include_dividends_in_cost: true,
                 reminder_lead_days: 7,
                 auto_backup_enabled: true,
-                auto_backup_keep: 7
+                auto_backup_keep: 7,
+                system_notifications_enabled: false,
+                close_to_tray: false,
             })
             .unwrap(),
             serde_json::json!({
                 "includeDividendsInCost": true,
                 "reminderLeadDays": 7,
                 "autoBackupEnabled": true,
-                "autoBackupKeep": 7
+                "autoBackupKeep": 7,
+                "systemNotificationsEnabled": false,
+                "closeToTray": false
             })
         );
     }

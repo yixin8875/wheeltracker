@@ -19,7 +19,8 @@ export interface Dashboard { accountId: string; asOf: string; summary: Summary; 
 export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
-export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number }
+export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number; systemNotificationsEnabled: boolean; closeToTray: boolean }
+export interface ExpiryCheckSummary { overdue: number; today: number; critical: number; soon: number; total: number; notified: number }
 export interface VisionSettings {
   baseUrl: string;
   model: string;

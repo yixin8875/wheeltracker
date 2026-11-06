@@ -91,6 +91,8 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
         reminderLeadDays: settings.reminderLeadDays,
         autoBackupEnabled: autoEnabled,
         autoBackupKeep: autoKeep,
+        systemNotificationsEnabled: settings.systemNotificationsEnabled,
+        closeToTray: settings.closeToTray,
       });
       onPreferencesSaved(result);
       onNotice(autoEnabled ? `自动备份已开启，保留最近 ${autoKeep} 份。` : '自动备份已关闭。');

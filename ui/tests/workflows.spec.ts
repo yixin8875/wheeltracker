@@ -14,7 +14,7 @@ async function setup(page: Page) {
     state.testRejectMetadata = false; state.testRejectDashboard = false;
     state.testVision = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', hasKey: true, keyHint: '1234', enabled: true, consent: true };
     state.testVisionKey = 'sk-test-1234';
-    const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7 };
+    const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7, systemNotificationsEnabled: false, closeToTray: false };
     const currentCampaign = () => ({ ...campaign, dividends: 100,
       costB: preferences.includeDividendsInCost ? 147 : 148,
       costC: preferences.includeDividendsInCost ? 146 : 147,
@@ -34,6 +34,8 @@ async function setup(page: Page) {
           if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0, accountCash: 0, cashDeposits: 0, cashWithdrawals: 0, cashTracked: false, cashCoverage: null, cashShortfall: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
           return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
+        case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1 };
+        case 'send_test_notification': return null;
         case 'cash_movements': return [
           { date: '2026-01-10', kind: 'cash_withdrawal', symbol: '', note: '转出到储蓄账户', amount: -500, balanceAfter: 5200 },
           { date: '2026-01-06', kind: 'option_open_short', symbol: 'TEST', note: '本轮卖 Put', amount: 100, balanceAfter: 5700 },
@@ -133,6 +135,8 @@ async function setup(page: Page) {
           preferences.reminderLeadDays = Number(args.reminderLeadDays);
           preferences.autoBackupEnabled = Boolean(args.autoBackupEnabled);
           preferences.autoBackupKeep = Number(args.autoBackupKeep);
+          preferences.systemNotificationsEnabled = Boolean(args.systemNotificationsEnabled);
+          preferences.closeToTray = Boolean(args.closeToTray);
           return { ...preferences };
         case 'restore_status': return { pending: state.testPending ?? null, lastResult: state.testLastResult ?? null, failed: [] };
         case 'list_backups': return state.testBackups ?? [
@@ -689,7 +693,7 @@ async function readZip(download: Awaited<ReturnType<Page['waitForEvent']>>) {
 test('expiry reminders and calendar surface overdue contracts', async ({ page }) => {
   await setup(page);
   await expect(page.locator('.nav-badge')).toHaveText('1');
-  await expect(page.locator('nav').getByRole('button', { name: '当前持仓', exact: true })).toHaveAttribute('title', '1 个到期提醒');
+  await expect(page.locator('nav').getByRole('button', { name: '到期处理', exact: true })).toHaveAttribute('title', '1 个到期提醒');
   const card = page.locator('.reminder-card');
   await expect(card).toContainText('TEST 2026-02-20 150P');
   await expect(card).toContainText('已过期 256 天');
@@ -827,7 +831,7 @@ test('auto backup settings preserve reminder lead days', async ({ page }) => {
   await page.getByRole('button', { name: '保存自动备份设置' }).click();
   await expect(page.getByRole('status')).toContainText('保留最近 5 份');
   const call = await page.evaluate(() => (window as any).testCalls.find((entry: any) => entry.command === 'set_preferences'));
-  expect(call.args).toEqual({ reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 5 });
+  expect(call.args).toEqual({ reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 5, systemNotificationsEnabled: false, closeToTray: false });
 });
 
 test('cost chart overlays saved price and the next call strike', async ({ page }) => {
@@ -1151,4 +1155,40 @@ test('account cash panel explains coverage and reconciles against broker cash', 
   await page.getByRole('button', { name: '保存交易', exact: true }).click();
   const req = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req);
   expect(req).toMatchObject({ kind: 'cash_deposit', symbol: '', amount: 1500 });
+});
+
+test('expiry centre groups overdue contracts and sends a check notification', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '到期处理', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /到期处理中心/ })).toBeVisible();
+  await expect(page.locator('.expiry-summary')).toContainText('已过期');
+  await expect(page.locator('.expiry-summary')).toContainText('$15,000.00');
+  const group = page.locator('.expiry-group').filter({ hasText: '已过期' });
+  await expect(group).toContainText('TEST 2026-02-20 150P');
+  await expect(group).toContainText('已过期 256 天');
+  await expect(group).toContainText('$15,000.00');
+  await page.getByRole('button', { name: '检查到期并通知' }).click();
+  await expect(page.getByRole('status')).toContainText('已发送 1 条新通知');
+  const call = await page.evaluate(() => (window as any).testCalls.find((item: any) => item.command === 'check_expiries'));
+  expect(call.args.accountId).toBeUndefined();
+  await group.getByRole('button', { name: '到期作废', exact: true }).click();
+  await expect(page.getByLabel('交易类型')).toHaveValue('option_expire');
+  await expect(page.getByLabel('到期日')).toHaveValue('2026-02-20');
+  await expect(page.getByLabel('手数')).toHaveValue('1');
+});
+
+test('notification preferences and a test toast can be saved', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '到期提醒', exact: true }).click();
+  await expect(page.getByText('应用内提醒 · 可选 Windows 系统通知与托盘')).toBeVisible();
+  await page.getByLabel('发送 Windows 系统通知').check();
+  await page.getByLabel('关闭窗口时隐藏到托盘').check();
+  await page.getByRole('button', { name: '发送测试通知', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('测试通知已发送');
+  await page.getByRole('button', { name: '保存提醒设置', exact: true }).click();
+  await expect(page.getByText('提醒设置已保存。')).toBeVisible();
+  const saved = await page.evaluate(() => (window as any).testCalls.filter((item: any) => item.command === 'set_preferences').at(-1));
+  expect(saved.args.systemNotificationsEnabled).toBe(true);
+  expect(saved.args.closeToTray).toBe(true);
 });

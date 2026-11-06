@@ -618,6 +618,8 @@ mod tests {
                 reminder_lead_days: 7,
                 auto_backup_enabled: true,
                 auto_backup_keep: 2,
+                system_notifications_enabled: false,
+                close_to_tray: false,
             },
         )
         .unwrap();
