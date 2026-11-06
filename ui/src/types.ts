@@ -8,7 +8,13 @@ export interface Campaign {
   realizedPnl: number | null; sharePnl: number; startedAt: string; endedAt: string | null;
   cycles: number; costPoints: CostPoint[];
 }
-export interface Summary { premiumRealized: number; premiumOpen: number; activeCampaigns: number; openPositions: number; openContracts: number; collateral: number; sharesHeld: number }
+export interface Summary {
+  premiumRealized: number; premiumOpen: number; activeCampaigns: number; openPositions: number;
+  openContracts: number; collateral: number; sharesHeld: number;
+  accountCash: number; cashDeposits: number; cashWithdrawals: number; cashTracked: boolean;
+  cashCoverage: number | null; cashShortfall: number;
+}
+export interface CashMovement { date: string; kind: string; symbol: string; note: string; amount: number; balanceAfter: number }
 export interface Dashboard { accountId: string; asOf: string; summary: Summary; campaigns: Campaign[] }
 export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }

@@ -27,6 +27,12 @@ pub struct SummaryView {
     pub open_contracts: u32,
     pub collateral: f64,
     pub shares_held: u32,
+    pub account_cash: f64,
+    pub cash_deposits: f64,
+    pub cash_withdrawals: f64,
+    pub cash_tracked: bool,
+    pub cash_coverage: Option<f64>,
+    pub cash_shortfall: f64,
 }
 
 #[derive(Serialize)]

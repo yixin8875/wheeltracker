@@ -849,6 +849,10 @@ pub fn kind_from_action(text: &str, _has_contract: bool) -> ActionResult {
         }
         "fee" | "fees" | "commission" | "费用" | "手续费" | "佣金" | "利息" => Some("fee"),
         "adjustment" | "adjust" | "调整" | "现金调整" => Some("adjustment"),
+        "cash_deposit" | "deposit" | "cash deposit" | "transfer in" | "入金" | "存入"
+        | "存款" | "转入" => Some("cash_deposit"),
+        "cash_withdrawal" | "withdrawal" | "withdraw" | "cash withdrawal" | "transfer out"
+        | "出金" | "取出" | "取款" | "转出" => Some("cash_withdrawal"),
         "buy to open" | "bto" | "买入开仓" | "sell to close" | "stc" | "卖出平仓" => {
             return ActionResult::Unsupported(format!("暂不支持做多期权操作 `{}`", text.trim()))
         }
@@ -873,6 +877,10 @@ fn normalize_action(value: &str) -> String {
 
 fn is_option_kind(kind: &str) -> bool {
     kind.starts_with("option_")
+}
+
+fn is_cash_kind(kind: &str) -> bool {
+    matches!(kind, "cash_deposit" | "cash_withdrawal")
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,19 +1069,27 @@ pub fn normalize_row(
         }
     };
 
+    let cash_kind = kind.is_some_and(is_cash_kind);
     if let Some(kind) = kind {
         if is_option_kind(kind) && !has_contract {
             errors.push("期权类型缺少到期日、行权价或看涨/看跌".to_string());
         }
-        if !is_option_kind(kind) && has_contract {
+        if cash_kind && has_contract {
+            errors.push("入金 / 出金行不应带期权合约，请检查列映射".to_string());
+        } else if !is_option_kind(kind) && !cash_kind && has_contract {
             errors.push("股票、分红或费用行不应带期权合约，请检查列映射".to_string());
         }
     }
-    if symbol.is_empty() {
+    if cash_kind {
+        if !symbol.is_empty() {
+            warnings.push("入金 / 出金是账户级交易，标的代码列已忽略。".to_string());
+            symbol.clear();
+        }
+    } else if symbol.is_empty() {
         errors.push("缺少标的代码".to_string());
     }
 
-    let qty = match optional_number(cells, mapping, Field::Qty) {
+    let mut qty = match optional_number(cells, mapping, Field::Qty) {
         Some(raw) => match parse_number(&raw) {
             Ok(value) if value.fract().abs() < 1e-9 => {
                 if value < 0.0 {
@@ -1097,7 +1113,16 @@ pub fn normalize_row(
         },
         None => 0,
     };
-    if qty == 0 && matches!(kind, Some(kind) if !matches!(kind, "fee" | "adjustment")) {
+    if qty == 0
+        && matches!(
+            kind,
+            Some(kind)
+                if !matches!(
+                    kind,
+                    "fee" | "adjustment" | "cash_deposit" | "cash_withdrawal"
+                )
+        )
+    {
         errors.push("数量必须大于零".to_string());
     }
 
@@ -1116,7 +1141,7 @@ pub fn normalize_row(
         },
         None => None,
     };
-    let fees = match optional_number(cells, mapping, Field::Fees) {
+    let mut fees = match optional_number(cells, mapping, Field::Fees) {
         Some(raw) => match parse_number(&raw) {
             Ok(value) => {
                 if value < 0.0 {
@@ -1194,6 +1219,27 @@ pub fn normalize_row(
                 price = Some(0.0);
                 amount = Some(0.0);
             }
+            "cash_deposit" | "cash_withdrawal" => {
+                match amount {
+                    Some(value) if value > 0.0 => {}
+                    Some(value) if value < 0.0 => {
+                        if kind == "cash_deposit" {
+                            errors.push("入金金额不能为负数；出金请改用「出金」类型".to_string());
+                        } else {
+                            warnings.push("出金金额为负，已按绝对值记账。".to_string());
+                            amount = Some(value.abs());
+                        }
+                    }
+                    Some(_) => errors.push("入金 / 出金金额必须大于 0".to_string()),
+                    None => errors.push("入金 / 出金行需要金额列".to_string()),
+                }
+                if price.unwrap_or(0.0) != 0.0 || fees != 0.0 {
+                    warnings.push("入金 / 出金不产生价格、数量或费用，已清零。".to_string());
+                }
+                qty = 0;
+                price = Some(0.0);
+                fees = 0.0;
+            }
             "fee" | "adjustment" => {
                 if amount.is_none() {
                     errors.push("费用或调整行需要金额列".to_string());
@@ -1230,9 +1276,9 @@ pub fn normalize_row(
             price: price.unwrap_or(0.0),
             fees,
             amount: amount.unwrap_or(0.0),
-            expiry,
-            strike,
-            right,
+            expiry: if cash_kind { None } else { expiry },
+            strike: if cash_kind { None } else { strike },
+            right: if cash_kind { None } else { right },
             multiplier,
             note,
         })
@@ -1420,7 +1466,11 @@ fn fingerprint(
     // two same-day fees for the same symbol would look like duplicates. Other
     // kinds ignore `amount` when stored, so including it there would stop an
     // otherwise identical option/share row from being detected as a duplicate.
-    if matches!(kind, "fee" | "adjustment") && amount != 0.0 {
+    if matches!(
+        kind,
+        "fee" | "adjustment" | "cash_deposit" | "cash_withdrawal"
+    ) && amount != 0.0
+    {
         parts.push(format!("a{}", canonical_number(amount)));
     }
     let payload = parts.join("\u{1f}");
@@ -1622,6 +1672,18 @@ mod tests {
             kind_from_action("分红", false),
             ActionResult::Kind("dividend")
         );
+        for text in ["入金", "Deposit", "Transfer In", "cash deposit"] {
+            assert_eq!(
+                kind_from_action(text, false),
+                ActionResult::Kind("cash_deposit")
+            );
+        }
+        for text in ["出金", "Withdraw", "transfer out", "cash withdrawal"] {
+            assert_eq!(
+                kind_from_action(text, false),
+                ActionResult::Kind("cash_withdrawal")
+            );
+        }
         assert!(matches!(
             kind_from_action("Buy to Open", true),
             ActionResult::Unsupported(_)
@@ -1630,6 +1692,88 @@ mod tests {
             kind_from_action("whatever", false),
             ActionResult::Unknown(_)
         ));
+    }
+
+    #[test]
+    fn normalize_row_supports_account_level_cash_transfers() {
+        let mut mapping = mapping();
+        mapping.fields.remove(&Field::Price);
+        mapping.fields.insert(Field::Amount, 4);
+        let cells = row(&[
+            "2026-01-02",
+            "入金",
+            "",
+            "0",
+            "10,000.50",
+            "0",
+            "",
+            "",
+            "",
+        ]);
+        let parsed = normalize_row(1, 2, &cells, &mapping);
+        assert_eq!(parsed.status, RowStatus::Ok);
+        let event = parsed.event.unwrap();
+        assert_eq!(event.kind, "cash_deposit");
+        assert_eq!(event.symbol, "");
+        assert_eq!(event.qty, 0);
+        assert_eq!(event.amount, 10_000.5);
+        assert_eq!(event.price, 0.0);
+        assert_eq!(event.fees, 0.0);
+        assert!(event.expiry.is_none() && event.strike.is_none() && event.right.is_none());
+
+        // A stray symbol is cleared with a warning instead of failing the row.
+        let cells = row(&[
+            "2026-01-03",
+            "cash withdrawal",
+            "AAPL",
+            "0",
+            "-250",
+            "0",
+            "",
+            "",
+            "",
+        ]);
+        let parsed = normalize_row(2, 3, &cells, &mapping);
+        assert_eq!(parsed.status, RowStatus::Warning);
+        let event = parsed.event.unwrap();
+        assert_eq!(event.kind, "cash_withdrawal");
+        assert_eq!(event.symbol, "");
+        assert_eq!(event.amount, 250.0);
+
+        // A negative deposit is rejected so it cannot silently flip direction.
+        let cells = row(&["2026-01-04", "Deposit", "", "0", "-100", "0", "", "", ""]);
+        let parsed = normalize_row(3, 4, &cells, &mapping);
+        assert_eq!(parsed.status, RowStatus::Error);
+        assert!(parsed.messages.iter().any(|message| message.contains("不能为负数")));
+
+        // Missing amount is an error.
+        let cells = row(&["2026-01-05", "Deposit", "", "0", "", "0", "", "", ""]);
+        let parsed = normalize_row(4, 5, &cells, &mapping);
+        assert_eq!(parsed.status, RowStatus::Error);
+        assert!(parsed.messages.iter().any(|message| message.contains("需要金额")));
+    }
+
+    #[test]
+    fn cash_fingerprints_distinguish_same_day_amounts() {
+        let candidate = |_id: &str, kind: &str, amount: f64| CandidateEvent {
+            date: date!(2026 - 01 - 02).to_string(),
+            kind: kind.to_string(),
+            symbol: String::new(),
+            qty: 0,
+            price: 0.0,
+            fees: 0.0,
+            amount,
+            expiry: None,
+            strike: None,
+            right: None,
+            multiplier: 100,
+            note: None,
+        };
+        let first = fingerprint_candidate(&candidate("a", "cash_deposit", 1_000.0), "main");
+        let second = fingerprint_candidate(&candidate("b", "cash_deposit", 2_000.0), "main");
+        assert_ne!(first, second);
+        let withdrawal = fingerprint_candidate(&candidate("c", "cash_withdrawal", 1_000.0), "main");
+        assert_ne!(first, withdrawal);
     }
 
     #[test]

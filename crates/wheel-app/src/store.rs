@@ -16,7 +16,7 @@ use wheel_core::{
 
 /// Bumped when the persisted event schema changes. A database written by a
 /// newer build is refused rather than silently read with missing columns.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -824,11 +824,12 @@ pub fn replay_checked(
 }
 
 pub fn validate_event(event: &Event) -> Result<()> {
-    if event.id.trim().is_empty()
-        || event.account_id.trim().is_empty()
-        || event.symbol.trim().is_empty()
-    {
-        bail!("事件编号、账户和标的不能为空");
+    let cash_transfer = event.kind.is_cash_transfer();
+    if event.id.trim().is_empty() || event.account_id.trim().is_empty() {
+        bail!("事件编号和账户不能为空");
+    }
+    if !cash_transfer && event.symbol.trim().is_empty() {
+        bail!("标的代码不能为空");
     }
     if event.seq == 0 || event.seq > i64::MAX as u64 {
         bail!("交易序号无效");
@@ -840,6 +841,23 @@ pub fn validate_event(event: &Event) -> Result<()> {
         || !event.amount.is_finite()
     {
         bail!("价格与费用必须为有限的非负数，金额必须为有限数");
+    }
+    if cash_transfer {
+        if !event.symbol.trim().is_empty() {
+            bail!("入金 / 出金是账户级交易，不能填写标的");
+        }
+        if event.contract.is_some()
+            || event.qty != 0
+            || event.price != 0.0
+            || event.fees != 0.0
+            || event.split.is_some()
+        {
+            bail!("入金 / 出金不能携带合约、数量、价格、费用或拆股信息");
+        }
+        if event.amount <= 0.0 {
+            bail!("入金 / 出金金额必须大于 0");
+        }
+        return Ok(());
     }
     if matches!(event.kind, EventKind::Split) {
         if event.contract.is_some()
@@ -1038,6 +1056,8 @@ pub fn kind_to_str(kind: EventKind) -> &'static str {
         EventKind::Fee => "fee",
         EventKind::Adjustment => "adjustment",
         EventKind::Split => "stock_split",
+        EventKind::CashDeposit => "cash_deposit",
+        EventKind::CashWithdrawal => "cash_withdrawal",
     }
 }
 
@@ -1053,6 +1073,8 @@ fn parse_kind(value: &str) -> Result<EventKind> {
         "fee" => Ok(EventKind::Fee),
         "adjustment" => Ok(EventKind::Adjustment),
         "stock_split" => Ok(EventKind::Split),
+        "cash_deposit" => Ok(EventKind::CashDeposit),
+        "cash_withdrawal" => Ok(EventKind::CashWithdrawal),
         other => bail!("未知的交易类型 `{other}`"),
     }
 }
@@ -1744,5 +1766,49 @@ mod tests {
         assert_eq!(version, SCHEMA_VERSION);
         drop(conn);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cash_events_round_trip_and_validate_as_account_level_only() {
+        let conn = db();
+        insert_events(
+            &conn,
+            &[
+                Event::cash_deposit("main", "dep", 1, at(), 5_000.0),
+                Event::cash_withdrawal("main", "wd", 2, at(), 1_250.5),
+            ],
+        )
+        .unwrap();
+        let events = list_events(&conn, "main").unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, EventKind::CashDeposit);
+        assert_eq!(events[0].symbol, "");
+        assert_eq!(events[1].kind, EventKind::CashWithdrawal);
+        assert_eq!(kind_to_str(EventKind::CashDeposit), "cash_deposit");
+        assert_eq!(parse_kind("cash_withdrawal").unwrap(), EventKind::CashWithdrawal);
+        validate_event(&events[0]).unwrap();
+        validate_event(&events[1]).unwrap();
+
+        let mut bad = events[0].clone();
+        bad.symbol = "AAPL".into();
+        assert!(validate_event(&bad).unwrap_err().to_string().contains("标的"));
+        bad = events[0].clone();
+        bad.qty = 1;
+        assert!(validate_event(&bad).is_err());
+        bad = events[0].clone();
+        bad.amount = 0.0;
+        assert!(validate_event(&bad).is_err());
+        bad = events[0].clone();
+        bad.amount = -10.0;
+        assert!(validate_event(&bad).is_err());
+        bad = events[0].clone();
+        bad.contract = Some(contract(150.0));
+        assert!(validate_event(&bad).is_err());
+
+        let state = wheel_core::replay("main", &events, Settings::default()).unwrap();
+        assert_eq!(state.account_cash, 3_749.5);
+        assert_eq!(state.cash_deposits, 5_000.0);
+        assert_eq!(state.cash_withdrawals, 1_250.5);
+        assert!(state.campaigns.is_empty());
     }
 }

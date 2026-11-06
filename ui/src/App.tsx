@@ -16,6 +16,7 @@ import { CampaignCompare } from './CampaignCompare';
 import { SettingsData } from './SettingsData';
 import { VisionSettings } from './VisionSettings';
 import { AccountsPanel } from './Accounts';
+import { AccountCashPanel, ReconcileModal } from './AccountCash';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
 import { Updater } from './Updater';
@@ -67,6 +68,7 @@ export default function App() {
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false); const [archive, setArchive] = useState(false); const [symbol, setSymbol] = useState('');
   const [pendingDelete, setPendingDelete] = useState<string | null>(null); const [deleting, setDeleting] = useState(false);
+  const [reconcileOpen, setReconcileOpen] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const generation = useRef(0); const detailGeneration = useRef(0);
   const reload = useCallback(async () => {
@@ -195,6 +197,7 @@ export default function App() {
     {['dashboard', 'positions', 'detail'].includes(page) && !!activeSymbols.length && <p className="market-note">{market.busy ? '正在更新标的参考价…' : market.error ? '行情更新失败，当前显示已保存的报价。' : '标的参考价使用已保存报价，可能延迟。'} <button className="text-button" onClick={() => setPage('market')}>查看行情与报价时间</button></p>}
     {page === 'dashboard' && !unavailable && <>
       <div className="summary-strip"><div><span>已落袋净收租</span><strong>{money(data?.summary.premiumRealized ?? 0)}</strong><small>已经了结的期权净收入</small></div><div><span>未平仓净权利金</span><strong>{money(data?.summary.premiumOpen ?? 0)}</strong><small>{data?.summary.openContracts ?? 0} 手合约仍待了结</small></div><div><span>Put 资金义务</span><strong>{money(data?.summary.collateral ?? 0)}</strong><small>按行权价计算</small></div><div><span>进行中的战役</span><strong>{data?.summary.activeCampaigns ?? 0}<em> 个</em></strong><small>持股共 {data?.summary.sharesHeld ?? 0} 股</small></div></div>
+      {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)}/>}
       <ReminderCard positions={positions} leadDays={leadDays} onOpenPositions={() => setPage('positions')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign}/>
       <div className="section-heading"><h2>我的战役 <span className="count">{campaigns.length}</span></h2><div className="toolbar"><input aria-label="筛选标的" placeholder="搜索标的…" value={symbol} onChange={e => setSymbol(e.target.value)}/><label className="check"><input type="checkbox" checked={archive} onChange={e => setArchive(e.target.checked)}/>显示已结束</label></div></div>
       <div className="campaign-grid">{campaigns.map(campaign => <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)}/>)}</div>
@@ -234,6 +237,7 @@ export default function App() {
       {settingsTab === 'data' && <SettingsData accountId={accountId} info={info} events={events} campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} positions={positions} settings={settings} restoreStatus={restoreStatus} onRestoreStatus={setRestoreStatus} onNotice={setNotice} onError={setError} onPreferencesSaved={preferencesSaved}/>}
     </>}
     {pendingDelete && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="delete-title" className="modal"><h2 id="delete-title">确认撤销这笔交易？</h2><p>这会重算持仓、成本和收租。如果后续交易依赖此记录，系统会拒绝撤销。原始记录不会被物理删除；撤销后不再出现在当前界面与导出中，但数据库仍保留审计行。</p><div className="toolbar"><button autoFocus disabled={deleting} onClick={() => setPendingDelete(null)}>取消</button><button className="danger" disabled={deleting} onClick={() => void deleteEvent()}>{deleting ? '正在撤销…' : '确认撤销'}</button></div></section></div>}
+    {reconcileOpen && data && <ReconcileModal accountId={accountId} summary={data.summary} onClose={() => setReconcileOpen(false)}/>}
     </main></div>;
 }
 

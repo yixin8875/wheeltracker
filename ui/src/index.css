@@ -85,6 +85,8 @@ main { margin-left: 238px; padding: 0 32px 32px; width: calc(100% - 238px); min-
 .summary-strip strong { display: block; font-size: 27px; font-weight: 550; margin: 8px 0; letter-spacing: -.5px; }
 .summary-strip em { font-size: 13px; font-style: normal; }
 .summary-strip small { font-size: 11px; }
+.cash-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cash-panel .section-heading .toolbar { flex-wrap: wrap; }
 
 .campaign-grid { display: grid; grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--border); }
 .campaign-grid .campaign-card { display: grid; grid-template-columns: minmax(125px, .65fr) minmax(245px, 1.3fr) minmax(265px, 1.4fr); column-gap: 24px; align-items: center; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 24px 12px; margin: 0; }
@@ -162,6 +164,16 @@ tr:last-child td { border-bottom: 0; }
 .modal { background: #ffffff; border: 1px solid #d9dde4; border-radius: 10px; padding: 28px; max-width: 460px; box-shadow: 0 16px 60px #172b4926; }
 .modal p { margin: 18px 0 24px; color: var(--muted); }
 .modal .toolbar { justify-content: flex-end; }
+.modal.wide { max-width: 860px; width: 100%; max-height: calc(100vh - 40px); overflow: auto; }
+.reconcile-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.6fr); gap: 24px; align-items: end; margin: 20px 0; }
+.reconcile-grid > label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); }
+.reconcile-values { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.cash-movements { max-height: 320px; overflow: auto; }
+.modal.wide { max-width: 860px; width: 100%; max-height: calc(100vh - 40px); overflow: auto; }
+.reconcile-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.6fr); gap: 24px; align-items: end; margin: 20px 0; }
+.reconcile-grid > label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); }
+.reconcile-values { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.cash-movements { max-height: 320px; overflow: auto; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .accounting-preferences { display: grid; justify-items: start; gap: 14px; }
 .accounting-preferences p { max-width: 70ch; font-size: 12px; }
@@ -260,6 +272,8 @@ tr:last-child td { border-bottom: 0; }
   .panel, .campaign-card { padding: 18px; }
   .section-heading { align-items: flex-start; flex-wrap: wrap; }
   .summary-strip strong { font-size: 24px; }
+  .cash-summary { grid-template-columns: 1fr; }
+  .reconcile-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .full { grid-column: auto; }
   .entry-preview { flex-wrap: wrap; gap: 22px; }

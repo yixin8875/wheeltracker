@@ -69,8 +69,9 @@ const FIELDS: { id: ImportField; label: string }[] = [
   { id: 'note', label: '备注' }
 ];
 
-const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment'];
+const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment', 'cash_deposit', 'cash_withdrawal'];
 const OPTION_KINDS = new Set(['option_open_short', 'option_close', 'option_expire', 'option_assign']);
+const CASH_KINDS = new Set(['cash_deposit', 'cash_withdrawal']);
 
 const STATUS: Record<CandidateRow['status'], string> = {
   ok: '可导入',
@@ -306,6 +307,12 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     if (kind === 'fee' || kind === 'adjustment') {
       patch.qty = 0;
       patch.price = 0;
+    }
+    if (CASH_KINDS.has(kind)) {
+      patch.symbol = '';
+      patch.qty = 0;
+      patch.price = 0;
+      patch.fees = 0;
     }
     if (kind === 'option_expire' || kind === 'option_assign') {
       patch.price = 0;
@@ -796,8 +803,9 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                             type="text"
                             className="import-cell-input"
                             aria-label={`第 ${row.rowNumber} 行标的`}
-                            value={row.event.symbol}
-                            disabled={busy}
+                            value={CASH_KINDS.has(row.event.kind) ? '' : row.event.symbol}
+                            placeholder={CASH_KINDS.has(row.event.kind) ? '账户级' : undefined}
+                            disabled={busy || CASH_KINDS.has(row.event.kind)}
                             onChange={event => updateEvent(row.rowNumber, { symbol: event.target.value })}
                           />
                           {OPTION_KINDS.has(row.event.kind) && <>

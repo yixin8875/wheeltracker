@@ -121,6 +121,6 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
         </tr>)}</tbody>
       </table></div>
     </>}
-    <p className="footnote">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入。不含未平仓权利金与股票浮盈亏，也不是税务申报表。</p>
+    <p className="footnote">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入。不含未平仓权利金与股票浮盈亏；入金 / 出金是账户资金划转，不属于收益，不计入本表；本表也不是税务申报表。</p>
   </section>;
 }

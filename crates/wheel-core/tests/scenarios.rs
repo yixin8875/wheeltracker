@@ -961,3 +961,68 @@ fn opening_a_pre_split_contract_after_the_split_is_rejected() {
         wheel_core::EngineError::AdjustedContractRequired { .. }
     ));
 }
+
+#[test]
+fn cash_transfers_track_account_cash_without_creating_campaigns() {
+    let p = put(date!(2026 - 02 - 20), 150.0);
+    let events = vec![
+        Event::cash_deposit(ACCOUNT, "e1", 1, date!(2026 - 01 - 02), 20_000.0),
+        Event::buy_shares(ACCOUNT, "e2", 2, date!(2026 - 01 - 05), "AAPL", 100, 150.0, 0.0),
+        Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 01 - 06), p, 1, 2.0, 0.0),
+        Event::cash_withdrawal(ACCOUNT, "e4", 4, date!(2026 - 01 - 10), 500.0),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    assert_eq!(state.campaigns.len(), 1);
+    assert!(state.event_campaigns.get("e1").is_none());
+    assert!(state.event_campaigns.get("e4").is_none());
+    assert_close(state.cash_deposits, 20_000.0);
+    assert_close(state.cash_withdrawals, 500.0);
+    // -15,000 shares + 200 premium + 20,000 deposit - 500 withdrawal.
+    assert_close(state.account_cash, 4_700.0);
+    let campaign_cash = state.campaigns.iter().map(|c| c.cash_flow).sum::<f64>();
+    assert_close(
+        state.account_cash,
+        campaign_cash + state.cash_deposits - state.cash_withdrawals,
+    );
+    assert_close(*state.event_cash.get("e1").unwrap(), 20_000.0);
+    assert_close(*state.event_cash.get("e4").unwrap(), -500.0);
+}
+
+#[test]
+fn cash_transfer_requires_a_positive_amount() {
+    for amount in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let events = vec![Event::cash_deposit(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 02),
+            amount,
+        )];
+        let err = replay(ACCOUNT, &events, Settings::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            wheel_core::EngineError::InvalidCashAmount { .. }
+        ));
+    }
+}
+
+#[test]
+fn cash_transfers_do_not_change_campaign_cost_basis_or_premium() {
+    let p = put(date!(2026 - 02 - 20), 150.0);
+    let events = vec![
+        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 150.0, 0.0),
+        Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 01 - 06), p.clone(), 1, 2.0, 0.0),
+        Event::cash_deposit(ACCOUNT, "e3", 3, date!(2026 - 01 - 07), 15_000.0),
+        Event::assign_option(ACCOUNT, "e4", 4, date!(2026 - 02 - 20), p.clone(), 1, 0.0),
+    ];
+    let state = run(&events);
+    assert_clean(&state);
+    let campaign = &state.campaigns[0];
+    assert_close(campaign.premium_realized, 200.0);
+    assert_close(campaign.share_pnl, 0.0);
+    assert_close(
+        state.account_cash,
+        campaign.cash_flow + state.cash_deposits - state.cash_withdrawals,
+    );
+}

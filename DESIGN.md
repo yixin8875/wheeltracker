@@ -93,6 +93,8 @@
 | `FEE` | 独立费用调整 | 标的、金额 |
 | `ADJUSTMENT` | 手工修正 | 标的、备注、覆盖值 |
 | `SPLIT` | 拆股 / 合股 | 标的、分子、分母、零股现金补偿 |
+| `CASH_DEPOSIT` | 入金（账户级资金划入） | 金额（正数）；无标的、无合约 |
+| `CASH_WITHDRAWAL` | 出金（账户级资金划出） | 金额（正数）；无标的、无合约 |
 
 **滚动（Roll）不新增事件类型**：一次 roll 就是 `OPTION_CLOSE` + `OPTION_OPEN_SHORT` 两笔，天然把净现金流算对。UI 层可提供「滚动录入」把两个表单合并，落库仍是两条事件。
 
@@ -151,6 +153,8 @@
 | `DIVIDEND` | `+amount` | `D += amount`（若开关打开） |
 | `FEE` | `−amount` | `R −= amount` 或计入对应事件 |
 | `ADJUSTMENT` | 视情况 | 覆盖指定字段并打审计标记 |
+| `CASH_DEPOSIT` | `+amount` | 不改战役；累计入金 `+amount` |
+| `CASH_WITHDRAWAL` | `−amount` | 不改战役；累计出金 `+amount` |
 
 **部分平仓的分摊**：按该持仓的加权平均权利金比例释放；股票成本按 `C × (卖出股数 / S)` 分摊。
 
@@ -198,6 +202,23 @@
 | 纯卖 Put 从未被指派 | 战役保持 active，权利金持续累积，等待指派 |
 | 手工改历史 | 生成 `ADJUSTMENT` 事件，不直接改原事件（保留审计链） |
 | 期权到期日当天未标记 | 应用按日期自动把过期未处理持仓标红，提示「已到期，请标记作废或指派」 |
+
+### 3.5 账户现金与 Put 覆盖
+
+入金 / 出金是**账户级**事件，不进入任何战役，也不影响 A / B / C′ 成本或战役收益。账户现金完全由事件流推导：
+
+```
+account_cash = Σ 全部 event_cash
+             = Σ campaigns.cash_flow + cash_deposits − cash_withdrawals
+```
+
+- `cash_tracked`：至少记录过一笔入金或出金。为 false 时，`account_cash` 只是交易现金流净额，不含期初余额，界面显示「交易现金流净额」并明确提示。
+- `cash_coverage = account_cash / open Put 资金义务`，仅在 `cash_tracked` 且存在未平仓 Put 时计算。
+- `cash_shortfall = max(0, open Put 资金义务 − account_cash)`，同样仅在 `cash_tracked` 时显示。
+- 覆盖率只回答「账本记录的现金能否承接全部未平仓 Put 指派」，不包含未记录的现金、利息、在途资金或券商融资额度。
+- 「与券商对账」只读展示账本现金、用户输入的券商现金、差额与最近 60 笔现金变动，不写入事件，避免把对账差异自动当成调整。
+
+现金变动列表按美东交易日排序，展示每笔事件的现金影响与变动后余额；到期作废现金影响为 0，因此不出现在列表中。
 
 ---
 
@@ -413,7 +434,7 @@ CREATE TABLE settings (
 - `events` 是唯一可写表；其余派生表均可删除重建。
 - 每次写入事件后，在**同一事务**内增量重算受影响的战役；同时提供 `rebuild_all()` 全量重建。
 - `schema_meta(engine_version)` 记录算法版本，升级时触发重建。
-- 持久化 schema 版本写入 `PRAGMA user_version`（当前为 3）。打开数据库前若版本高于应用支持的版本，拒绝并提示升级应用，不执行任何 DDL；旧库通过幂等 `ALTER TABLE` 补齐拆股列与账户归档列。
+- 持久化 schema 版本写入 `PRAGMA user_version`（当前为 4）。打开数据库前若版本高于应用支持的版本，拒绝并提示升级应用，不执行任何 DDL；旧库通过幂等 `ALTER TABLE` 补齐拆股列与账户归档列。schema 4 没有新增表或列，只因新增 `CASH_DEPOSIT` / `CASH_WITHDRAWAL` 事件语义而升版，确保旧版应用拒绝打开包含新事件的账本。
 
 ---
 
@@ -439,7 +460,7 @@ wheel-core/
 3. `campaign.premium_realized + premium_open + dividends == Σ premium_entries.net_premium`
 4. `cost_b == (cost_total − premium_realized − dividends) / shares`（S > 0 时）
 5. 战役 `closed` 时：`shares == 0`、无未平仓期权，且 `ever_held_shares == true`（纯 Put 战役不关闭）
-6. 全部事件 `cash_flow` 之和 == 账户现金净变化
+6. 全部事件 `cash_flow` 之和 == `account_cash`，且 `account_cash` == Σ 战役 `cash_flow` + 累计入金 − 累计出金
 7. 任意两次全量重建结果字节级一致（幂等）
 
 ### 6.3 测试策略
@@ -504,6 +525,7 @@ wheel-core/
 - **成本数字是本应用的第一视觉**——24–32px、等宽数字字体（`tabular-nums`），不放在表格里。
 - 成本线与现价用同一根横向标尺对比，安全垫用颜色编码（绿/黄/红）。
 - 每张卡片固定 4 行信息，不做折叠，保证扫视效率。
+- 仪表盘顶部增加「账户现金与 Put 覆盖」面板：账户现金 / 交易现金流净额、Put 资金义务、现金覆盖率与缺口；提供「记录入金」「记录出金」「与券商对账」。未记录入金 / 出金时不显示覆盖率，避免把交易现金流误当成真实余额。
 
 ### 7.3 标的详情页
 
@@ -637,6 +659,7 @@ update_event(event_id, req) -> EventId // 就地校正；保留 id/seq，整本�
 delete_event(event_id) -> ()          // 软删除 + 重建
 rebuild_all(account_id) -> RebuildReport
 list_ledger(filter: LedgerFilter) -> LedgerPage
+cash_movements(account_id, limit) -> Vec<CashMovementView>  // 只读：现金影响与变动后余额，最新在前
 monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按美东交易日月份
 list_positions(account_id) -> PositionsView
 preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化

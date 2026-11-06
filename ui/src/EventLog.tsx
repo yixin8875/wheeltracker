@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { downloadCsv, labels, money } from './lib';
 import type { EventRow } from './types';
 
-const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment', 'stock_split'];
+const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment', 'cash_deposit', 'cash_withdrawal', 'stock_split'];
+const CASH_KINDS = new Set(['cash_deposit', 'cash_withdrawal']);
 
 function quantityLabel(event: EventRow) {
   if (event.kind === 'stock_split') return `${event.splitNumerator} : ${event.splitDenominator}`;
-  if (event.kind === 'fee' || event.kind === 'adjustment') return '—';
+  if (event.kind === 'fee' || event.kind === 'adjustment' || CASH_KINDS.has(event.kind)) return '—';
   return String(event.qty);
 }
 
@@ -16,12 +17,14 @@ function priceLabel(event: EventRow) {
 }
 
 function feeLabel(event: EventRow) {
-  if (event.kind === 'stock_split' || event.kind === 'fee' || event.kind === 'adjustment') return '—';
+  if (event.kind === 'stock_split' || event.kind === 'fee' || event.kind === 'adjustment' || CASH_KINDS.has(event.kind)) return '—';
   return money(event.fees);
 }
 
 function amountLabel(event: EventRow) {
   if (event.kind === 'stock_split') return event.splitCashInLieu != null ? `零股补偿 ${money(event.splitCashInLieu)}` : '—';
+  if (event.kind === 'cash_deposit') return `入金 ${money(event.amount)}`;
+  if (event.kind === 'cash_withdrawal') return `出金 ${money(event.amount)}`;
   if (event.kind === 'fee' || event.kind === 'adjustment') return money(event.amount);
   return '—';
 }
@@ -61,7 +64,7 @@ export function EventLog({ events, onUndo, onEdit }: { events: EventRow[]; onUnd
       <tbody>{[...filtered].reverse().map(event => <tr key={event.id}>
         <td>{event.date}</td>
         <td>{labels[event.kind] ?? event.kind}</td>
-        <td>{event.symbol} {event.expiry} {event.strike}{event.right}{event.multiplier && event.multiplier !== 100 ? ` · ${event.multiplier} 股/手` : ''}</td>
+        <td>{event.symbol || '账户'} {event.expiry} {event.strike}{event.right}{event.multiplier && event.multiplier !== 100 ? ` · ${event.multiplier} 股/手` : ''}</td>
         <td>{quantityLabel(event)}</td>
         <td>{priceLabel(event)}</td>
         <td>{feeLabel(event)}</td>

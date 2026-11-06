@@ -313,7 +313,7 @@ fn dashboard_for(
         .iter()
         .map(|position| position.open_qty)
         .sum();
-    let collateral = derived
+    let collateral: f64 = derived
         .positions
         .iter()
         .filter(|position| position.contract.right == Right::Put)
@@ -330,6 +330,13 @@ fn dashboard_for(
         .map(|campaign| campaign.shares)
         .sum();
 
+    let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
+    let cash_coverage = (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
+    let cash_shortfall: f64 = if cash_tracked {
+        (collateral - derived.account_cash).max(0.0)
+    } else {
+        0.0
+    };
     let summary = views::SummaryView {
         premium_realized: derived.total_premium_realized(),
         premium_open: derived.total_premium_open(),
@@ -342,6 +349,12 @@ fn dashboard_for(
         open_contracts,
         collateral,
         shares_held,
+        account_cash: derived.account_cash,
+        cash_deposits: derived.cash_deposits,
+        cash_withdrawals: derived.cash_withdrawals,
+        cash_tracked,
+        cash_coverage,
+        cash_shortfall,
     };
 
     Ok(views::DashboardView {
@@ -350,6 +363,66 @@ fn dashboard_for(
         summary,
         campaigns,
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CashMovementView {
+    pub date: String,
+    pub kind: String,
+    pub symbol: String,
+    pub note: String,
+    pub amount: f64,
+    pub balance_after: f64,
+}
+
+/// Recent cash movements with a running balance, newest first. Used by the
+/// broker reconciliation panel to locate a difference; read-only.
+#[tauri::command]
+pub fn cash_movements(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<CashMovementView>, String> {
+    cash_movements_for(
+        &state.conn(),
+        &account_or_default(account_id),
+        limit.unwrap_or(50),
+    )
+}
+
+fn cash_movements_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    limit: u32,
+) -> Result<Vec<CashMovementView>, String> {
+    let events = store::list_events(conn, account_id).map_err(|error| error.to_string())?;
+    let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
+    let derived = store::replay_checked(account_id, &events, settings)
+        .map_err(|error| format!("{error:#}"))?;
+    let limit = limit.clamp(1, 500) as usize;
+    let mut balance = 0.0;
+    let mut items = Vec::new();
+    for event in &events {
+        let amount = derived.event_cash.get(&event.id).copied().unwrap_or(0.0);
+        if amount.abs() < 1e-9 {
+            continue;
+        }
+        balance += amount;
+        items.push(CashMovementView {
+            date: event.occurred_at.to_string(),
+            kind: store::kind_to_str(event.kind).to_string(),
+            symbol: event.symbol.clone(),
+            note: event.note.clone(),
+            amount,
+            balance_after: balance,
+        });
+    }
+    if items.len() > limit {
+        items.drain(..items.len() - limit);
+    }
+    items.reverse();
+    Ok(items)
 }
 
 #[tauri::command]
@@ -1027,8 +1100,13 @@ fn append_requests(
 
 fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Result<Event, String> {
     let at = store::parse_date(&req.date).map_err(|error| error.to_string())?;
-    let symbol = req.symbol.trim().to_ascii_uppercase();
-    if symbol.is_empty() {
+    let cash_transfer = matches!(req.kind.as_str(), "cash_deposit" | "cash_withdrawal");
+    let symbol = if cash_transfer {
+        String::new()
+    } else {
+        req.symbol.trim().to_ascii_uppercase()
+    };
+    if !cash_transfer && symbol.is_empty() {
         return Err("标的代码不能为空。".to_string());
     }
     if !req.price.is_finite()
@@ -1114,6 +1192,8 @@ fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Resul
         "dividend" => Event::dividend(account_id, id, seq, at, &symbol, req.price, req.qty),
         "fee" => Event::fee(account_id, id, seq, at, &symbol, req.amount),
         "adjustment" => Event::adjustment(account_id, id, seq, at, &symbol, req.amount),
+        "cash_deposit" => Event::cash_deposit(account_id, id, seq, at, req.amount),
+        "cash_withdrawal" => Event::cash_withdrawal(account_id, id, seq, at, req.amount),
         "stock_split" => {
             let numerator = req
                 .split_numerator
@@ -3227,6 +3307,144 @@ mod tests {
         assert_eq!(dashboard.summary.collateral, 10_000.0);
         assert_eq!(dashboard.summary.open_contracts, 2);
         assert_eq!(dashboard.summary.premium_open, 100.0);
+    }
+
+    #[test]
+    fn build_event_clears_symbol_for_cash_and_requires_positive_amount() {
+        let req: NewEventReq = serde_json::from_value(serde_json::json!({
+            "date": "2026-01-02", "kind": "cash_deposit", "symbol": "aapl",
+            "amount": 12_000.5
+        }))
+        .unwrap();
+        let event = build_event(&req, "main", "e1", 1).unwrap();
+        assert_eq!(event.kind, EventKind::CashDeposit);
+        assert_eq!(event.symbol, "");
+        assert_eq!(event.amount, 12_000.5);
+        assert!(event.contract.is_none());
+        assert_eq!(event.qty, 0);
+
+        let withdrawal: NewEventReq = serde_json::from_value(serde_json::json!({
+            "date": "2026-01-03", "kind": "cash_withdrawal", "symbol": "", "amount": 500.0
+        }))
+        .unwrap();
+        let event = build_event(&withdrawal, "main", "e2", 2).unwrap();
+        assert_eq!(event.kind, EventKind::CashWithdrawal);
+        assert_eq!(event.symbol, "");
+
+        for amount in [0.0, -1.0] {
+            let bad: NewEventReq = serde_json::from_value(serde_json::json!({
+                "date": "2026-01-02", "kind": "cash_deposit", "symbol": "", "amount": amount
+            }))
+            .unwrap();
+            assert!(build_event(&bad, "main", "e3", 3).is_err());
+        }
+        let mut missing_symbol: NewEventReq = request();
+        missing_symbol.symbol = "  ".into();
+        assert!(build_event(&missing_symbol, "main", "e4", 4).is_err());
+    }
+
+    #[test]
+    fn dashboard_reports_cash_coverage_and_shortfall_only_when_tracked() {
+        let conn = db();
+        let expiry = store::parse_date("2026-02-20").unwrap();
+        store::insert_events(
+            &conn,
+            &[
+                Event::cash_deposit("main", "dep", 1, date(), 20_000.0),
+                Event::buy_shares("main", "buy", 2, date(), "AAPL", 100, 150.0, 0.0),
+                Event::sell_option(
+                    "main",
+                    "put",
+                    3,
+                    date(),
+                    OptionContract::new("AAPL", expiry, 150.0, Right::Put),
+                    1,
+                    2.0,
+                    0.0,
+                ),
+            ],
+        )
+        .unwrap();
+        let dashboard = dashboard_for(&conn, "main").unwrap();
+        assert!(dashboard.summary.cash_tracked);
+        assert_eq!(dashboard.summary.account_cash, 5_200.0);
+        assert_eq!(dashboard.summary.cash_deposits, 20_000.0);
+        assert_eq!(dashboard.summary.collateral, 15_000.0);
+        let coverage = dashboard.summary.cash_coverage.unwrap();
+        assert!((coverage - 5_200.0 / 15_000.0).abs() < 1e-9);
+        assert_eq!(dashboard.summary.cash_shortfall, 9_800.0);
+
+        let untracked = db();
+        store::insert_event(
+            &untracked,
+            &Event::sell_option(
+                "main",
+                "put",
+                1,
+                date(),
+                OptionContract::new("AAPL", expiry, 150.0, Right::Put),
+                1,
+                2.0,
+                0.0,
+            ),
+        )
+        .unwrap();
+        let dashboard = dashboard_for(&untracked, "main").unwrap();
+        assert!(!dashboard.summary.cash_tracked);
+        assert!(dashboard.summary.cash_coverage.is_none());
+        assert_eq!(dashboard.summary.cash_shortfall, 0.0);
+        assert_eq!(dashboard.summary.account_cash, 200.0);
+    }
+
+    #[test]
+    fn cash_movements_are_newest_first_with_running_balance_and_limit() {
+        let conn = db();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let expiry = at("2026-02-20");
+        store::insert_events(
+            &conn,
+            &[
+                Event::cash_deposit("main", "dep", 1, at("2026-01-02"), 10_000.0),
+                Event::buy_shares("main", "buy", 2, at("2026-01-05"), "AAPL", 10, 100.0, 0.0),
+                Event::sell_option(
+                    "main",
+                    "put",
+                    3,
+                    at("2026-01-06"),
+                    OptionContract::new("AAPL", expiry, 100.0, Right::Put),
+                    1,
+                    1.5,
+                    0.0,
+                ),
+                Event::cash_withdrawal("main", "wd", 4, at("2026-01-10"), 250.0),
+                Event::expire_option(
+                    "main",
+                    "exp",
+                    5,
+                    at("2026-02-20"),
+                    OptionContract::new("AAPL", expiry, 100.0, Right::Put),
+                    1,
+                ),
+            ],
+        )
+        .unwrap();
+        let all = cash_movements_for(&conn, "main", 60).unwrap();
+        assert_eq!(all.len(), 4, "expiry has no cash effect");
+        assert_eq!(all[0].kind, "cash_withdrawal");
+        assert_eq!(all[0].balance_after, 8_900.0);
+        assert_eq!(all[1].kind, "option_open_short");
+        assert_eq!(all[1].amount, 150.0);
+        assert_eq!(all[1].balance_after, 9_150.0);
+        assert_eq!(all[2].kind, "shares_buy");
+        assert_eq!(all[2].amount, -1_000.0);
+        assert_eq!(all[2].balance_after, 9_000.0);
+        assert_eq!(all[3].kind, "cash_deposit");
+        assert_eq!(all[3].balance_after, 10_000.0);
+
+        let limited = cash_movements_for(&conn, "main", 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].kind, "cash_withdrawal");
+        assert_eq!(limited[1].kind, "option_open_short");
     }
 
     #[test]

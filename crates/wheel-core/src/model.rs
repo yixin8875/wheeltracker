@@ -122,6 +122,17 @@ pub enum EventKind {
     Fee,
     Adjustment,
     Split,
+    /// Cash moved into the account from outside the trading ledger.
+    CashDeposit,
+    /// Cash moved out of the account to the outside world.
+    CashWithdrawal,
+}
+
+impl EventKind {
+    /// Account-level cash movements have no symbol and belong to no campaign.
+    pub fn is_cash_transfer(self) -> bool {
+        matches!(self, EventKind::CashDeposit | EventKind::CashWithdrawal)
+    }
 }
 
 /// An immutable fact. Everything else in the crate is derived from a stream of
@@ -361,6 +372,16 @@ impl Event {
         Self::new(account_id, id, seq, at, EventKind::Adjustment, symbol).amount(amount)
     }
 
+    /// Deposit cash into the account. `amount` is a positive dollar value.
+    pub fn cash_deposit(account_id: &str, id: &str, seq: u64, at: Date, amount: f64) -> Self {
+        Self::new(account_id, id, seq, at, EventKind::CashDeposit, "").amount(amount)
+    }
+
+    /// Withdraw cash from the account. `amount` is a positive dollar value.
+    pub fn cash_withdrawal(account_id: &str, id: &str, seq: u64, at: Date, amount: f64) -> Self {
+        Self::new(account_id, id, seq, at, EventKind::CashWithdrawal, "").amount(amount)
+    }
+
     /// Apply a stock split or reverse split to every open position of `symbol`.
     pub fn stock_split(
         account_id: &str,
@@ -409,6 +430,12 @@ impl fmt::Display for Event {
                     self.occurred_at, self.symbol, terms.numerator, terms.denominator,
                     terms.cash_in_lieu
                 )
+            }
+            EventKind::CashDeposit => {
+                write!(f, "{} 入金 {:.2}", self.occurred_at, self.amount)
+            }
+            EventKind::CashWithdrawal => {
+                write!(f, "{} 出金 {:.2}", self.occurred_at, self.amount)
             }
             other => write!(
                 f,

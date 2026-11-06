@@ -31,9 +31,14 @@ async function setup(page: Page) {
       switch (command) {
         case 'dashboard':
           if (state.testRejectDashboard) throw new Error('dashboard read failed');
-          if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
-          return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
+          if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0, accountCash: 0, cashDeposits: 0, cashWithdrawals: 0, cashTracked: false, cashCoverage: null, cashShortfall: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
+          return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
+        case 'cash_movements': return [
+          { date: '2026-01-10', kind: 'cash_withdrawal', symbol: '', note: '转出到储蓄账户', amount: -500, balanceAfter: 5200 },
+          { date: '2026-01-06', kind: 'option_open_short', symbol: 'TEST', note: '本轮卖 Put', amount: 100, balanceAfter: 5700 },
+          { date: '2026-01-02', kind: 'cash_deposit', symbol: '', note: '期初入金', amount: 20000, balanceAfter: 20000 },
+        ];
         case 'positions': return [...(state.testExtraPositions ?? []), { ...position, multiplier: state.testMultiplier ?? position.multiplier }];
         case 'list_events': return [...(state.testExtraEvents ?? []), ...(state.testSplit ? [splitEvent] : []), { id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
         case 'monthly_income': return state.testMonthly ?? {
@@ -426,7 +431,7 @@ test('metadata read failure does not block refreshed accounting values', async (
   await expect(page.getByRole('alert')).toContainText('账本已更新，但应用信息读取失败');
   await page.getByRole('button', { name: '仪表盘', exact: true }).click();
   await expect(page.locator('.cost-focus').first()).toContainText('$147.00');
-  await expect(page.locator('.footnote')).toContainText('当前分红计入');
+  await expect(page.locator('.footnote').filter({ hasText: '当前分红计入' })).toBeVisible();
   await page.getByRole('button', { name: '查看战役' }).click();
   await expect(page.locator('.cost-focus').first()).toContainText('$147.00');
 });
@@ -450,7 +455,7 @@ test('financial read failure hides stale costs until retry succeeds', async ({ p
   await page.evaluate(() => { (window as any).testRejectDashboard = false; });
   await page.getByRole('button', { name: '重试读取账本', exact: true }).click();
   await expect(page.locator('.cost-focus').first()).toContainText('$147.00');
-  await expect(page.locator('.footnote')).toContainText('当前分红计入');
+  await expect(page.locator('.footnote').filter({ hasText: '当前分红计入' })).toBeVisible();
   await page.getByRole('button', { name: '查看战役' }).click();
   await expect(page.locator('.cost-focus').first()).toContainText('$147.00');
 });
@@ -1116,4 +1121,34 @@ test('annual report filters years and exports month and symbol sheets', async ({
   expect(workbook.get('xl/workbook.xml')!.toString('utf8')).toContain('年度标的');
   expect(workbook.get('xl/worksheets/sheet1.xml')!.toString('utf8')).toContain('2026-03');
   expect(workbook.get('xl/worksheets/sheet2.xml')!.toString('utf8')).toContain('AAPL');
+});
+
+test('account cash panel explains coverage and reconciles against broker cash', async ({ page }) => {
+  await setup(page);
+  const panel = page.locator('.cash-panel');
+  await expect(panel.getByRole('heading', { name: /账户现金与 Put 覆盖/ })).toBeVisible();
+  await expect(panel).toContainText('$5,200.00');
+  await expect(panel).toContainText('累计入金 $20,000.00 · 累计出金 $500.00');
+  await expect(panel).toContainText('缺口 $9,800.00');
+
+  await panel.getByRole('button', { name: '与券商对账' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '与券商对账' })).toBeVisible();
+  await expect(dialog.locator('.cash-movements tbody tr')).toHaveCount(3);
+  await dialog.getByLabel('券商显示的现金余额（USD）').fill('6,000');
+  await expect(dialog.locator('.reconcile-values')).toContainText('$6,000.00');
+  await expect(dialog.locator('.reconcile-values')).toContainText('$800.00');
+  await expect(dialog).toContainText('正数通常表示账本漏记了入金');
+  expect(await page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === 'cash_movements'))).toBe(true);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await panel.getByRole('button', { name: '记录入金' }).click();
+  await expect(page.getByLabel('交易类型')).toHaveValue('cash_deposit');
+  await expect(page.getByLabel('标的代码')).toHaveCount(0);
+  await expect(page.getByLabel('金额（USD）')).toBeVisible();
+  await page.getByLabel('金额（USD）').fill('1500');
+  await expect(page.locator('.entry-preview')).toContainText('$1,500.00');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  const req = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req);
+  expect(req).toMatchObject({ kind: 'cash_deposit', symbol: '', amount: 1500 });
 });

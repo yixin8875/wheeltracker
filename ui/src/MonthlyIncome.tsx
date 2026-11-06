@@ -113,6 +113,6 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
         <tfoot><tr><th>合计</th><th>{money(totals.premium)}</th><th>{money(totals.dividends)}</th><th>{money(totals.fees)}</th><th>{money(totals.adjustments)}</th><th>{money(totals.total)}</th><th></th><th>{totals.closedEntries}</th></tr></tfoot>
       </table></div>
     </>}
-    <p className="footnote">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账。累计为所选年份区间内的累计。</p>
+    <p className="footnote">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账。累计为所选年份区间内的累计。入金 / 出金是账户资金划转，不属于收益，不计入本表。</p>
   </section>;
 }

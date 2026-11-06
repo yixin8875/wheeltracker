@@ -83,6 +83,9 @@ pub enum EngineError {
         event: EventId,
         contract: String,
     },
+    InvalidCashAmount {
+        event: EventId,
+    },
 }
 
 impl fmt::Display for EngineError {
@@ -153,6 +156,9 @@ impl fmt::Display for EngineError {
                 f,
                 "合约 {contract} 是拆股前的旧合约，请使用调整后的行权价和每手股数录入。"
             ),
+            EngineError::InvalidCashAmount { .. } => {
+                write!(f, "入金 / 出金金额必须为有限且大于 0 的数。")
+            }
         }
     }
 }
@@ -177,6 +183,17 @@ pub struct DerivedState {
     /// Realized share-leg P&L attributed to each sale, call assignment, or
     /// cash-in-lieu event. The sum per campaign equals `Campaign.share_pnl`.
     pub event_share_pnl: HashMap<EventId, f64>,
+    /// Signed cash effect of every event (trading cash flows plus deposits and
+    /// withdrawals). Expired options contribute zero and are still recorded.
+    pub event_cash: HashMap<EventId, f64>,
+    /// Account cash derived from the full event stream. Only meaningful once
+    /// the user has recorded at least one deposit or withdrawal; otherwise it
+    /// is just the net cash flow of the trading events.
+    pub account_cash: f64,
+    /// Total cash deposited into the account.
+    pub cash_deposits: f64,
+    /// Total cash withdrawn from the account.
+    pub cash_withdrawals: f64,
 }
 
 impl DerivedState {
@@ -216,6 +233,30 @@ impl DerivedState {
     pub fn check_invariants(&self) -> Vec<String> {
         let mut issues = Vec::new();
         let eps = 1e-6;
+
+        let cash_sum: f64 = self.event_cash.values().sum();
+        if (cash_sum - self.account_cash).abs() > eps {
+            issues.push(format!(
+                "account cash mismatch: events={cash_sum}, state={}",
+                self.account_cash
+            ));
+        }
+        if !self.account_cash.is_finite() {
+            issues.push("account cash is not finite".to_string());
+        }
+        if self.cash_deposits < -eps || self.cash_withdrawals < -eps {
+            issues.push("cash transfer totals cannot be negative".to_string());
+        }
+        let campaign_cash: f64 = self.campaigns.iter().map(|c| c.cash_flow).sum();
+        let expected_cash = campaign_cash + self.cash_deposits - self.cash_withdrawals;
+        if (self.account_cash - expected_cash).abs() > eps {
+            // Kept separate from the event sum above so a mismatch points at
+            // either the per-event map or the campaign cash roll-up.
+            issues.push(format!(
+                "account cash {0} does not reconcile with campaign cash {campaign_cash} plus transfers",
+                self.account_cash
+            ));
+        }
 
         for c in &self.campaigns {
             let open_sum: f64 = self
@@ -369,6 +410,10 @@ struct Builder {
     event_campaigns: HashMap<EventId, String>,
     event_dividends: HashMap<EventId, f64>,
     event_share_pnl: HashMap<EventId, f64>,
+    event_cash: HashMap<EventId, f64>,
+    account_cash: f64,
+    cash_deposits: f64,
+    cash_withdrawals: f64,
     /// Pre-split contract id -> current adjusted contract. Used so a later
     /// close/expire/assign that still references the old contract resolves to
     /// the adjusted open position.
@@ -390,6 +435,10 @@ impl Builder {
             event_campaigns: HashMap::new(),
             event_dividends: HashMap::new(),
             event_share_pnl: HashMap::new(),
+            event_cash: HashMap::new(),
+            account_cash: 0.0,
+            cash_deposits: 0.0,
+            cash_withdrawals: 0.0,
             split_aliases: HashMap::new(),
         }
     }
@@ -401,22 +450,25 @@ impl Builder {
             });
         }
         let before = self.active_campaign_idx(&event.symbol);
-        match event.kind {
-            EventKind::Option(OptionAction::OpenShort) => self.open_short(event),
+        let cash = match event.kind {
+            EventKind::Option(OptionAction::OpenShort) => self.open_short(event)?,
             EventKind::Option(OptionAction::Close) => {
-                self.close_position(event, EntryStatus::Closed)
+                self.close_position(event, EntryStatus::Closed)?
             }
             EventKind::Option(OptionAction::Expire) => {
-                self.close_position(event, EntryStatus::Expired)
+                self.close_position(event, EntryStatus::Expired)?
             }
-            EventKind::Option(OptionAction::Assign) => self.assign(event),
-            EventKind::SharesBuy => self.shares_buy(event),
-            EventKind::SharesSell => self.shares_sell(event),
-            EventKind::Dividend => self.dividend(event),
-            EventKind::Fee => self.adjust_cash(event, -event.amount),
-            EventKind::Adjustment => self.adjust_cash(event, event.amount),
-            EventKind::Split => self.split(event),
-        }?;
+            EventKind::Option(OptionAction::Assign) => self.assign(event)?,
+            EventKind::SharesBuy => self.shares_buy(event)?,
+            EventKind::SharesSell => self.shares_sell(event)?,
+            EventKind::Dividend => self.dividend(event)?,
+            EventKind::Fee => self.adjust_cash(event, -event.amount)?,
+            EventKind::Adjustment => self.adjust_cash(event, event.amount)?,
+            EventKind::Split => self.split(event)?,
+            EventKind::CashDeposit | EventKind::CashWithdrawal => self.cash_transfer(event)?,
+        };
+        self.account_cash += cash;
+        self.event_cash.insert(event.id.clone(), cash);
         if let Some(idx) = before.or_else(|| self.active_campaign_idx(&event.symbol)) {
             self.event_campaigns
                 .insert(event.id.clone(), self.campaigns[idx].id.clone());
@@ -424,7 +476,7 @@ impl Builder {
         Ok(())
     }
 
-    fn open_short(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn open_short(&mut self, event: &Event) -> Result<f64, EngineError> {
         let contract = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
@@ -480,10 +532,10 @@ impl Builder {
             &event.id,
         );
         self.record_cost_point(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(net)
     }
 
-    fn close_position(&mut self, event: &Event, status: EntryStatus) -> Result<(), EngineError> {
+    fn close_position(&mut self, event: &Event, status: EntryStatus) -> Result<f64, EngineError> {
         let requested = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
@@ -535,10 +587,10 @@ impl Builder {
         self.sync_position(&campaign_id, &key);
         self.record_cost_point(campaign_idx, event.occurred_at);
         self.maybe_close_campaign(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(-cost)
     }
 
-    fn assign(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn assign(&mut self, event: &Event) -> Result<f64, EngineError> {
         let requested = event.contract.clone().ok_or(EngineError::MissingContract {
             event: event.id.clone(),
         })?;
@@ -592,7 +644,7 @@ impl Builder {
         self.campaigns[campaign_idx].premium_open -= credit;
         self.campaigns[campaign_idx].premium_realized += credit;
 
-        match contract.right {
+        let cash = match contract.right {
             Right::Put => {
                 let lot_cost_total = contract.strike * shares_qty as f64 + event.fees;
                 let cost_per_share = lot_cost_total / shares_qty as f64;
@@ -613,6 +665,7 @@ impl Builder {
                     cost_per_share,
                     origin_event: event.id.clone(),
                 });
+                -lot_cost_total
             }
             Right::Call => {
                 let allocated = {
@@ -633,16 +686,17 @@ impl Builder {
                 self.event_share_pnl
                     .insert(event.id.clone(), proceeds - allocated);
                 self.consume_lots(&campaign_id, shares_qty);
+                proceeds
             }
-        }
+        };
 
         self.sync_position(&campaign_id, &key);
         self.record_cost_point(campaign_idx, event.occurred_at);
         self.maybe_close_campaign(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(cash)
     }
 
-    fn shares_buy(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn shares_buy(&mut self, event: &Event) -> Result<f64, EngineError> {
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -670,10 +724,10 @@ impl Builder {
             origin_event: event.id.clone(),
         });
         self.record_cost_point(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(-total_cost)
     }
 
-    fn shares_sell(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn shares_sell(&mut self, event: &Event) -> Result<f64, EngineError> {
         if event.qty == 0 {
             return Err(EngineError::InvalidQuantity {
                 event: event.id.clone(),
@@ -713,10 +767,10 @@ impl Builder {
         self.consume_lots(&campaign_id, event.qty);
         self.record_cost_point(campaign_idx, event.occurred_at);
         self.maybe_close_campaign(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(proceeds)
     }
 
-    fn dividend(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn dividend(&mut self, event: &Event) -> Result<f64, EngineError> {
         let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
             EngineError::NoActiveCampaign {
                 event: event.id.clone(),
@@ -733,10 +787,10 @@ impl Builder {
         self.campaigns[campaign_idx].cash_flow += amount;
         self.event_dividends.insert(event.id.clone(), amount);
         self.record_cost_point(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(amount)
     }
 
-    fn split(&mut self, event: &Event) -> Result<(), EngineError> {
+    fn split(&mut self, event: &Event) -> Result<f64, EngineError> {
         let terms = event.split.ok_or(EngineError::MissingSplitTerms {
             event: event.id.clone(),
         })?;
@@ -754,7 +808,7 @@ impl Builder {
         }
         let Some(campaign_idx) = self.active_campaign_idx(&event.symbol) else {
             // A split far from any position is a harmless historical note.
-            return Ok(());
+            return Ok(0.0);
         };
         let campaign_id = self.campaigns[campaign_idx].id.clone();
         let ratio = f64::from(terms.numerator) / f64::from(terms.denominator);
@@ -881,10 +935,29 @@ impl Builder {
         }
         self.record_cost_point(campaign_idx, event.occurred_at);
         self.maybe_close_campaign(campaign_idx, event.occurred_at);
-        Ok(())
+        Ok(if has_fraction { cash_in_lieu } else { 0.0 })
     }
 
-    fn adjust_cash(&mut self, event: &Event, delta: f64) -> Result<(), EngineError> {
+    fn cash_transfer(&mut self, event: &Event) -> Result<f64, EngineError> {
+        if !event.amount.is_finite() || event.amount <= 0.0 {
+            return Err(EngineError::InvalidCashAmount {
+                event: event.id.clone(),
+            });
+        }
+        match event.kind {
+            EventKind::CashDeposit => {
+                self.cash_deposits += event.amount;
+                Ok(event.amount)
+            }
+            EventKind::CashWithdrawal => {
+                self.cash_withdrawals += event.amount;
+                Ok(-event.amount)
+            }
+            _ => unreachable!("cash_transfer is only called for cash kinds"),
+        }
+    }
+
+    fn adjust_cash(&mut self, event: &Event, delta: f64) -> Result<f64, EngineError> {
         let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
             EngineError::NoActiveCampaign {
                 event: event.id.clone(),
@@ -893,7 +966,7 @@ impl Builder {
         })?;
         self.campaigns[campaign_idx].adjustments += delta;
         self.campaigns[campaign_idx].cash_flow += delta;
-        Ok(())
+        Ok(delta)
     }
 
     fn ensure_campaign(&mut self, symbol: &str, at: Date) -> usize {
@@ -1199,6 +1272,10 @@ impl Builder {
             event_campaigns: self.event_campaigns,
             event_dividends: self.event_dividends,
             event_share_pnl: self.event_share_pnl,
+            event_cash: self.event_cash,
+            account_cash: self.account_cash,
+            cash_deposits: self.cash_deposits,
+            cash_withdrawals: self.cash_withdrawals,
         }
     }
 }

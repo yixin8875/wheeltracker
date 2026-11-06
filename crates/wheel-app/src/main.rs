@@ -88,6 +88,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::dashboard,
+            commands::cash_movements,
             commands::campaign_detail,
             commands::ledger,
             commands::monthly_income,
