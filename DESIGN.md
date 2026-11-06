@@ -79,7 +79,7 @@
 
 ### 2.2 事件（Event）—— 唯一真相源
 
-所有数据都是**不可变事件**。持仓、成本、台账全部由事件推导而来，随时可以从零重算。
+所有数据都是**事件流**。持仓、成本、台账全部由事件推导而来，随时可以从零重算。记录可在交易记录中就地校正：保留 `id` 与 `seq`，原子重写字段，并在写入前重新回放整本账；后续交易依赖该记录时拒绝修改。
 
 | 事件类型 | 含义 | 关键字段 |
 |---|---|---|
@@ -633,6 +633,7 @@ list_accounts() -> Vec<AccountView>
 create_account(name) -> AccountView            // 名称唯一，≤50 个账户
 rename_account(account_id, name) -> AccountView
 add_event(req: NewEventReq) -> EventId
+update_event(event_id, req) -> EventId // 就地校正；保留 id/seq，整本回放通过才写入
 delete_event(event_id) -> ()          // 软删除 + 重建
 rebuild_all(account_id) -> RebuildReport
 list_ledger(filter: LedgerFilter) -> LedgerPage
@@ -830,4 +831,5 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | Roll | 两条事件，UI 合并录入 |
 | 行情 | MVP 手工维护，接口预留 |
 | 导入 | 一律人工确认后入库 |
+| 修改 | 原子重写字段，保留 `id` / `seq`，整本回放通过才提交 |
 | 删除 | 软删除 + 重建，保留审计 |
