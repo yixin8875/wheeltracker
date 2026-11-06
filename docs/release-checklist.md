@@ -7,6 +7,7 @@
 - [ ] `Cargo.toml`、`crates/wheel-app/Cargo.toml`（继承 workspace）、`Cargo.lock` 均为 `0.6.0`。
 - [ ] `crates/wheel-app/tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.6.0`。
 - [ ] `python -I scripts/release.py --no-build --skip-tests` 版本一致性检查通过。
+- [ ] 确认目标版本尚未打 tag；未打 tag 时工作流直接发布该版本，已打 tag 时会自动再升一个补丁号。
 - [ ] 工作树干净，发布提交已记录在 `dist/release/release-manifest.json` 的 `gitCommit`。
 - [ ] `LICENSE` 为 MIT，已通过 `bundle.licenseFile` 打包。
 

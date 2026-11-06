@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Bump the workspace patch version in every release manifest.
+"""Read or bump the workspace version in every release manifest.
 
-Prints the new version to stdout so a workflow can capture it.
+With no arguments, bumps the patch version and prints it. With ``--current``,
+prints the version already committed so a workflow can release a manually
+bumped minor or major version without incrementing it again.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -30,17 +33,32 @@ def next_patch(version: str) -> str:
     return f"{major}.{minor}.{int(patch) + 1}"
 
 
-def main() -> None:
-    cargo_path = ROOT / "Cargo.toml"
-    cargo = read(cargo_path)
+def current_version(cargo: str) -> str:
     block = re.search(r"\[workspace\.package\](.*?)(?=\n\[|\Z)", cargo, re.S)
     if not block:
         fail("Cargo.toml has no [workspace.package] section")
     version_match = re.search(r'^version\s*=\s*"([^"]+)"', block.group(1), re.M)
     if not version_match:
         fail("Cargo.toml has no workspace version")
+    return version_match.group(1)
 
-    current = version_match.group(1)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read or bump the workspace version.")
+    parser.add_argument(
+        "--current",
+        action="store_true",
+        help="print the committed version without changing any file",
+    )
+    args = parser.parse_args()
+
+    cargo_path = ROOT / "Cargo.toml"
+    cargo = read(cargo_path)
+    current = current_version(cargo)
+    if args.current:
+        print(current)
+        return
+
     new = next_patch(current)
 
     cargo = cargo.replace(f'version = "{current}"', f'version = "{new}"', 1)

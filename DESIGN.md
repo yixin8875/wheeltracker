@@ -749,6 +749,7 @@ restore_status() -> RestoreStatus
 
 ### 8.11 P5 发布工程
 
+- **发布版本选择**：推送到 `main` 时先读取已提交的 workspace 版本；若 `v<version>` 标签不存在，直接发布该版本（支持手动提升次 / 主版本）；若已打过标签，才自动把补丁号 +1 并提交 `[skip release]`。
 - **版本单一来源**：workspace `Cargo.toml` 为 `0.6.0`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
 - **安装包**：Tauri `bundle.targets = ["nsis"]`，`installMode = currentUser`，简体中文 / English 语言选择，开始菜单 `Wheel Tracker`，lzma 压缩；`licenseFile` 指向 MIT `LICENSE`，并设置 publisher / copyright / Finance 分类 / 中英文描述。
 - **CSP**：生产 `default-src 'self'`，`connect-src` 仅 `ipc:` 与 `http://ipc.localhost`，图片允许 `data:` / `blob:`，样式允许内联；`devCsp` 额外放行 Vite 的 `127.0.0.1:1420` HTTP / WebSocket 与开发期内联脚本。
