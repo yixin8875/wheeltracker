@@ -289,6 +289,52 @@ pub fn dashboard(
     dashboard_for(&state.conn(), &account_id)
 }
 
+fn summary_view(derived: &DerivedState) -> views::SummaryView {
+    let open_contracts = derived.positions.iter().map(|position| position.open_qty).sum();
+    let collateral: f64 = derived
+        .positions
+        .iter()
+        .filter(|position| position.contract.right == Right::Put)
+        .map(|position| {
+            position.contract.strike
+                * f64::from(position.contract.multiplier)
+                * f64::from(position.open_qty)
+        })
+        .sum();
+    let shares_held = derived
+        .campaigns
+        .iter()
+        .filter(|campaign| campaign.is_active())
+        .map(|campaign| campaign.shares)
+        .sum();
+    let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
+    let cash_coverage = (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
+    let cash_shortfall: f64 = if cash_tracked {
+        (collateral - derived.account_cash).max(0.0)
+    } else {
+        0.0
+    };
+    views::SummaryView {
+        premium_realized: derived.total_premium_realized(),
+        premium_open: derived.total_premium_open(),
+        active_campaigns: derived
+            .campaigns
+            .iter()
+            .filter(|campaign| campaign.is_active())
+            .count(),
+        open_positions: derived.positions.len(),
+        open_contracts,
+        collateral,
+        shares_held,
+        account_cash: derived.account_cash,
+        cash_deposits: derived.cash_deposits,
+        cash_withdrawals: derived.cash_withdrawals,
+        cash_tracked,
+        cash_coverage,
+        cash_shortfall,
+    }
+}
+
 fn dashboard_for(
     conn: &rusqlite::Connection,
     account_id: &str,
@@ -316,60 +362,149 @@ fn dashboard_for(
             .then_with(|| a.symbol.cmp(&b.symbol))
     });
 
-    let open_contracts = derived
-        .positions
-        .iter()
-        .map(|position| position.open_qty)
-        .sum();
-    let collateral: f64 = derived
-        .positions
-        .iter()
-        .filter(|position| position.contract.right == Right::Put)
-        .map(|position| {
-            position.contract.strike
-                * f64::from(position.contract.multiplier)
-                * f64::from(position.open_qty)
-        })
-        .sum();
-    let shares_held = derived
-        .campaigns
-        .iter()
-        .filter(|campaign| campaign.is_active())
-        .map(|campaign| campaign.shares)
-        .sum();
-
-    let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
-    let cash_coverage = (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
-    let cash_shortfall: f64 = if cash_tracked {
-        (collateral - derived.account_cash).max(0.0)
-    } else {
-        0.0
-    };
-    let summary = views::SummaryView {
-        premium_realized: derived.total_premium_realized(),
-        premium_open: derived.total_premium_open(),
-        active_campaigns: derived
-            .campaigns
-            .iter()
-            .filter(|campaign| campaign.is_active())
-            .count(),
-        open_positions: derived.positions.len(),
-        open_contracts,
-        collateral,
-        shares_held,
-        account_cash: derived.account_cash,
-        cash_deposits: derived.cash_deposits,
-        cash_withdrawals: derived.cash_withdrawals,
-        cash_tracked,
-        cash_coverage,
-        cash_shortfall,
-    };
+    let summary = summary_view(&derived);
 
     Ok(views::DashboardView {
         account_id: account_id.to_string(),
         as_of: today.to_string(),
         summary,
         campaigns,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountOverviewView {
+    pub id: String,
+    pub name: String,
+    pub premium_realized: f64,
+    pub premium_open: f64,
+    pub active_campaigns: usize,
+    pub open_positions: usize,
+    pub open_contracts: u32,
+    pub collateral: f64,
+    pub shares_held: u32,
+    pub account_cash: f64,
+    pub cash_deposits: f64,
+    pub cash_withdrawals: f64,
+    pub cash_tracked: bool,
+    pub cash_coverage: Option<f64>,
+    pub cash_shortfall: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewTotalsView {
+    pub account_count: usize,
+    pub cash_tracked_accounts: usize,
+    pub untracked_accounts: usize,
+    pub untracked_put_accounts: usize,
+    pub premium_realized: f64,
+    pub premium_open: f64,
+    pub active_campaigns: usize,
+    pub open_positions: usize,
+    pub open_contracts: u32,
+    pub collateral: f64,
+    pub tracked_collateral: f64,
+    pub shares_held: u32,
+    /// Cash is summed only over accounts that recorded a deposit or withdrawal,
+    /// because other accounts' cash flow is not a balance.
+    pub account_cash: f64,
+    pub cash_deposits: f64,
+    pub cash_withdrawals: f64,
+    pub cash_coverage: Option<f64>,
+    /// Sum of each tracked account's own deficit; a surplus elsewhere does not
+    /// offset a deficit that would still need funding.
+    pub cash_shortfall: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllAccountsView {
+    pub as_of: String,
+    pub accounts: Vec<AccountOverviewView>,
+    pub totals: OverviewTotalsView,
+}
+
+#[tauri::command]
+pub fn all_accounts_overview(state: State<'_, AppState>) -> Result<AllAccountsView, String> {
+    overview_for(&state.conn())
+}
+
+fn overview_for(conn: &rusqlite::Connection) -> Result<AllAccountsView, String> {
+    let mut accounts = Vec::new();
+    for account in store::list_accounts(conn).map_err(|error| format!("{error:#}"))? {
+        if account.archived_at.is_some() {
+            continue;
+        }
+        let summary = summary_view(&derive(conn, &account.id)?);
+        accounts.push(AccountOverviewView {
+            id: account.id,
+            name: account.name,
+            premium_realized: summary.premium_realized,
+            premium_open: summary.premium_open,
+            active_campaigns: summary.active_campaigns,
+            open_positions: summary.open_positions,
+            open_contracts: summary.open_contracts,
+            collateral: summary.collateral,
+            shares_held: summary.shares_held,
+            account_cash: summary.account_cash,
+            cash_deposits: summary.cash_deposits,
+            cash_withdrawals: summary.cash_withdrawals,
+            cash_tracked: summary.cash_tracked,
+            cash_coverage: summary.cash_coverage,
+            cash_shortfall: summary.cash_shortfall,
+        });
+    }
+
+    let mut totals = OverviewTotalsView {
+        account_count: accounts.len(),
+        cash_tracked_accounts: 0,
+        untracked_accounts: 0,
+        untracked_put_accounts: 0,
+        premium_realized: 0.0,
+        premium_open: 0.0,
+        active_campaigns: 0,
+        open_positions: 0,
+        open_contracts: 0,
+        collateral: 0.0,
+        tracked_collateral: 0.0,
+        shares_held: 0,
+        account_cash: 0.0,
+        cash_deposits: 0.0,
+        cash_withdrawals: 0.0,
+        cash_coverage: None,
+        cash_shortfall: 0.0,
+    };
+    for account in &accounts {
+        totals.premium_realized += account.premium_realized;
+        totals.premium_open += account.premium_open;
+        totals.active_campaigns += account.active_campaigns;
+        totals.open_positions += account.open_positions;
+        totals.open_contracts += account.open_contracts;
+        totals.collateral += account.collateral;
+        totals.shares_held += account.shares_held;
+        if account.cash_tracked {
+            totals.cash_tracked_accounts += 1;
+            totals.account_cash += account.account_cash;
+            totals.cash_deposits += account.cash_deposits;
+            totals.cash_withdrawals += account.cash_withdrawals;
+            totals.tracked_collateral += account.collateral;
+            totals.cash_shortfall += account.cash_shortfall;
+        } else {
+            totals.untracked_accounts += 1;
+            if account.collateral > 0.0 {
+                totals.untracked_put_accounts += 1;
+            }
+        }
+    }
+    totals.cash_coverage = (totals.tracked_collateral > 0.0)
+        .then(|| totals.account_cash / totals.tracked_collateral);
+
+    Ok(AllAccountsView {
+        as_of: store::today().to_string(),
+        accounts,
+        totals,
     })
 }
 
@@ -3387,8 +3522,8 @@ mod tests {
         store::insert_events(
             &conn,
             &[
-                Event::cash_deposit("main", "dep", 1, date(), 20_000.0),
-                Event::buy_shares("main", "buy", 2, date(), "AAPL", 100, 150.0, 0.0),
+                Event::cash_deposit("main", "main-dep", 1, date(), 20_000.0),
+                Event::buy_shares("main", "main-buy", 2, date(), "AAPL", 100, 150.0, 0.0),
                 Event::sell_option(
                     "main",
                     "put",
@@ -3431,6 +3566,104 @@ mod tests {
         assert!(dashboard.summary.cash_coverage.is_none());
         assert_eq!(dashboard.summary.cash_shortfall, 0.0);
         assert_eq!(dashboard.summary.account_cash, 200.0);
+    }
+
+    #[test]
+    fn overview_sums_active_accounts_and_separates_untracked_cash() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_account(&conn, "second", "长期账户", "2026-11-04").unwrap();
+        store::insert_account(&conn, "third", "未记录现金", "2026-11-04").unwrap();
+        store::insert_account(&conn, "archived", "已归档", "2026-11-04").unwrap();
+        let expiry = store::parse_date("2026-02-20").unwrap();
+        let put = |account: &str, id: &str, seq: u64, symbol: &str, strike: f64, price: f64| {
+            Event::sell_option(
+                account,
+                id,
+                seq,
+                date(),
+                OptionContract::new(symbol, expiry, strike, Right::Put),
+                1,
+                price,
+                0.0,
+            )
+        };
+        store::insert_events(
+            &conn,
+            &[
+                Event::cash_deposit("main", "main-dep", 1, date(), 20_000.0),
+                Event::buy_shares("main", "main-buy", 2, date(), "AAPL", 100, 150.0, 0.0),
+                put("main", "main-put", 3, "AAPL", 150.0, 2.0),
+                Event::cash_deposit("second", "second-dep", 1, date(), 5_000.0),
+                put("second", "second-put", 2, "MSFT", 100.0, 1.5),
+                put("third", "third-put", 1, "NVDA", 200.0, 1.0),
+                Event::cash_deposit("archived", "archived-dep", 1, date(), 50_000.0),
+                put("archived", "archived-put", 2, "TSLA", 300.0, 2.0),
+            ],
+        )
+        .unwrap();
+        store::set_account_archived(&conn, "archived", true).unwrap();
+
+        let overview = overview_for(&conn).unwrap();
+        assert_eq!(overview.accounts.len(), 3);
+        assert!(overview.accounts.iter().all(|account| account.id != "archived"));
+        let main = overview.accounts.iter().find(|account| account.id == "main").unwrap();
+        assert_eq!(main.account_cash, 5_200.0);
+        assert_eq!(main.collateral, 15_000.0);
+        assert_eq!(main.cash_shortfall, 9_800.0);
+        let third = overview.accounts.iter().find(|account| account.id == "third").unwrap();
+        assert!(!third.cash_tracked);
+        assert_eq!(third.account_cash, 100.0);
+
+        let totals = overview.totals;
+        assert_eq!(totals.account_count, 3);
+        assert_eq!(totals.cash_tracked_accounts, 2);
+        assert_eq!(totals.untracked_accounts, 1);
+        assert_eq!(totals.untracked_put_accounts, 1);
+        assert_eq!(totals.account_cash, 10_350.0);
+        assert_eq!(totals.cash_deposits, 25_000.0);
+        assert_eq!(totals.cash_withdrawals, 0.0);
+        assert_eq!(totals.premium_open, 450.0);
+        assert_eq!(totals.premium_realized, 0.0);
+        assert_eq!(totals.collateral, 45_000.0);
+        assert_eq!(totals.tracked_collateral, 25_000.0);
+        assert_eq!(totals.shares_held, 100);
+        assert_eq!(totals.open_contracts, 3);
+        assert_eq!(totals.active_campaigns, 3);
+        let coverage = totals.cash_coverage.unwrap();
+        assert!((coverage - 10_350.0 / 25_000.0).abs() < 1e-9);
+        assert_eq!(totals.cash_shortfall, 14_650.0);
+    }
+
+    #[test]
+    fn overview_without_any_tracked_cash_reports_no_coverage() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        let expiry = store::parse_date("2026-02-20").unwrap();
+        store::insert_event(
+            &conn,
+            &Event::sell_option(
+                "main",
+                "put",
+                1,
+                date(),
+                OptionContract::new("AAPL", expiry, 150.0, Right::Put),
+                1,
+                2.0,
+                0.0,
+            ),
+        )
+        .unwrap();
+
+        let overview = overview_for(&conn).unwrap();
+        assert_eq!(overview.accounts.len(), 1);
+        assert_eq!(overview.accounts[0].account_cash, 200.0);
+        assert!(!overview.accounts[0].cash_tracked);
+        assert!(overview.totals.account_cash == 0.0);
+        assert_eq!(overview.totals.collateral, 15_000.0);
+        assert_eq!(overview.totals.untracked_put_accounts, 1);
+        assert!(overview.totals.cash_coverage.is_none());
+        assert_eq!(overview.totals.cash_shortfall, 0.0);
     }
 
     #[test]

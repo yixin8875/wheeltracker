@@ -34,6 +34,11 @@ async function setup(page: Page) {
           if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0, accountCash: 0, cashDeposits: 0, cashWithdrawals: 0, cashTracked: false, cashCoverage: null, cashShortfall: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
           return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
+        case 'all_accounts_overview': return state.testOverview ?? {
+          asOf: '2026-11-03',
+          accounts: [{ id: 'main', name: '默认账户', premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }],
+          totals: { accountCount: 1, cashTrackedAccounts: 1, untrackedAccounts: 0, untrackedPutAccounts: 0, premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, trackedCollateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
+        };
         case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1 };
         case 'send_test_notification': return null;
         case 'cash_movements': return [
@@ -808,6 +813,8 @@ test('JSON export downloads the full ledger document', async ({ page }) => {
   await page.getByRole('button', { name: '备份与维护', exact: true }).click();
   const pending = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出 JSON' }).click();
+  // The success notice clears after six seconds, so assert it before reading the download.
+  await expect(page.getByRole('status')).toContainText('不能直接恢复');
   const download = await pending;
   expect(download.suggestedFilename()).toMatch(/^wheel-ledger-\d{4}-\d{2}-\d{2}\.json$/);
   const stream = await download.createReadStream();
@@ -820,7 +827,6 @@ test('JSON export downloads the full ledger document', async ({ page }) => {
   expect(document.events[0].occurredAt).toBe('2026-01-02');
   expect(document.prices[0].symbol).toBe('TEST');
   expect(document.settings.autoBackupKeep).toBe(7);
-  await expect(page.getByRole('status')).toContainText('不能直接恢复');
 });
 
 test('auto backup settings preserve reminder lead days', async ({ page }) => {
@@ -1191,4 +1197,46 @@ test('notification preferences and a test toast can be saved', async ({ page }) 
   const saved = await page.evaluate(() => (window as any).testCalls.filter((item: any) => item.command === 'set_preferences').at(-1));
   expect(saved.args.systemNotificationsEnabled).toBe(true);
   expect(saved.args.closeToTray).toBe(true);
+});
+
+test('all-accounts overview totals cash and opens an account read-only', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '全部账户', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '全部账户总览', exact: true })).toBeVisible();
+  const summary = page.locator('.overview-summary');
+  await expect(summary).toContainText('$5,200.00');
+  await expect(summary).toContainText('$15,000.00');
+  await expect(summary).toContainText('34.67%');
+  await expect(summary).toContainText('$9,800.00');
+  await expect(summary).toContainText('$100.00');
+  const row = page.locator('.overview-table tbody tr').filter({ hasText: '默认账户' });
+  await expect(row).toContainText('$5,200.00');
+  await expect(row).toContainText('1 个 · 1 手');
+  await expect(page.getByText('总览只汇总现金、义务与未平仓权利金')).toBeVisible();
+  await row.getByRole('button', { name: '打开账户' }).click();
+  await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible();
+});
+
+test('overview flags untracked Put accounts and switches account', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testOverview = {
+      asOf: '2026-11-03',
+      accounts: [
+        { id: 'acct-2', name: '长期账户', premiumRealized: 0, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 20000, sharesHeld: 0, accountCash: 100, cashDeposits: 0, cashWithdrawals: 0, cashTracked: false, cashCoverage: null, cashShortfall: 0 },
+        { id: 'main', name: '默认账户', premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
+      ],
+      totals: { accountCount: 2, cashTrackedAccounts: 1, untrackedAccounts: 1, untrackedPutAccounts: 1, premiumRealized: 200, premiumOpen: 200, activeCampaigns: 2, openPositions: 2, openContracts: 2, collateral: 35000, trackedCollateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '全部账户', exact: true }).click();
+  await expect(page.getByText('有 1 个账户持有未平仓 Put，但尚未记录入金 / 出金')).toBeVisible();
+  const untracked = page.locator('.overview-table tbody tr').filter({ hasText: '长期账户' });
+  await expect(untracked).toContainText('未记录现金');
+  await expect(untracked).toContainText('交易净额 $100.00');
+  await expect(untracked.getByRole('button', { name: '打开账户' })).toBeVisible();
+  await untracked.getByRole('button', { name: '打开账户' }).click();
+  await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1)?.args.accountId)).toBe('acct-2');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
 });

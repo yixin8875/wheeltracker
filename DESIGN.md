@@ -274,9 +274,11 @@ account_cash = Σ 全部 event_cash
 
 3. **战役对比**：同一标的历次战役的收益率/天数散点
 
-4. **到期处理中心**：按紧急程度分组列出提醒期内的合约，可预填平仓 / 作废 / 指派，并可手动检查系统通知
+4. **全部账户总览**：跨账户只读汇总现金、Put 义务与未平仓权利金，不合并持仓或成本
 
-5. **到期日历**：未来 30 天到期的合约，按日期排布
+5. **到期处理中心**：按紧急程度分组列出提醒期内的合约，可预填平仓 / 作废 / 指派，并可手动检查系统通知
+
+6. **到期日历**：未来 30 天到期的合约，按日期排布
 
 ---
 
@@ -486,12 +488,13 @@ wheel-core/
 日常
 ├─ 仪表盘       ← 默认页，所有标的一览；进入标的详情（时间轴 + 成本阶梯图 + 事件列表）
 ├─ 当前持仓     ← 股票持仓 / 期权持仓（含到期倒计时）
-├─ 到期处理     ← 按紧急程度分组 + 检查系统通知
 └─ 记一笔       ← 快速录入（快捷键 Ctrl+N）
 账本
 ├─ 收租台账     ← 收租明细 / 交易记录两个页签；全量表格 + 筛选 + 汇总 + 撤销
 └─ 导入         ← CSV / AI 截图；最近导入与整批撤销
 复盘
+├─ 全部账户     ← 跨账户只读总览（现金 / 义务 / 未平仓权利金）
+├─ 到期处理     ← 按紧急程度分组 + 检查系统通知
 ├─ 到期日历     ← 美东交易日日历 + 当日合约
 ├─ 报告         ← 收租月报 / 年度报表 / 战役对比三个页签
 └─ 行情         ← 账本报价、刷新与手动校准
@@ -665,6 +668,7 @@ list_ledger(filter: LedgerFilter) -> LedgerPage
 cash_movements(account_id, limit) -> Vec<CashMovementView>  // 只读：现金影响与变动后余额，最新在前
 monthly_income(account_id) -> MonthlyIncomeView   // 已落袋口径，按美东交易日月份
 list_positions(account_id) -> PositionsView
+all_accounts_overview() -> AllAccountsView  // 未归档账户只读汇总 + 合计，不合并持仓
 preview_option(req) -> OptionPreview   // 录入时实时算净收入/年化
 import_preview(req: ImportPreviewReq) -> ImportPreview
 import_commit(req: ImportCommitReq) -> ImportSummary
@@ -745,13 +749,21 @@ restore_status() -> RestoreStatus
 
 ### 8.11 P5 发布工程
 
-- **版本单一来源**：workspace `Cargo.toml` 为 `0.5.6`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
+- **版本单一来源**：workspace `Cargo.toml` 为 `0.6.0`，`wheel-core` / `wheel-app` 均 `version.workspace = true`；`tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 与 `Cargo.lock` 同步镜像。`scripts/release.py` 在打包前逐项校验，任一不一致即失败。
 - **安装包**：Tauri `bundle.targets = ["nsis"]`，`installMode = currentUser`，简体中文 / English 语言选择，开始菜单 `Wheel Tracker`，lzma 压缩；`licenseFile` 指向 MIT `LICENSE`，并设置 publisher / copyright / Finance 分类 / 中英文描述。
 - **CSP**：生产 `default-src 'self'`，`connect-src` 仅 `ipc:` 与 `http://ipc.localhost`，图片允许 `data:` / `blob:`，样式允许内联；`devCsp` 额外放行 Vite 的 `127.0.0.1:1420` HTTP / WebSocket 与开发期内联脚本。
-- **数据库保护**：当前 schema `user_version = 3`；更高版本数据库拒绝打开；备份校验同样拒绝更高版本快照并提示升级应用，避免旧版破坏新数据。
+- **数据库保护**：当前 schema `user_version = 4`；更高版本数据库拒绝打开；备份校验同样拒绝更高版本快照并提示升级应用，避免旧版破坏新数据。
 - **发布产物**：`scripts/release.py` 依次执行版本检查、`cargo test --workspace`、clippy、前端构建与 NSIS 打包，然后在 `dist/release/` 写出 `<installer>.sha256`（`<hex>  <filename>`）与 `release-manifest.json`（产品、版本、git 提交、UTC 构建时间、目标三元组、文件名、大小、SHA-256、`signing: "unsigned"`、`updater: "not-configured"`）。产物目录不纳入版本控制。
 - **自动化**：`.github/workflows/windows-ci.yml` 在 push / PR / 手动触发时运行 Rust 测试、clippy 与前端构建；Playwright 依赖 Edge 与开发服务器，暂为本地 / 人工门禁。安装、覆盖升级、卸载与 CSP 冒烟见 `docs/release-checklist.md`。
 - **边界**：不做 Authenticode 代码签名、单实例、日志上传或崩溃上报；安装包未做代码签名，SmartScreen 提示写入发布说明。应用内自动更新已启用：启动时读取 GitHub Release 的 `latest.json`，由 Tauri updater 校验 minisign 签名后安装；公钥在配置中，私钥只存于 GitHub Actions secret。
+
+### 8.12 P8 全部账户只读总览
+
+- **范围**：`all_accounts_overview` 遍历未归档账户，复用单账户 `summary_view` 的现金与义务口径；每个账户只返回汇总数字，不返回持仓行，避免跨账户合并成本或战役。
+- **总现金**：只累加已记录入金 / 出金的账户，因为其他账户的 `account_cash` 只是交易现金流净额，不是余额。
+- **总覆盖率**：`已记录现金账户的账本现金 / 同一组账户的 Put 义务`；未记录现金但有 Put 的账户单独计数并在界面警告，避免用部分现金算出看似足够的覆盖率。
+- **总缺口**：逐账户 `max(0, 义务 − 现金)` 之和；一个账户的盈余不会抵消另一个账户的缺口，因为资金未必能跨券商划转。
+- **只读**：「打开账户」只切换当前账户并回到仪表盘，不写入事件、不改成本口径，也不提供跨账户编辑。已归档账户不参与统计。
 
 ---
 
@@ -811,7 +823,7 @@ struct CandidateEvent { event: Event, confidence: f32, raw_excerpt: String }
 | **P2 导入** 🟢 | CSV 映射向导 + 去重、AI 截图识别（均已完成） | 历史数据可批量补录 | 已完成 |
 | **P3 体验** ✅ | 到期提醒 + 到期日历 + 战役对比图 + 导出 Excel + 自动备份 + 恢复向导 + 盯市成本图 | 完整闭环 | 已完成 |
 | **P4 扩展** ✅ | 多账户、收租月报、备份加密与 JSON 导出、AI 截图导入、拆股与合约乘数、年度已实现收益报表 | 进阶 | 已完成（不做云端同步） |
-| **P5 发布** ✅ | 版本统一 0.5.6、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI、GitHub Release 签名自动更新 | 可分发安装包 | 已完成（无 Authenticode 代码签名；自动更新经 minisign 验签） |
+| **P5 发布** ✅ | 版本统一 0.6.0、NSIS + 中英文安装器、CSP、数据库降级保护、哈希清单与发布检查清单、Windows CI、GitHub Release 签名自动更新 | 可分发安装包 | 已完成（无 Authenticode 代码签名；自动更新经 minisign 验签） |
 
 **P1 的完成定义**：用户能连续一周只用这个应用记账，不打开券商 App 也能回答「我现在每股成本多少、这轮赚了多少」。
 

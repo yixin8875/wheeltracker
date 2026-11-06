@@ -29,7 +29,8 @@
 - 行情：启动后获取进行中战役的报价，应用可见时每 5 分钟更新；支持逐标的刷新、来源 / 美东报价时间、离线缓存及手动校准。
 - 账户现金与对账：记录入金 / 出金后，账户现金 = 全部交易现金流 + 累计入金 − 累计出金；有未平仓 Put 时显示现金覆盖率与缺口。未记录任何入金 / 出金时只显示交易现金流净额，并提示不含期初余额。「与券商对账」只读对照券商现金与最近 60 笔现金变动，不修改账本。入金 / 出金不计入战役收益，也不影响 A / B / C′ 成本。设计记录见[账户现金与 Put 覆盖](docs/P6-cash.md)。
 - 多账户：侧栏快速切换，设置 → 账户新建（最多 50 个，名称唯一）、重命名、归档 / 恢复或删除空账户；账户间事件、持仓、成本、台账与导入完全隔离，行情与成本口径保持全局。
-- 导航：按「日常 / 账本 / 复盘」分组；收租月报、年度报表、战役对比合并到「报告」页签，侧栏保留 9 个入口，设置固定在底部账户区。
+- 全部账户总览：只读汇总所有可用账户的账本现金、Put 资金义务、综合覆盖率与现金缺口、未平仓净权利金。现金只汇总已记录入金 / 出金的账户，未记录现金的账户单独标记并提示其 Put 义务未计入覆盖率；不合并持仓、成本或报表。设计记录见[全部账户只读总览](docs/P8-overview.md)。
+- 导航：按「日常 / 账本 / 复盘」分组；收租月报、年度报表、战役对比合并到「报告」页签，侧栏保留 10 个入口，设置固定在底部账户区。
 - 设置：成本口径、账户、到期提醒、AI 识别、备份与维护；重算并检查账本。
 - SQLite 备份：手动备份、每日自动备份（默认保留 7 份）与恢复前安全快照；包括事件、撤销审计、价格、成本与提醒设置，不覆盖既有备份。
 - 备份恢复向导：校验完整性、事件数与必需表后暂存恢复；下次启动、打开 SQLite 前先归档当前库及 WAL/SHM 再替换，失败自动回滚，暂存期间拒绝写入。
@@ -78,7 +79,7 @@ npm --prefix ui run desktop:build -- --debug --no-bundle
 npm --prefix ui run desktop:build -- --bundles nsis
 ```
 
-输出：`target/release/bundle/nsis/Wheel Tracker_0.5.6_x64-setup.exe`。
+输出：`target/release/bundle/nsis/Wheel Tracker_0.6.0_x64-setup.exe`。
 
 每次推送到 `main`，`.github/workflows/release.yml` 会自动把补丁版本 +1、提交版本号、打 `vX.Y.Z` 标签、重新构建 NSIS 安装包并发布 GitHub Release。自动提交带 `[skip release]`，不会递归触发；本地提交本身不会触发，需要推送到 `main`。
 
@@ -154,4 +155,4 @@ CSV / Excel 导出是报表；CSV 导入用于补录历史交易，确认页可�
 
 ## 后续范围
 
-见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)、[P5 发布工程验收](docs/P5-release.md)、[账户现金与 Put 覆盖](docs/P6-cash.md)、[到期处理与系统通知](docs/P7-expiry.md)、[产品设计审视](docs/design-review.md) 与 [用户使用清单](docs/user-checklist.md)。
+见 [设计文档](DESIGN.md)、[P1 验收记录](docs/P1-acceptance.md)、[P3 验收记录](docs/P3-acceptance.md)、[P4 多账户验收](docs/P4-accounts.md)、[P4 收租月报验收](docs/P4-income.md)、[P4 备份加密验收](docs/P4-backup-encryption.md)、[P4 云端视觉导入验收](docs/P4-ocr-email.md)、[P4 拆股 / 乘数验收](docs/P4-split.md) 与 [P4 年度报表验收](docs/P4-annual.md)、[P5 发布工程验收](docs/P5-release.md)、[账户现金与 Put 覆盖](docs/P6-cash.md)、[到期处理与系统通知](docs/P7-expiry.md)、[全部账户只读总览](docs/P8-overview.md)、[产品设计审视](docs/design-review.md) 与 [用户使用清单](docs/user-checklist.md)。

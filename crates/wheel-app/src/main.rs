@@ -199,6 +199,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::dashboard,
+            commands::all_accounts_overview,
             commands::cash_movements,
             commands::check_expiries,
             commands::send_test_notification,

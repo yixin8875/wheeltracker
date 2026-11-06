@@ -16,6 +16,15 @@ export interface Summary {
 }
 export interface CashMovement { date: string; kind: string; symbol: string; note: string; amount: number; balanceAfter: number }
 export interface Dashboard { accountId: string; asOf: string; summary: Summary; campaigns: Campaign[] }
+export interface OverviewAccount extends Summary { id: string; name: string }
+export interface OverviewTotals {
+  accountCount: number; cashTrackedAccounts: number; untrackedAccounts: number; untrackedPutAccounts: number;
+  premiumRealized: number; premiumOpen: number; activeCampaigns: number; openPositions: number;
+  openContracts: number; collateral: number; trackedCollateral: number; sharesHeld: number;
+  accountCash: number; cashDeposits: number; cashWithdrawals: number;
+  cashCoverage: number | null; cashShortfall: number;
+}
+export interface AllAccountsOverview { asOf: string; accounts: OverviewAccount[]; totals: OverviewTotals }
 export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }

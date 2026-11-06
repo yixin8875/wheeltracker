@@ -475,3 +475,17 @@ tfoot th { border-top: 1px solid var(--border); border-bottom: 0; background: #f
 @media (max-width: 700px) {
   .expiry-summary { grid-template-columns: 1fr; }
 }
+
+.overview-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.overview .section-heading h2 { display: flex; align-items: center; gap: 8px; }
+.overview .alert { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.6; }
+.overview-table td small { display: block; margin-top: 3px; font-size: 11px; }
+.overview-row.untracked td { background: #fcfcfd; }
+.account-tag { display: inline-block; margin-left: 8px; padding: 1px 6px; border-radius: 3px; background: #f0f2f5; color: #717781; font-size: 10px; font-weight: 500; vertical-align: middle; }
+@media (max-width: 1000px) {
+  .overview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 22px; }
+  .overview-summary > div { border-right: 0; }
+}
+@media (max-width: 700px) {
+  .overview-summary { grid-template-columns: 1fr; }
+}

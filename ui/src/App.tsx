@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, type LucideIcon } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
+import type { Account, AllAccountsOverview, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -18,12 +18,13 @@ import { SettingsData } from './SettingsData';
 import { VisionSettings } from './VisionSettings';
 import { AccountsPanel } from './Accounts';
 import { AccountCashPanel, ReconcileModal } from './AccountCash';
+import { AccountsOverview } from './AccountsOverview';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
 import { Updater } from './Updater';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'overview' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
 type NavGroup = { id: string; title: string; items: NavItem[] };
@@ -38,6 +39,7 @@ const navigation: NavGroup[] = [
     { id: 'import', label: '导入', icon: Upload },
   ] },
   { id: 'review', title: '复盘', items: [
+    { id: 'overview', label: '全部账户', icon: Wallet },
     { id: 'expiry', label: '到期处理', icon: AlarmClock },
     { id: 'calendar', label: '到期日历', icon: CalendarDays },
     { id: 'reports', label: '报告', icon: ChartColumn },
@@ -61,6 +63,9 @@ export default function App() {
     try { return localStorage.getItem(ACCOUNT_KEY) ?? 'main'; } catch { return 'main'; }
   });
   const [settings, setSettings] = useState<AccountingSettings | null>(null);
+  const [overview, setOverview] = useState<AllAccountsOverview | null>(null);
+  const [overviewBusy, setOverviewBusy] = useState(false);
+  const [overviewError, setOverviewError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -73,6 +78,13 @@ export default function App() {
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const generation = useRef(0); const detailGeneration = useRef(0);
+  const loadOverview = useCallback(async () => {
+    if (!desktop) return;
+    setOverviewBusy(true); setOverviewError('');
+    try { setOverview(await api<AllAccountsOverview>('all_accounts_overview')); }
+    catch (failure) { setOverview(null); setOverviewError(String(failure)); }
+    finally { setOverviewBusy(false); }
+  }, []);
   const reload = useCallback(async () => {
     if (!desktop) return false;
     const current = ++generation.current; setBusy(true); setError('');
@@ -103,6 +115,7 @@ export default function App() {
   const [ledgerTab, setLedgerTab] = useState<'entries' | 'events'>('entries');
   const [reportTab, setReportTab] = useState<ReportTab>('income');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
+  useEffect(() => { if (page === 'overview') void loadOverview(); }, [page, data, accounts, loadOverview]);
   useEffect(() => {
     if (!desktop) return;
     let cancelled = false;
@@ -197,6 +210,12 @@ export default function App() {
     {busy && !data && <p role="status">正在读取本地账本…</p>}
     {unavailable && !busy && <div className="alert warning" role="status">账本尚未刷新，财务数据暂不可用。<button onClick={() => void reload()}>重试读取账本</button></div>}
     {['dashboard', 'positions', 'detail'].includes(page) && !!activeSymbols.length && <p className="market-note">{market.busy ? '正在更新标的参考价…' : market.error ? '行情更新失败，当前显示已保存的报价。' : '标的参考价使用已保存报价，可能延迟。'} <button className="text-button" onClick={() => setPage('market')}>查看行情与报价时间</button></p>}
+    {page === 'overview' && !unavailable && <>
+      {!desktop && <p className="empty">浏览器预览不读取本地账本，请在桌面应用查看全部账户总览。</p>}
+      {overviewError && <div className="alert error" role="alert">全部账户总览读取失败：{overviewError}<button onClick={() => void loadOverview()}>重试</button></div>}
+      {!overview && overviewBusy && <p role="status">正在读取全部账户总览…</p>}
+      {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }}/>}
+    </>}
     {page === 'dashboard' && !unavailable && <>
       <div className="summary-strip"><div><span>已落袋净收租</span><strong>{money(data?.summary.premiumRealized ?? 0)}</strong><small>已经了结的期权净收入</small></div><div><span>未平仓净权利金</span><strong>{money(data?.summary.premiumOpen ?? 0)}</strong><small>{data?.summary.openContracts ?? 0} 手合约仍待了结</small></div><div><span>Put 资金义务</span><strong>{money(data?.summary.collateral ?? 0)}</strong><small>按行权价计算</small></div><div><span>进行中的战役</span><strong>{data?.summary.activeCampaigns ?? 0}<em> 个</em></strong><small>持股共 {data?.summary.sharesHeld ?? 0} 股</small></div></div>
       {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)}/>}

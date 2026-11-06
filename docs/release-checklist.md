@@ -1,11 +1,11 @@
-# 发布检查清单（0.5.6）
+# 发布检查清单（0.6.0）
 
-日期：2026-11-04 · 目标：Windows 11 x64 · 安装包：NSIS（currentUser）
+日期：2026-11-06 · 目标：Windows 11 x64 · 安装包：NSIS（currentUser）
 
 ## 1. 版本与工作树
 
-- [ ] `Cargo.toml`、`crates/wheel-app/Cargo.toml`（继承 workspace）、`Cargo.lock` 均为 `0.5.6`。
-- [ ] `crates/wheel-app/tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.5.6`。
+- [ ] `Cargo.toml`、`crates/wheel-app/Cargo.toml`（继承 workspace）、`Cargo.lock` 均为 `0.6.0`。
+- [ ] `crates/wheel-app/tauri.conf.json`、`ui/package.json`、`ui/package-lock.json` 均为 `0.6.0`。
 - [ ] `python -I scripts/release.py --no-build --skip-tests` 版本一致性检查通过。
 - [ ] 工作树干净，发布提交已记录在 `dist/release/release-manifest.json` 的 `gitCommit`。
 - [ ] `LICENSE` 为 MIT，已通过 `bundle.licenseFile` 打包。
@@ -23,21 +23,21 @@
 - [ ] `python -I scripts/release.py --skip-tests` 成功生成 NSIS 安装包。
 - [ ] `dist/release/<installer>.sha256` 与安装包哈希一致，格式为 `<hex>  <filename>`。
 - [ ] `dist/release/release-manifest.json` 含版本、`gitCommit`、`builtAt`（UTC）、`target`、文件名、大小、SHA-256、`signing: "unsigned"`；配置签名密钥后 `updater: "tauri-v2-signed"`。
-- [ ] 安装包文件名版本为 `0.5.6`。
+- [ ] 安装包文件名版本为 `0.6.0`。
 
 ## 4. 干净安装
 
 - [ ] 在未安装过旧版本的 Windows 11 x64 上运行安装包；WebView2 缺失时按提示安装。
 - [ ] 安装模式为 currentUser；开始菜单出现 `Wheel Tracker`；语言选择器可选简体中文 / English。
-- [ ] 启动后「设置」显示版本 `0.5.6`，数据库路径位于当前用户 AppData。
+- [ ] 启动后「设置」显示版本 `0.6.0`，数据库路径位于当前用户 AppData。
 - [ ] 录入一笔交易、刷新账本、查看年度报表；图表与中文界面正常（CSP 无报错）。
 - [ ] AI 识别设置页可打开；导入页的截图上传按钮可点击（未配置时提示前往设置）。
 - [ ] 备份 SQLite、校验并暂存恢复；重启后数据正确。
 
 ## 5. 覆盖安装升级
 
-- [ ] 从 0.5.4 覆盖安装 0.5.6，账本、备份与设置保留。
-- [ ] 覆盖后版本显示 `0.5.6`，拆股事件与年度报表可正常读取。
+- [ ] 从 0.5.6 覆盖安装 0.6.0，账本、备份与设置保留。
+- [ ] 覆盖后版本显示 `0.6.0`，拆股事件、年度报表与全部账户总览可正常读取。
 - [ ] 控制面板 / 设置 → 应用只保留一个卸载项。
 
 ## 6. 卸载
