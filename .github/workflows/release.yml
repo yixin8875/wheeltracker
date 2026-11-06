@@ -38,12 +38,13 @@ jobs:
           set -euo pipefail
           git pull --rebase origin main
           CURRENT="$(python -I scripts/bump_version.py --current)"
+          # Annotated tags need an identity even when no version commit is made.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git rev-parse -q --verify "refs/tags/v$CURRENT" >/dev/null; then
             # This version was already released, so make the next patch release.
             VERSION="$(python -I scripts/bump_version.py)"
             echo "v$CURRENT is already tagged; bumping to $VERSION"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add Cargo.toml Cargo.lock crates/wheel-app/tauri.conf.json ui/package.json ui/package-lock.json
             git commit -m "chore: release $VERSION [skip release]"
             git push origin HEAD:main
