@@ -137,6 +137,12 @@ async function setup(page: Page) {
           return { ...account };
         }
         case 'get_settings': return { ...preferences };
+        case 'webdav_get_settings': return {
+          configured: false, url: '', username: '', remoteDir: 'wheel-tracker',
+          autoUpload: false, keep: 7, encrypt: true, allowInsecureHttp: false,
+          hasPassword: false, passwordSource: 'none', passwordHint: '',
+          lastUploadAt: null, lastUploadFile: null, lastError: null, autoUploadReady: false,
+        };
         case 'set_settings':
           if (state.testRejectSettings) throw new Error('settings write failed');
           preferences.includeDividendsInCost = Boolean(args.includeDividendsInCost);
