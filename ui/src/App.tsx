@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, type LucideIcon } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AllAccountsOverview, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
+import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -19,12 +19,13 @@ import { VisionSettings } from './VisionSettings';
 import { AccountsPanel } from './Accounts';
 import { AccountCashPanel, ReconcileModal } from './AccountCash';
 import { AccountsOverview } from './AccountsOverview';
+import { AllHoldingsPage } from './AllHoldings';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
 import { Updater } from './Updater';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'overview' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
 type NavGroup = { id: string; title: string; items: NavItem[] };
@@ -40,6 +41,7 @@ const navigation: NavGroup[] = [
   ] },
   { id: 'review', title: '复盘', items: [
     { id: 'overview', label: '全部账户', icon: Wallet },
+    { id: 'holdings', label: '全部持仓', icon: Table2 },
     { id: 'expiry', label: '到期处理', icon: AlarmClock },
     { id: 'calendar', label: '到期日历', icon: CalendarDays },
     { id: 'reports', label: '报告', icon: ChartColumn },
@@ -66,6 +68,9 @@ export default function App() {
   const [overview, setOverview] = useState<AllAccountsOverview | null>(null);
   const [overviewBusy, setOverviewBusy] = useState(false);
   const [overviewError, setOverviewError] = useState('');
+  const [holdings, setHoldings] = useState<AllHoldings | null>(null);
+  const [holdingsBusy, setHoldingsBusy] = useState(false);
+  const [holdingsError, setHoldingsError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -84,6 +89,13 @@ export default function App() {
     try { setOverview(await api<AllAccountsOverview>('all_accounts_overview')); }
     catch (failure) { setOverview(null); setOverviewError(String(failure)); }
     finally { setOverviewBusy(false); }
+  }, []);
+  const loadHoldings = useCallback(async () => {
+    if (!desktop) return;
+    setHoldingsBusy(true); setHoldingsError('');
+    try { setHoldings(await api<AllHoldings>('all_holdings_overview')); }
+    catch (failure) { setHoldings(null); setHoldingsError(String(failure)); }
+    finally { setHoldingsBusy(false); }
   }, []);
   const reload = useCallback(async () => {
     if (!desktop) return false;
@@ -116,6 +128,7 @@ export default function App() {
   const [reportTab, setReportTab] = useState<ReportTab>('income');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
   useEffect(() => { if (page === 'overview') void loadOverview(); }, [page, data, accounts, loadOverview]);
+  useEffect(() => { if (page === 'holdings') void loadHoldings(); }, [page, data, accounts, loadHoldings]);
   useEffect(() => {
     if (!desktop) return;
     let cancelled = false;
@@ -165,6 +178,13 @@ export default function App() {
   useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startEntry(); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, [startEntry]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   function openCampaign(id: string) { setSelected(id); setPage('detail'); }
+  function openHolding(targetAccount: string, campaignId: string) {
+    if (targetAccount !== accountId) {
+      try { localStorage.setItem(ACCOUNT_KEY, targetAccount); } catch { /* storage unavailable in preview */ }
+      setAccountId(targetAccount);
+    }
+    setSelected(campaignId); setPage('detail');
+  }
   function navigate(next: Page) { setPage(next); if (next === 'entry') startEntry(); }
   function switchAccount(id: string) {
     if (id === accountId) return;
@@ -215,6 +235,12 @@ export default function App() {
       {overviewError && <div className="alert error" role="alert">全部账户总览读取失败：{overviewError}<button onClick={() => void loadOverview()}>重试</button></div>}
       {!overview && overviewBusy && <p role="status">正在读取全部账户总览…</p>}
       {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }}/>}
+    </>}
+    {page === 'holdings' && !unavailable && <>
+      {!desktop && <p className="empty">浏览器预览不读取本地账本，请在桌面应用查看全部账户持仓。</p>}
+      {holdingsError && <div className="alert error" role="alert">全部账户持仓读取失败：{holdingsError}<button onClick={() => void loadHoldings()}>重试</button></div>}
+      {!holdings && holdingsBusy && <p role="status">正在读取全部账户持仓…</p>}
+      {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding}/>}
     </>}
     {page === 'dashboard' && !unavailable && <>
       <div className="summary-strip"><div><span>已落袋净收租</span><strong>{money(data?.summary.premiumRealized ?? 0)}</strong><small>已经了结的期权净收入</small></div><div><span>未平仓净权利金</span><strong>{money(data?.summary.premiumOpen ?? 0)}</strong><small>{data?.summary.openContracts ?? 0} 手合约仍待了结</small></div><div><span>Put 资金义务</span><strong>{money(data?.summary.collateral ?? 0)}</strong><small>按行权价计算</small></div><div><span>进行中的战役</span><strong>{data?.summary.activeCampaigns ?? 0}<em> 个</em></strong><small>持股共 {data?.summary.sharesHeld ?? 0} 股</small></div></div>

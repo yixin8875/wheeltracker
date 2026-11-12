@@ -3,6 +3,7 @@ import { ArchiveRestore, DatabaseBackup, FileJson, FileSpreadsheet, Lock, Shield
 import type { AccountingSettings, AppInfo, Backup, BackupValidation, Campaign, Entry, EventRow, Position, RestoreStatus } from './types';
 import { api, desktop, downloadBytes, downloadCsv } from './lib';
 import { exportWorkbook } from './export';
+import { WebDavSettings } from './WebDavSettings';
 
 const KIND_LABEL: Record<Backup['kind'], string> = { manual: '手动备份', auto: '自动备份', safety: '恢复前安全快照', unknown: '其他 SQLite' };
 
@@ -195,6 +196,8 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
         <button className="danger" disabled={!validation.valid || Boolean(pending) || Boolean(working) || Boolean(validationBackup?.encrypted && restorePassword.length < 8)} onClick={() => { const backup = backups.find(item => item.fileName === validation.fileName); if (backup) setConfirm(backup); }}>恢复此备份…</button>
       </div>}
     </section>
+
+    <WebDavSettings onNotice={onNotice} onError={onError} onRestoreStatus={onRestoreStatus}/>
 
     {confirm && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="restore-title" className="modal"><h2 id="restore-title">确认恢复账本？</h2><p>将从 <strong>{confirm.fileName}</strong> 恢复。系统会先为当前账本创建 pre-restore-*.sqlite 安全快照，并归档当前数据库及其 WAL/SHM 文件。</p>{confirm.encrypted && <p>此备份已加密：暂存时会用恢复密码解密出临时副本，替换完成后立即删除明文副本，原加密备份保留。</p>}<p>恢复会在下次启动时生效。请完全退出应用并重新启动；暂存期间所有写入会被拒绝。</p><div className="toolbar"><button autoFocus disabled={Boolean(working)} onClick={() => setConfirm(null)}>取消</button><button className="danger" disabled={Boolean(working) || Boolean(confirm.encrypted && restorePassword.length < 8)} onClick={() => void stage()}>{working === 'restore' ? '正在安排…' : '确认安排恢复'}</button></div></section></div>}
   </>;

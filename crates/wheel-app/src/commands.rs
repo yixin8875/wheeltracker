@@ -3,12 +3,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use wheel_core::{DerivedState, Event, EventKind, OptionContract, Right};
 
-use crate::{backup, notifications, restore, store, views, AppState};
+use crate::{backup, notifications, restore, store, views, webdav, AppState};
 
 fn account_or_default(account_id: Option<String>) -> String {
     account_id
@@ -504,6 +505,222 @@ fn overview_for(conn: &rusqlite::Connection) -> Result<AllAccountsView, String> 
     Ok(AllAccountsView {
         as_of: store::today().to_string(),
         accounts,
+        totals,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingView {
+    pub account_id: String,
+    pub account_name: String,
+    pub campaign_id: String,
+    pub symbol: String,
+    pub shares: u32,
+    /// Track A: pure share cost per share, before any premium.
+    pub cost_a: Option<f64>,
+    /// Track B: effective cost per share after realized premium (and dividends
+    /// when the setting includes them). This is the "actual cost" users act on.
+    pub cost_b: Option<f64>,
+    /// Track C': effective cost including premium from still-open options.
+    pub cost_c: Option<f64>,
+    /// Latest saved reference price; `None` when the symbol has no quote yet.
+    pub price: Option<f64>,
+    pub market_value: Option<f64>,
+    /// `cost_b * shares`, the basis the unrealized P&L is measured against.
+    pub cost_basis: Option<f64>,
+    pub unrealized_pnl: Option<f64>,
+    pub unrealized_pct: Option<f64>,
+    pub premium_realized: f64,
+    pub premium_open: f64,
+    pub dividends: f64,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingOptionView {
+    pub account_id: String,
+    pub account_name: String,
+    pub campaign_id: String,
+    pub symbol: String,
+    pub contract: String,
+    pub right: String,
+    pub strike: f64,
+    pub expiry: String,
+    pub days_left: i64,
+    pub open_qty: u32,
+    pub multiplier: u32,
+    pub avg_credit: f64,
+    /// Share obligation for a short put; zero for calls.
+    pub collateral: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingsTotalsView {
+    pub account_count: usize,
+    pub holding_count: usize,
+    pub priced_holdings: usize,
+    pub unpriced_holdings: usize,
+    pub total_shares: u32,
+    /// Money totals cover only holdings that have a reference price, so the
+    /// cost basis and P&L denominator always describe the same shares.
+    pub market_value: f64,
+    pub cost_basis: f64,
+    pub unrealized_pnl: f64,
+    pub unrealized_pct: Option<f64>,
+    pub premium_realized: f64,
+    pub premium_open: f64,
+    pub option_count: usize,
+    pub open_contracts: u32,
+    pub option_collateral: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllHoldingsView {
+    pub as_of: String,
+    pub holdings: Vec<HoldingView>,
+    pub options: Vec<HoldingOptionView>,
+    pub totals: HoldingsTotalsView,
+}
+
+#[tauri::command]
+pub fn all_holdings_overview(state: State<'_, AppState>) -> Result<AllHoldingsView, String> {
+    holdings_for(&state.conn())
+}
+
+fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> {
+    let prices = store::latest_prices(conn).map_err(|error| error.to_string())?;
+    let today = store::today();
+    let mut holdings = Vec::new();
+    let mut options = Vec::new();
+    let mut accounts_with_holdings = BTreeSet::new();
+    let mut premium_realized = 0.0;
+    let mut premium_open = 0.0;
+
+    for account in store::list_accounts(conn).map_err(|error| format!("{error:#}"))? {
+        if account.archived_at.is_some() {
+            continue;
+        }
+        let derived = derive(conn, &account.id)?;
+        premium_realized += derived.total_premium_realized();
+        premium_open += derived.total_premium_open();
+
+        for campaign in derived
+            .campaigns
+            .iter()
+            .filter(|campaign| campaign.is_active() && campaign.shares > 0)
+        {
+            let price = prices.get(&campaign.symbol).copied();
+            let cost_a = campaign.cost_a();
+            let cost_b = campaign.cost_b(derived.settings.include_dividends_in_cost);
+            let cost_c = campaign.cost_c(derived.settings.include_dividends_in_cost);
+            let market_value = price.map(|price| price * f64::from(campaign.shares));
+            let cost_basis = cost_b.map(|cost| cost * f64::from(campaign.shares));
+            let unrealized_pnl = market_value
+                .zip(cost_basis)
+                .map(|(market, basis)| market - basis);
+            let unrealized_pct = cost_basis
+                .filter(|basis| *basis > 0.0)
+                .zip(unrealized_pnl)
+                .map(|(basis, pnl)| pnl / basis);
+            accounts_with_holdings.insert(account.id.clone());
+            holdings.push(HoldingView {
+                account_id: account.id.clone(),
+                account_name: account.name.clone(),
+                campaign_id: campaign.id.clone(),
+                symbol: campaign.symbol.clone(),
+                shares: campaign.shares,
+                cost_a,
+                cost_b,
+                cost_c,
+                price,
+                market_value,
+                cost_basis,
+                unrealized_pnl,
+                unrealized_pct,
+                premium_realized: campaign.premium_realized,
+                premium_open: campaign.premium_open,
+                dividends: campaign.dividends,
+                started_at: campaign.started_at.to_string(),
+            });
+        }
+
+        for position in &derived.positions {
+            let collateral = if position.contract.right == Right::Put {
+                position.contract.strike
+                    * f64::from(position.contract.multiplier)
+                    * f64::from(position.open_qty)
+            } else {
+                0.0
+            };
+            accounts_with_holdings.insert(account.id.clone());
+            options.push(HoldingOptionView {
+                account_id: account.id.clone(),
+                account_name: account.name.clone(),
+                campaign_id: position.campaign_id.clone(),
+                symbol: position.contract.underlying.clone(),
+                contract: position.contract.display(),
+                right: position.contract.right.as_str().to_string(),
+                strike: position.contract.strike,
+                expiry: position.contract.expiry.to_string(),
+                days_left: (position.contract.expiry - today).whole_days(),
+                open_qty: position.open_qty,
+                multiplier: position.contract.multiplier,
+                avg_credit: position.avg_credit_per_share,
+                collateral,
+            });
+        }
+    }
+
+    holdings.sort_by(|left, right| {
+        left.account_name
+            .cmp(&right.account_name)
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    options.sort_by(|left, right| {
+        left.expiry
+            .cmp(&right.expiry)
+            .then_with(|| left.account_name.cmp(&right.account_name))
+            .then_with(|| left.contract.cmp(&right.contract))
+    });
+
+    let priced: Vec<&HoldingView> = holdings
+        .iter()
+        .filter(|holding| holding.unrealized_pnl.is_some())
+        .collect();
+    let market_value: f64 = priced
+        .iter()
+        .filter_map(|holding| holding.market_value)
+        .sum();
+    let cost_basis: f64 = priced
+        .iter()
+        .filter_map(|holding| holding.cost_basis)
+        .sum();
+    let unrealized_pnl = market_value - cost_basis;
+    let totals = HoldingsTotalsView {
+        account_count: accounts_with_holdings.len(),
+        holding_count: holdings.len(),
+        priced_holdings: priced.len(),
+        unpriced_holdings: holdings.len() - priced.len(),
+        total_shares: holdings.iter().map(|holding| holding.shares).sum(),
+        market_value,
+        cost_basis,
+        unrealized_pnl,
+        unrealized_pct: (cost_basis > 0.0).then(|| unrealized_pnl / cost_basis),
+        premium_realized,
+        premium_open,
+        option_count: options.len(),
+        open_contracts: options.iter().map(|option| option.open_qty).sum(),
+        option_collateral: options.iter().map(|option| option.collateral).sum(),
+    };
+
+    Ok(AllHoldingsView {
+        as_of: today.to_string(),
+        holdings,
+        options,
         totals,
     })
 }
@@ -1693,6 +1910,240 @@ pub fn export_json(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 pub fn restore_status(state: State<'_, AppState>) -> Result<restore::RestoreStatus, String> {
     restore::status(&data_dir(&state)).map_err(|error| format!("{error:#}"))
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV snapshot backup (v1)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebDavDownload {
+    pub validation: backup::BackupValidation,
+    /// Local file in `backups/` that the subsequent stage command must use.
+    pub local_file: String,
+}
+
+fn webdav_download_name(remote: &str, stamp: i128) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let suffix = NEXT.fetch_add(1, Ordering::Relaxed);
+    if remote.ends_with(".sqlite.enc") {
+        format!("download-{stamp}-{suffix}.sqlite.enc")
+    } else {
+        format!("download-{stamp}-{suffix}.sqlite")
+    }
+}
+
+#[tauri::command]
+pub fn webdav_get_settings(
+    state: State<'_, AppState>,
+) -> Result<webdav::WebDavSettingsView, String> {
+    let conn = state.conn();
+    let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    webdav::settings_view(&conn, &config).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn webdav_save_settings(
+    state: State<'_, AppState>,
+    config: webdav::WebDavConfig,
+    password: Option<String>,
+    backup_password: Option<String>,
+) -> Result<webdav::WebDavSettingsView, String> {
+    config.validate().map_err(|error| format!("{error:#}"))?;
+    let conn = state.conn();
+    let previous = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    let saved = webdav::save(&conn, &config).map_err(|error| format!("{error:#}"))?;
+    if previous.configured()
+        && (previous.url.trim() != saved.url || previous.username.trim() != saved.username)
+    {
+        // Never leave a credential behind for an address the user moved away from.
+        webdav::forget_password(&previous);
+    }
+    match password {
+        Some(value) if value.is_empty() => webdav::forget_password(&saved),
+        Some(value) => {
+            webdav::store_password(&saved, &value);
+        }
+        None => {}
+    }
+    if let Some(value) = backup_password {
+        webdav::remember_backup_password(Some(&value));
+    }
+    webdav::settings_view(&conn, &saved).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn webdav_test(
+    config: webdav::WebDavConfig,
+    password: Option<String>,
+) -> Result<webdav::ServerInfo, String> {
+    config.validate().map_err(|error| format!("{error:#}"))?;
+    let password =
+        webdav::resolve_password(&config, password).map_err(|error| format!("{error:#}"))?;
+    webdav::test(&config, &password)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn webdav_list(
+    state: State<'_, AppState>,
+    server_password: Option<String>,
+) -> Result<Vec<webdav::RemoteBackup>, String> {
+    let (config, password) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password = webdav::resolve_password(&config, server_password)
+            .map_err(|error| format!("{error:#}"))?;
+        (config, password)
+    };
+    webdav::list(&config, &password)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn webdav_backup_now(
+    state: State<'_, AppState>,
+    server_password: Option<String>,
+    backup_password: Option<String>,
+) -> Result<webdav::UploadOutcome, String> {
+    let (config, password, local) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password = webdav::resolve_password(&config, server_password)
+            .map_err(|error| format!("{error:#}"))?;
+        let backup_password = backup_password.filter(|value| !value.is_empty());
+        if config.encrypt && backup_password.is_none() {
+            return Err("已开启加密上传：请填写备份密码（至少 8 位）。密码不会保存。".to_string());
+        }
+        let directory = backups_dir(&state);
+        let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+        let path = match &backup_password {
+            Some(secret) => backup::create_encrypted(&conn, &directory, "wheel-", stamp, secret),
+            None => backup::create(&conn, &directory, "wheel-", stamp),
+        }
+        .map_err(|error| format!("{error:#}"))?;
+        if let Some(secret) = &backup_password {
+            // Automatic uploads reuse this password until the app exits.
+            webdav::remember_backup_password(Some(secret));
+        }
+        (config, password, path)
+    };
+
+    webdav::begin().map_err(|error| error.to_string())?;
+    let result = webdav::publish(&config, &password, &local, None).await;
+    webdav::finish();
+    let conn = state.conn();
+    match result {
+        Ok(outcome) => {
+            let _ = webdav::clear_pending_upload(&conn);
+            let _ = webdav::record_upload_success(&conn, &outcome.remote.file_name);
+            Ok(outcome)
+        }
+        Err(error) => {
+            let text = format!("{error:#}");
+            // Keep the local snapshot queued for a retry on the next launch.
+            let _ = webdav::record_pending_upload(&conn, &local);
+            let _ = webdav::record_error(&conn, &text);
+            Err(text)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn webdav_restore(
+    state: State<'_, AppState>,
+    file_name: String,
+    backup_password: Option<String>,
+    server_password: Option<String>,
+) -> Result<WebDavDownload, String> {
+    ensure_no_pending_restore(&state)?;
+    let (config, password) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password = webdav::resolve_password(&config, server_password)
+            .map_err(|error| format!("{error:#}"))?;
+        (config, password)
+    };
+    let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let local_file = webdav_download_name(&file_name, stamp);
+    let directory = backups_dir(&state);
+    let target = directory.join(&local_file);
+
+    webdav::begin().map_err(|error| error.to_string())?;
+    let downloaded = webdav::download(&config, &password, &file_name, &target).await;
+    webdav::finish();
+    downloaded.map_err(|error| format!("{error:#}"))?;
+
+    let backup_password = backup_password.filter(|value| !value.is_empty());
+    let validation = backup::validate_with_password(
+        &directory,
+        &local_file,
+        backup_password.as_deref(),
+    )
+    .map_err(|error| format!("{error:#}"))?;
+    if !validation.valid {
+        // A corrupt download must not linger as a restore candidate.
+        let _ = std::fs::remove_file(&target);
+    }
+    Ok(WebDavDownload {
+        validation,
+        local_file,
+    })
+}
+
+#[tauri::command]
+pub fn webdav_stage_restore(
+    state: State<'_, AppState>,
+    file_name: String,
+    password: Option<String>,
+) -> Result<restore::PendingRestore, String> {
+    ensure_no_pending_restore(&state)?;
+    if !file_name.starts_with("download-") || !backup::is_safe_file_name(&file_name) {
+        return Err("只能恢复刚从云端下载到本机的快照".to_string());
+    }
+    let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let conn = state.conn();
+    restore::stage_with_password(
+        &conn,
+        &data_dir(&state),
+        &file_name,
+        stamp,
+        password.as_deref().filter(|value| !value.is_empty()),
+    )
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn webdav_delete(
+    state: State<'_, AppState>,
+    file_name: String,
+    server_password: Option<String>,
+) -> Result<bool, String> {
+    let (config, password) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password = webdav::resolve_password(&config, server_password)
+            .map_err(|error| format!("{error:#}"))?;
+        (config, password)
+    };
+    webdav::delete(&config, &password, &file_name)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn webdav_status(state: State<'_, AppState>) -> Result<webdav::WebDavStatus, String> {
+    let conn = state.conn();
+    let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    webdav::status(&conn, &config).map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
@@ -3664,6 +4115,87 @@ mod tests {
         assert_eq!(overview.totals.untracked_put_accounts, 1);
         assert!(overview.totals.cash_coverage.is_none());
         assert_eq!(overview.totals.cash_shortfall, 0.0);
+    }
+
+    #[test]
+    fn holdings_overview_aggregates_shares_and_pnl_across_accounts() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_account(&conn, "second", "长期账户", "2026-11-04").unwrap();
+        store::insert_account(&conn, "archived", "已归档", "2026-11-04").unwrap();
+        let expiry = store::parse_date("2026-02-20").unwrap();
+        let expired_put = OptionContract::new("AAPL", expiry, 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "main-buy", 1, date(), "AAPL", 100, 150.0, 0.0),
+                Event::sell_option("main", "main-put", 2, date(), expired_put.clone(), 1, 2.0, 0.0),
+                Event::expire_option("main", "main-expire", 3, expiry, expired_put, 1),
+                Event::buy_shares("second", "second-buy", 1, date(), "MSFT", 50, 100.0, 0.0),
+                Event::sell_option(
+                    "second",
+                    "second-put",
+                    2,
+                    date(),
+                    OptionContract::new("NVDA", expiry, 200.0, Right::Put),
+                    1,
+                    1.0,
+                    0.0,
+                ),
+                Event::buy_shares("archived", "archived-buy", 1, date(), "TSLA", 10, 300.0, 0.0),
+            ],
+        )
+        .unwrap();
+        store::set_account_archived(&conn, "archived", true).unwrap();
+        store::upsert_price(&conn, "AAPL", date(), 160.0).unwrap();
+
+        let view = holdings_for(&conn).unwrap();
+        assert_eq!(view.holdings.len(), 2);
+        assert!(view.holdings.iter().all(|holding| holding.account_id != "archived"));
+
+        let main = view
+            .holdings
+            .iter()
+            .find(|holding| holding.account_id == "main")
+            .unwrap();
+        assert_eq!(main.shares, 100);
+        assert_eq!(main.cost_a, Some(150.0));
+        assert_eq!(main.cost_b, Some(148.0));
+        assert_eq!(main.price, Some(160.0));
+        assert_eq!(main.market_value, Some(16_000.0));
+        assert_eq!(main.cost_basis, Some(14_800.0));
+        assert_eq!(main.unrealized_pnl, Some(1_200.0));
+        let pct = main.unrealized_pct.unwrap();
+        assert!((pct - 1_200.0 / 14_800.0).abs() < 1e-9);
+
+        let second = view
+            .holdings
+            .iter()
+            .find(|holding| holding.account_id == "second")
+            .unwrap();
+        assert_eq!(second.shares, 50);
+        assert_eq!(second.cost_a, Some(100.0));
+        assert_eq!(second.price, None);
+        assert_eq!(second.unrealized_pnl, None);
+
+        assert_eq!(view.options.len(), 1);
+        assert_eq!(view.options[0].contract, "NVDA 2026-02-20 200P");
+        assert_eq!(view.options[0].collateral, 20_000.0);
+
+        let totals = view.totals;
+        assert_eq!(totals.account_count, 2);
+        assert_eq!(totals.holding_count, 2);
+        assert_eq!(totals.priced_holdings, 1);
+        assert_eq!(totals.unpriced_holdings, 1);
+        assert_eq!(totals.total_shares, 150);
+        assert_eq!(totals.market_value, 16_000.0);
+        assert_eq!(totals.cost_basis, 14_800.0);
+        assert_eq!(totals.unrealized_pnl, 1_200.0);
+        assert_eq!(totals.premium_realized, 200.0);
+        assert_eq!(totals.premium_open, 100.0);
+        assert_eq!(totals.option_count, 1);
+        assert_eq!(totals.open_contracts, 1);
+        assert_eq!(totals.option_collateral, 20_000.0);
     }
 
     #[test]
