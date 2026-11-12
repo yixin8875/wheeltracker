@@ -15,3 +15,4 @@ pub mod market;
 pub mod restore;
 pub mod store;
 pub mod views;
+pub mod webdav;

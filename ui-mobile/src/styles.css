@@ -819,3 +819,145 @@ button {
     padding-top: 24px;
   }
 }
+
+/* WebDAV sheet */
+
+.small {
+  font-size: 12px;
+}
+
+.muted.small {
+  line-height: 1.5;
+}
+
+.notice-inline {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 13px;
+}
+
+.alert.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.toggle-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+
+.toggle + .toggle {
+  border-top: 1px solid var(--line);
+}
+
+.toggle .switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 25px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 0.16s ease;
+}
+
+.toggle .switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(13, 21, 36, 0.25);
+  transition: transform 0.16s ease;
+}
+
+.toggle.on .switch {
+  background: var(--brand);
+}
+
+.toggle.on .switch::after {
+  transform: translateX(17px);
+}
+
+.sheet-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sheet-actions .ghost,
+.sheet-actions .primary {
+  padding: 12px 10px;
+  border-radius: 14px;
+  font-size: 14px;
+}
+
+.sheet-actions .ghost {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.section-title.spaced {
+  margin-top: 8px;
+}
+
+.section-title.spaced h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.section-title.spaced .link {
+  margin-left: auto;
+}
+
+.card.snapshot .card-head {
+  margin-bottom: 5px;
+}
+
+.card.snapshot .card-head > div {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card.snapshot .position-actions {
+  grid-template-columns: 1fr 1fr;
+}
+
+.card.confirm {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.card.confirm p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.position-actions button.danger {
+  color: var(--neg);
+}

@@ -12,9 +12,13 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{Manager, State};
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 use wheel_core::DerivedState;
-use wheel_store::{events, store, views};
+use wheel_store::webdav::{
+    Credential, RemoteBackup, ServerInfo, UploadOutcome, WebDavConfig, WebDavSettingsView,
+    WebDavStatus,
+};
+use wheel_store::{backup, events, restore, store, views, webdav};
 
 const DEMO_ACCOUNT: &str = "main";
 const DEMO_ACCOUNT_NAME: &str = "主账户";
@@ -24,6 +28,20 @@ struct MobileState {
     conn: Mutex<Connection>,
     db_path: PathBuf,
     demo: bool,
+    /// WebDAV password for this run only. Nothing here is written to disk: the
+    /// Android Keystore-backed store is not wired up yet, and the ledger
+    /// database must never hold a password.
+    webdav: Mutex<Option<WebDavSession>>,
+}
+
+#[derive(Debug, Clone)]
+struct WebDavSession {
+    target: String,
+    password: String,
+}
+
+fn session_target(config: &WebDavConfig) -> String {
+    format!("{}\n{}", config.url.trim(), config.username.trim())
 }
 
 impl MobileState {
@@ -31,6 +49,56 @@ impl MobileState {
         self.conn
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn data_dir(&self) -> &Path {
+        self.db_path.parent().unwrap_or(Path::new("."))
+    }
+
+    fn backups_dir(&self) -> PathBuf {
+        self.data_dir().join(backup::BACKUP_DIR)
+    }
+
+    fn webdav_credential(&self, config: &WebDavConfig) -> Option<Credential> {
+        let session = self
+            .webdav
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        session
+            .as_ref()
+            .filter(|session| session.target == session_target(config))
+            .map(|session| Credential::new(session.password.clone(), "session"))
+    }
+
+    fn remember_webdav_password(&self, config: &WebDavConfig, password: Option<String>) {
+        let mut session = self
+            .webdav
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *session = match password {
+            Some(password) if !password.is_empty() => Some(WebDavSession {
+                target: session_target(config),
+                password,
+            }),
+            Some(_) => None,
+            None => session
+                .take()
+                .filter(|session| session.target == session_target(config)),
+        };
+    }
+}
+
+fn stamp() -> i128 {
+    OffsetDateTime::now_utc().unix_timestamp_nanos()
+}
+
+/// A staged restore replaces the database on the next launch; until then the
+/// restored snapshot would lose any row written now.
+fn ensure_no_pending_restore(state: &MobileState) -> Result<(), String> {
+    if restore::is_pending(state.data_dir()).map_err(|error| format!("{error:#}"))? {
+        Err("已安排恢复，请完全退出并重启应用后再修改账本。".to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -133,16 +201,7 @@ fn seed_demo(conn: &Connection) -> Result<bool> {
         note: Some("演示数据".to_string()),
     };
     let reqs = vec![
-        request(
-            "cash_deposit",
-            day(-60),
-            0,
-            0.0,
-            20_000.0,
-            None,
-            None,
-            None,
-        ),
+        request("cash_deposit", day(-60), 0, 0.0, 20_000.0, None, None, None),
         request(
             "option_open_short",
             day(-60),
@@ -260,9 +319,233 @@ fn mobile_add_event(
     state: State<'_, MobileState>,
     req: events::NewEventReq,
 ) -> Result<String, String> {
+    ensure_no_pending_restore(&state)?;
     let conn = state.conn();
     let mut ids = events::append_requests(&conn, vec![req])?;
     Ok(ids.remove(0))
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV backup and restore
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn mobile_webdav_settings(state: State<'_, MobileState>) -> Result<WebDavSettingsView, String> {
+    let conn = state.conn();
+    let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    webdav::settings_view(&conn, &config, state.webdav_credential(&config).as_ref())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn mobile_webdav_status(state: State<'_, MobileState>) -> Result<WebDavStatus, String> {
+    let conn = state.conn();
+    let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    webdav::status(&conn, &config, state.webdav_credential(&config).as_ref())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn mobile_webdav_save(
+    state: State<'_, MobileState>,
+    config: WebDavConfig,
+    password: Option<String>,
+) -> Result<WebDavSettingsView, String> {
+    config.validate().map_err(|error| format!("{error:#}"))?;
+    let conn = state.conn();
+    let previous = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+    let saved = webdav::save(&conn, &config).map_err(|error| format!("{error:#}"))?;
+    if previous.configured()
+        && (previous.url.trim() != saved.url || previous.username.trim() != saved.username)
+    {
+        // Never leave a password behind for an address the user moved away from.
+        state.remember_webdav_password(&previous, Some(String::new()));
+    }
+    state.remember_webdav_password(&saved, password);
+    webdav::settings_view(&conn, &saved, state.webdav_credential(&saved).as_ref())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn mobile_webdav_test(
+    state: State<'_, MobileState>,
+    config: WebDavConfig,
+    password: Option<String>,
+) -> Result<ServerInfo, String> {
+    config.validate().map_err(|error| format!("{error:#}"))?;
+    let password = webdav::resolve_password(state.webdav_credential(&config).as_ref(), password)
+        .map_err(|error| format!("{error:#}"))?;
+    webdav::test(&config, &password)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn mobile_webdav_list(
+    state: State<'_, MobileState>,
+    server_password: Option<String>,
+) -> Result<Vec<RemoteBackup>, String> {
+    let (config, password) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password =
+            webdav::resolve_password(state.webdav_credential(&config).as_ref(), server_password)
+                .map_err(|error| format!("{error:#}"))?;
+        (config, password)
+    };
+    webdav::list(&config, &password)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn mobile_webdav_backup(
+    state: State<'_, MobileState>,
+    server_password: Option<String>,
+    backup_password: Option<String>,
+) -> Result<UploadOutcome, String> {
+    let (config, password, local) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password =
+            webdav::resolve_password(state.webdav_credential(&config).as_ref(), server_password)
+                .map_err(|error| format!("{error:#}"))?;
+        let backup_password = backup_password.filter(|value| !value.is_empty());
+        if config.encrypt && backup_password.is_none() {
+            return Err("已开启加密上传：请填写备份密码（至少 8 位）。密码不会保存。".to_string());
+        }
+        let directory = state.backups_dir();
+        let stamp = stamp();
+        let path = match &backup_password {
+            Some(secret) => backup::create_encrypted(&conn, &directory, "wheel-", stamp, secret),
+            None => backup::create(&conn, &directory, "wheel-", stamp),
+        }
+        .map_err(|error| format!("{error:#}"))?;
+        (config, password, path)
+    };
+
+    webdav::begin().map_err(|error| error.to_string())?;
+    let result = webdav::publish(&config, &password, &local, None).await;
+    webdav::finish();
+    let conn = state.conn();
+    match result {
+        Ok(outcome) => {
+            let _ = webdav::clear_pending_upload(&conn);
+            let _ = webdav::record_upload_success(&conn, &outcome.remote.file_name);
+            Ok(outcome)
+        }
+        Err(error) => {
+            let text = format!("{error:#}");
+            // Keep the local snapshot recorded so a later retry can send it.
+            let _ = webdav::record_pending_upload(&conn, &local);
+            let _ = webdav::record_error(&conn, &text);
+            Err(text)
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDavDownload {
+    validation: backup::BackupValidation,
+    local_file: String,
+}
+
+#[tauri::command]
+async fn mobile_webdav_download(
+    state: State<'_, MobileState>,
+    file_name: String,
+    server_password: Option<String>,
+    backup_password: Option<String>,
+) -> Result<WebDavDownload, String> {
+    ensure_no_pending_restore(&state)?;
+    let (config, password, directory, local_file) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password =
+            webdav::resolve_password(state.webdav_credential(&config).as_ref(), server_password)
+                .map_err(|error| format!("{error:#}"))?;
+        let suffix = if file_name.ends_with(".sqlite.enc") {
+            "sqlite.enc"
+        } else {
+            "sqlite"
+        };
+        (
+            config,
+            password,
+            state.backups_dir(),
+            format!("download-{}-0.{suffix}", stamp()),
+        )
+    };
+    let target = directory.join(&local_file);
+
+    webdav::begin().map_err(|error| error.to_string())?;
+    let downloaded = webdav::download(&config, &password, &file_name, &target).await;
+    webdav::finish();
+    downloaded.map_err(|error| format!("{error:#}"))?;
+
+    let backup_password = backup_password.filter(|value| !value.is_empty());
+    let validation =
+        backup::validate_with_password(&directory, &local_file, backup_password.as_deref())
+            .map_err(|error| format!("{error:#}"))?;
+    if !validation.valid {
+        // A corrupt download must not linger as a restore candidate.
+        let _ = std::fs::remove_file(&target);
+    }
+    Ok(WebDavDownload {
+        validation,
+        local_file,
+    })
+}
+
+#[tauri::command]
+fn mobile_webdav_stage_restore(
+    state: State<'_, MobileState>,
+    file_name: String,
+    password: Option<String>,
+) -> Result<restore::PendingRestore, String> {
+    ensure_no_pending_restore(&state)?;
+    if !file_name.starts_with("download-") || !backup::is_safe_file_name(&file_name) {
+        return Err("只能恢复刚从云端下载到本机的快照".to_string());
+    }
+    let conn = state.conn();
+    restore::stage_with_password(
+        &conn,
+        state.data_dir(),
+        &file_name,
+        stamp(),
+        password.as_deref().filter(|value| !value.is_empty()),
+    )
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn mobile_restore_status(state: State<'_, MobileState>) -> Result<restore::RestoreStatus, String> {
+    restore::status(state.data_dir()).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn mobile_webdav_delete(
+    state: State<'_, MobileState>,
+    file_name: String,
+    server_password: Option<String>,
+) -> Result<bool, String> {
+    let (config, password) = {
+        let conn = state.conn();
+        let config = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        let password =
+            webdav::resolve_password(state.webdav_credential(&config).as_ref(), server_password)
+                .map_err(|error| format!("{error:#}"))?;
+        (config, password)
+    };
+    webdav::delete(&config, &password, &file_name)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(true)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -274,19 +557,34 @@ pub fn run() {
                 .app_data_dir()
                 .context("no writable app data directory")?;
             let db_path = dir.join(DATABASE_FILE);
+            // A staged restore must replace the file before SQLite opens it.
+            if let Some(result) = restore::apply_pending(&dir, stamp())? {
+                eprintln!("restore finished: {}", result.message);
+            }
             let conn = open_database(&db_path)?;
             let demo = seed_demo(&conn)?;
             app.manage(MobileState {
                 conn: Mutex::new(conn),
                 db_path,
                 demo,
+                webdav: Mutex::new(None),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             mobile_bootstrap,
             mobile_overview,
-            mobile_add_event
+            mobile_add_event,
+            mobile_webdav_settings,
+            mobile_webdav_status,
+            mobile_webdav_save,
+            mobile_webdav_test,
+            mobile_webdav_list,
+            mobile_webdav_backup,
+            mobile_webdav_download,
+            mobile_webdav_stage_restore,
+            mobile_restore_status,
+            mobile_webdav_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running Wheel Tracker Mobile");
@@ -309,6 +607,7 @@ mod tests {
             conn: Mutex::new(conn),
             db_path: path,
             demo: false,
+            webdav: Mutex::new(None),
         }
     }
 
@@ -332,7 +631,49 @@ mod tests {
         assert_eq!(derived.positions.len(), 1, "one open call");
         let summary = views::summary(&derived);
         assert_eq!(summary.open_contracts, 1);
-        assert!(!summary.collateral.is_sign_negative(), "no Put means +0 collateral");
+        assert!(
+            !summary.collateral.is_sign_negative(),
+            "no Put means +0 collateral"
+        );
+    }
+
+    #[test]
+    fn session_credential_is_scoped_to_one_server_and_never_written_to_sqlite() {
+        let state = memory_state("webdav");
+        let conn = state.conn();
+        let config = WebDavConfig {
+            url: "https://dav.example.com/dav/".into(),
+            username: "tester".into(),
+            auto_upload: false,
+            ..WebDavConfig::default()
+        };
+        let saved = webdav::save(&conn, &config).unwrap();
+        state.remember_webdav_password(&saved, Some("hunter2-secret".into()));
+
+        let credential = state.webdav_credential(&saved).expect("session credential");
+        assert_eq!(credential.password, "hunter2-secret");
+        assert_eq!(credential.source, "session");
+        let view = webdav::settings_view(&conn, &saved, Some(&credential)).unwrap();
+        assert!(view.has_password);
+        assert_eq!(view.password_source, "session");
+
+        let other = WebDavConfig {
+            username: "someone-else".into(),
+            ..saved.clone()
+        };
+        assert!(state.webdav_credential(&other).is_none());
+
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE value LIKE '%hunter2%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0, "the WebDAV password must never reach SQLite");
+
+        state.remember_webdav_password(&saved, Some(String::new()));
+        assert!(state.webdav_credential(&saved).is_none());
     }
 
     #[test]
@@ -363,7 +704,10 @@ mod tests {
             .unwrap()
             .remove(0);
         assert!(id.starts_with("ev-"));
-        assert_eq!(store::count_events(&conn, DEMO_ACCOUNT).unwrap(), before + 1);
+        assert_eq!(
+            store::count_events(&conn, DEMO_ACCOUNT).unwrap(),
+            before + 1
+        );
         assert!(derive(&conn, DEMO_ACCOUNT).unwrap().positions.is_empty());
     }
 }

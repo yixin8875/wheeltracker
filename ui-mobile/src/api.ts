@@ -315,3 +315,176 @@ export async function addEvent(req: NewEventReq) {
   }
   return invoke<string>('mobile_add_event', { req })
 }
+
+// ---------------------------------------------------------------------------
+// WebDAV backup and restore
+// ---------------------------------------------------------------------------
+
+export interface WebDavConfig {
+  url: string
+  username: string
+  remoteDir: string
+  autoUpload: boolean
+  keep: number
+  encrypt: boolean
+  allowInsecureHttp: boolean
+}
+
+export interface WebDavSettings extends WebDavConfig {
+  configured: boolean
+  hasPassword: boolean
+  passwordSource: string
+  passwordHint: string
+  lastUploadAt: string | null
+  lastUploadFile: string | null
+  lastError: string | null
+  autoUploadReady: boolean
+}
+
+export interface WebDavStatus {
+  configured: boolean
+  hasPassword: boolean
+  passwordSource: string
+  lastUploadAt: string | null
+  lastUploadFile: string | null
+  lastError: string | null
+  autoUploadReady: boolean
+  busy: boolean
+}
+
+export interface RemoteBackup {
+  fileName: string
+  sizeBytes: number
+  modifiedAt: string | null
+  etag: string | null
+  encrypted: boolean
+}
+
+export interface ServerInfo {
+  server: string | null
+  snapshotCount: number
+  writable: boolean
+}
+
+export interface UploadOutcome {
+  remote: RemoteBackup
+  sha256: string
+}
+
+export interface BackupValidation {
+  fileName: string
+  valid: boolean
+  integrity: string
+  events: number
+  accounts: number
+  prices: number
+  issues: string[]
+}
+
+export interface WebDavDownload {
+  validation: BackupValidation
+  localFile: string
+}
+
+export interface PendingRestore {
+  version: number
+  backupFile: string
+  safetyFile: string
+  requestedAt: string
+  stagedFile: string | null
+}
+
+export interface RestoreResult {
+  ok: boolean
+  message: string
+  at: string
+  backupFile: string | null
+  safetyFile: string | null
+}
+
+export interface RestoreStatus {
+  pending: PendingRestore | null
+  lastResult: RestoreResult | null
+  failed: string[]
+}
+
+const NO_WEBDAV_IN_BROWSER = '浏览器预览不连接 WebDAV，请在 Android 应用中操作。'
+
+export async function webdavSettings() {
+  if (devMode()) {
+    return {
+      url: '',
+      username: '',
+      remoteDir: '/wheel/',
+      autoUpload: false,
+      keep: 10,
+      encrypt: true,
+      allowInsecureHttp: false,
+      configured: false,
+      hasPassword: false,
+      passwordSource: 'none',
+      passwordHint: '',
+      lastUploadAt: null,
+      lastUploadFile: null,
+      lastError: null,
+      autoUploadReady: false,
+    } satisfies WebDavSettings
+  }
+  return invoke<WebDavSettings>('mobile_webdav_settings')
+}
+
+export async function webdavSave(config: WebDavConfig, password: string | null) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<WebDavSettings>('mobile_webdav_save', { config, password })
+}
+
+export async function webdavTest(config: WebDavConfig, password: string | null) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<ServerInfo>('mobile_webdav_test', { config, password })
+}
+
+export async function webdavList(serverPassword?: string | null) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<RemoteBackup[]>('mobile_webdav_list', {
+    serverPassword: serverPassword ?? null,
+  })
+}
+
+export async function webdavBackup(
+  serverPassword: string | null,
+  backupPassword: string | null,
+) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<UploadOutcome>('mobile_webdav_backup', { serverPassword, backupPassword })
+}
+
+export async function webdavDownload(
+  fileName: string,
+  serverPassword: string | null,
+  backupPassword: string | null,
+) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<WebDavDownload>('mobile_webdav_download', {
+    fileName,
+    serverPassword,
+    backupPassword,
+  })
+}
+
+export async function webdavStageRestore(fileName: string, password: string | null) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<PendingRestore>('mobile_webdav_stage_restore', { fileName, password })
+}
+
+export async function restoreStatus() {
+  if (devMode()) return { pending: null, lastResult: null, failed: [] } satisfies RestoreStatus
+  return invoke<RestoreStatus>('mobile_restore_status')
+}
+
+export async function webdavDelete(fileName: string, serverPassword?: string | null) {
+  if (devMode()) throw new Error(NO_WEBDAV_IN_BROWSER)
+  return invoke<boolean>('mobile_webdav_delete', {
+    fileName,
+    serverPassword: serverPassword ?? null,
+  })
+}

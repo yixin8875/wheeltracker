@@ -324,19 +324,24 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 | `events` | `NewEventReq` → `Event` 的校验与序号分配（两台设备同一套校验） |
 | `views` | 桌面/移动共用的 camelCase DTO、成本卡、持仓、汇总 |
 | `market` / `backup` / `restore` / `crypto` | 行情解析、快照、崩溃安全恢复、备份加密 |
+| `webdav` | WebDAV 协议层：配置校验、PROPFIND 解析、上传/manifest/保留份数、下载与快照列表；密码由外壳注入 |
 
-`wheel-app` 只保留 Tauri 外壳、窗口/托盘、通知与 WebDAV 编排，并通过 `pub use wheel_store::{…}` 保持原有 `crate::store` 路径不变。`wheel-mobile` 只依赖 `wheel-core` + `wheel-store` + `tauri` + `rusqlite`，不引入窗口/托盘/更新插件。
+`wheel-app` 只保留 Tauri 外壳、窗口/托盘、通知，以及 WebDAV 的桌面绑定（Windows 凭据库 + 启动后台上传），并通过 `pub use wheel_store::{…}` 保持原有 `crate::store` 路径不变。WebDAV 协议代码现在两端共用，密码通过 `Credential` 参数注入：桌面从 Windows Credential Manager 取，移动端只用运行期内存。`wheel-mobile` 只依赖 `wheel-core` + `wheel-store` + `tauri` + `rusqlite`，不引入窗口/托盘/更新插件。
 
 ### 13.2 移动端后端
 
 - 数据库：应用私有目录 `wheel.db`，与桌面同一 schema（`SCHEMA_VERSION = 4`），WAL。
 - 命令：`mobile_bootstrap`（账户、今天、库路径、演示标记）、`mobile_overview`（汇总、战役、期权、持股，按到期排序）、`mobile_add_event`（走 `wheel-store::events` 的同一套校验）。
+- WebDAV 命令：`mobile_webdav_settings/status/save/test/list/backup/download/stage_restore/delete` 与 `mobile_restore_status`，全部复用 `wheel-store::webdav`、`backup`、`restore`。
+- 凭据：密码只存在 `MobileState` 的内存中，按「服务器地址 + 账号」隔离，换地址即丢弃；SQLite 只保存 URL、账号、目录、保留份数等设置。
+- 恢复沿用桌面的「下载 → 校验 → 暂存 → 下次启动替换」流程；暂存期间 `mobile_add_event` 拒绝写入，启动时在打开 SQLite 之前执行 `restore::apply_pending`。
 - 首次启动且账户无事件时写入 5 条合成 AAPL 事件（入金 → 卖 Put → 到期 → 买 100 股 → 卖 Call），日期相对安装日生成；一旦有事件就不再写入。
 - 写入后立即重新回放，页面数据不经过缓存，账本始终以事件为准。
 
 ### 13.3 移动端界面
 
 - 4 个 Tab：首页（Hero + 快捷操作 + 到期提醒 + 战役卡）、持仓（股票/期权分段）、到期（已过期/7 天/30 天/更远筛选 + 平仓/作废/指派）、我的（账户、外观、数据、版本、库路径）。
+- 「我的 → 备份与同步」底部抽屉：服务器/账号/密码/目录/保留份数、加密上传与局域网 HTTP 开关、测试连接、保存、立即备份、云端快照列表（恢复/删除）、恢复确认与「已安排恢复」提示。
 - FAB「记一笔」底部抽屉：11 种交易类型，期权方向切换、实时净权利金与占用资金预览；从持仓/到期进入时预填合约。
 - 深色模式跟随系统，也可手动浅色/深色；金额使用等宽数字；触摸目标 ≥ 44px。
 
@@ -344,18 +349,24 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 
 | 项目 | 结果 |
 |---|---|
-| workspace 测试 | 169 通过（wheel-app 89、wheel-store 45+1 ignored、wheel-mobile 2、wheel-core 32） |
+| workspace 测试 | 170 通过（wheel-app 83、wheel-store 53+1 ignored、wheel-mobile 3、wheel-core 30、doc 1） |
 | Android 首页 | 演示账本 5 条事件 → 已落袋 200.00、未平仓 150.00、Put 义务 0、AAPL 成本 B 146.00 / C′ 144.50 |
 | Android 到期 | 一张 CALL $160 · 20 天后到期，筛选与动作按钮可用 |
 | Android 写入 | 记一笔「入金 1000」→ 事件数 5→6，我的页现金 6,550.00（含入金、卖 Put、买股、卖 Call 现金流） |
 | 深色模式 | 模拟器与浏览器均验证 |
 | APK | x86_64 debug，构建成功；Windows 软链绕行同第 12.4 节 |
+| Android WebDAV 连接 | 本机 mock WebDAV（HTTP + 局域网开关）→「测试连接」成功，返回服务器名与 0 份快照 |
+| Android 备份 | 加密上传 44 KB → `PUT .tmp` → `MOVE` → `latest.json`，列表显示该快照 |
+| Android 恢复 | 下载加密快照并通过校验 → 安排恢复 → 完全退出重启后 `restore/applied-*.json` 生成，账本 5 条事件与成本 B 146.00 不变，安全副本 `pre-restore-*.sqlite` 保留 |
+| 密码落盘检查 | `settings` 表 LIKE 查询密码为 0 行（单元测试 `session_credential_is_scoped_to_one_server_and_never_written_to_sqlite`） |
 
 ![M1 首页：真实 wheel.db 回放（模拟器 1080×2400）](m1-android.png)
 
+![M2 备份与同步（连接本机 mock WebDAV）：恢复完成后保留设置，密码只在本次运行内有效（模拟器 1080×2400）](m2-webdav.png)
+
 ### 13.5 尚未完成
 
-- **WebDAV**：桌面端 `webdav.rs` 仍绑定 `AppState` 与 Windows 凭据库，移动端需要先把它抽到 `wheel-store` 并换成可注入的凭据/目录上下文；Android 密码应进 Keystore 或 EncryptedSharedPreferences，绝不写 SQLite。
+- **WebDAV 密码持久化**：目前只保存在运行期内存，重启后需要重新输入，因此「启动时自动上传」在移动端暂不开放。下一步用 Android Keystore 加密的 `EncryptedSharedPreferences` 保存密码，再打开自动上传；账本（SQLite）永远不存密码。
 - **真实账本导入**：目前移动端只会在空库时写演示数据；把桌面 `wheel.db` 导入手机需要 SAF 选择文件 + 校验/覆盖流程。
 - **发布**：arm64 构建、release 签名、AAB 与体积检查。
 - **通知/后台**：到期提醒仍是 v1 的启动/回前台检查。

@@ -11,6 +11,7 @@ import {
   type Position,
 } from './api'
 import EntrySheet from './EntrySheet'
+import WebDavSheet from './WebDavSheet'
 
 type Tab = 'home' | 'holdings' | 'expiry' | 'me'
 type Theme = 'auto' | 'light' | 'dark'
@@ -82,6 +83,7 @@ export default function App() {
   const [segment, setSegment] = useState<Segment>('stocks')
   const [filter, setFilter] = useState<ExpiryFilter>('all')
   const [sheet, setSheet] = useState<{ kind: EntryKind; position?: Position } | null>(null)
+  const [webdavOpen, setWebdavOpen] = useState(false)
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -222,6 +224,7 @@ export default function App() {
               theme={theme}
               setTheme={setTheme}
               onReload={() => void load()}
+              onOpenWebDav={() => setWebdavOpen(true)}
             />
           )}
         </main>
@@ -258,6 +261,16 @@ export default function App() {
           preset={sheet}
           onClose={() => setSheet(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {webdavOpen && (
+        <WebDavSheet
+          onClose={() => setWebdavOpen(false)}
+          onChanged={(message) => {
+            setToast(message)
+            void load()
+          }}
         />
       )}
 
@@ -542,11 +555,13 @@ function Profile({
   theme,
   setTheme,
   onReload,
+  onOpenWebDav,
 }: {
   data: Overview
   theme: Theme
   setTheme: (theme: Theme) => void
   onReload: () => void
+  onOpenWebDav: () => void
 }) {
   return (
     <>
@@ -598,7 +613,9 @@ function Profile({
         </div>
         <div className="list-row">
           <span>备份与同步</span>
-          <span className="muted">WebDAV · 待接入</span>
+          <button className="link" onClick={onOpenWebDav}>
+            WebDAV
+          </button>
         </div>
         <div className="list-row">
           <span>版本</span>
