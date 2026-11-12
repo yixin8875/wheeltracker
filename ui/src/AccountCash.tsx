@@ -23,7 +23,7 @@ export function AccountCashPanel({ summary, onEntry, onReconcile }: {
       <div className="toolbar">
         <button onClick={() => onEntry('cash_deposit')}>记录入金</button>
         <button onClick={() => onEntry('cash_withdrawal')}>记录出金</button>
-        <button onClick={onReconcile}><Scale size={15}/>与券商对账</button>
+        <button onClick={onReconcile}><Scale size={16}/>与券商对账</button>
       </div>
     </div>
     <div className="summary-strip cash-summary">

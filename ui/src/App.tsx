@@ -220,7 +220,7 @@ export default function App() {
       <p className="nav-group-title" id={`nav-${group.id}`}>{group.title}</p>
       {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'expiry' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'entry' && <kbd>Ctrl N</kbd>}{item.id === 'expiry' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
     </div>)}</nav><div className="sidebar-bottom"><div className="connection-line"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}</div><label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small><button className={`sidebar-settings ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Settings size={16}/>设置</button></div></aside>
-    <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={17}/>记一笔</button></div></header>
+    <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button><button className="primary" onClick={() => startEntry()}><Plus size={16}/>记一笔</button></div></header>
     {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
     <Updater/>
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
@@ -248,7 +248,7 @@ export default function App() {
       <ReminderCard positions={positions} leadDays={leadDays} onOpenExpiry={() => setPage('expiry')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign}/>
       <div className="section-heading"><h2>我的战役 <span className="count">{campaigns.length}</span></h2><div className="toolbar"><input aria-label="筛选标的" placeholder="搜索标的…" value={symbol} onChange={e => setSymbol(e.target.value)}/><label className="check"><input type="checkbox" checked={archive} onChange={e => setArchive(e.target.checked)}/>显示已结束</label></div></div>
       <div className="campaign-grid">{campaigns.map(campaign => <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)}/>)}</div>
-      {!campaigns.length && <div className="empty panel"><Layers size={36}/><h2>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</h2><p>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</p><button className="primary" onClick={() => startEntry()}>记录第一笔交易</button></div>}
+      {!campaigns.length && <div className="empty panel"><Layers size={40}/><h2>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</h2><p>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</p><button className="primary" onClick={() => startEntry()}>记录第一笔交易</button></div>}
       <p className="footnote">A 纯股票成本 · B 扣除已落袋净权利金 · C′ 再扣除未平仓净权利金。{settings?.includeDividendsInCost ? '当前分红计入 B/C′ 成本。' : '当前分红不摊薄成本。'}</p>
     </>}
     {page === 'ledger' && !unavailable && <>
@@ -289,7 +289,66 @@ export default function App() {
     </main></div>;
 }
 
+function clamp(value: number, low: number, high: number) { return Math.max(low, Math.min(high, value)); }
+
+function CostRuler({ campaign: c }: { campaign: Campaign }) {
+  if (c.costB == null || c.price == null) return null;
+  const values = [c.costB, c.price, ...(c.costA != null ? [c.costA] : [])];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || Math.max(1, Math.abs(max) * .1);
+  const pad = span * .12;
+  const lo = min - pad;
+  const hi = max + pad;
+  const position = (value: number) => clamp(((value - lo) / (hi - lo)) * 100, 0, 100);
+  const cost = position(c.costB);
+  const price = position(c.price);
+  const plain = c.costA != null ? position(c.costA) : null;
+  const gain = c.price >= c.costB;
+  const left = Math.min(cost, price);
+  const width = Math.abs(price - cost);
+  const labelsFit = width >= 10;
+  return <div className="cost-ruler" role="img" aria-label={`成本线 ${money(c.costB)}，现价 ${money(c.price)}${c.safetyMargin != null ? `，距成本线 ${percent(c.safetyMargin)}` : ''}`}>
+    <span className="ruler-track"/>
+    <span className={gain ? 'ruler-fill gain' : 'ruler-fill loss'} style={{ left: `${left}%`, width: `${width}%` }}/>
+    {plain != null && <span className="ruler-mark a" style={{ left: `${plain}%` }}/>}
+    <span className="ruler-mark b" style={{ left: `${cost}%` }}/>
+    <span className="ruler-mark price" style={{ left: `${price}%` }}/>
+    {labelsFit && <span className="ruler-label cost" style={{ left: `${clamp(cost, 6, 94)}%` }}>成本</span>}
+    <span className="ruler-label price" style={{ left: `${clamp(price, 6, 94)}%` }}>现价</span>
+  </div>;
+}
+
 function CampaignCard({ campaign: c, quote, onOpen }: { campaign: Campaign; quote?: Price; onOpen?: () => void }) {
-  return <article className="campaign-card"><div className="section-heading"><div className="symbol-title"><h2>{c.symbol}</h2><span className={`badge ${c.status}`}>{c.status === 'active' ? '进行中' : '已结束'}</span></div><span className="muted">{c.shares ? `持有 ${c.shares} 股` : c.status === 'closed' ? '战役已结算' : '建仓前收租'}</span></div><div className="cost-focus"><div><span>{c.status === 'closed' ? '本轮总收益' : c.shares ? '已落袋有效成本 / 股' : '累计已落袋净收租'}</span><strong>{money(c.status === 'closed' ? c.realizedPnl : c.shares ? c.costB : c.premiumRealized)}</strong>{c.costB != null && c.costB <= 0 && <small className="positive">成本已归零</small>}</div><div className="price-block"><span>标的参考价</span><strong>{money(c.price)}</strong><small>{c.safetyMargin != null ? `距成本线 ${percent(c.safetyMargin)}` : '在行情页更新'}</small><small>{quoteTime(quote)}{quote?.quotedAt ? ' · 可能延迟' : ''}</small></div></div><div className="cost-breakdown"><span>纯股票成本<strong>{money(c.costA)}</strong></span><span>含未平仓成本<strong>{money(c.costC)}</strong></span><span>已落袋权利金<strong>{money(c.premiumRealized)}</strong></span><span>未平仓权利金<strong>{money(c.premiumOpen)}</strong></span></div><div className="card-bottom"><span>{c.nextOption ? `${c.nextOption.openQty} 手 ${c.nextOption.strike}${c.nextOption.right} · ${c.nextOption.expiry} 到期` : `${c.startedAt} 开始 · ${c.cycles} 次了结`}</span>{onOpen && <button className="text-button" onClick={onOpen}>查看战役<ChevronRight size={16}/></button>}</div></article>;
+  return <article className="campaign-card">
+    <div className="section-heading campaign-id">
+      <div className="symbol-title"><h2>{c.symbol}</h2><span className={`badge ${c.status}`}>{c.status === 'active' ? '进行中' : '已结束'}</span></div>
+      <p className="campaign-meta">{c.shares ? `持有 ${c.shares} 股` : c.status === 'closed' ? '战役已结算' : '建仓前收租'}</p>
+    </div>
+    <div className="campaign-cost">
+      <div className="cost-focus">
+        <span className="cost-label">{c.status === 'closed' ? '本轮总收益' : c.shares ? '已落袋有效成本 / 股' : '累计已落袋净收租'}</span>
+        <strong>{money(c.status === 'closed' ? c.realizedPnl : c.shares ? c.costB : c.premiumRealized)}</strong>
+        {c.costB != null && c.costB <= 0 && <small className="positive">成本已归零</small>}
+      </div>
+      {c.status !== 'closed' && <CostRuler campaign={c}/>}
+      <div className="cost-breakdown">
+        <span>纯股票成本<strong>{money(c.costA)}</strong></span>
+        <span>含未平仓成本<strong>{money(c.costC)}</strong></span>
+        <span>已落袋权利金<strong>{money(c.premiumRealized)}</strong></span>
+        <span>未平仓权利金<strong>{money(c.premiumOpen)}</strong></span>
+      </div>
+    </div>
+    <div className="campaign-price">
+      <span>标的参考价</span>
+      <strong>{money(c.price)}</strong>
+      <small>{c.safetyMargin != null ? `距成本线 ${percent(c.safetyMargin)}` : '在行情页更新'}</small>
+      <small>{quoteTime(quote)}{quote?.quotedAt ? ' · 可能延迟' : ''}</small>
+    </div>
+    <div className="card-bottom">
+      <span>{c.nextOption ? `${c.nextOption.openQty} 手 ${c.nextOption.strike}${c.nextOption.right} · ${c.nextOption.expiry} 到期` : `${c.startedAt} 开始 · ${c.cycles} 次了结`}</span>
+      {onOpen && <button className="text-button" onClick={onOpen}>查看战役<ChevronRight size={16}/></button>}
+    </div>
+  </article>;
 }
 

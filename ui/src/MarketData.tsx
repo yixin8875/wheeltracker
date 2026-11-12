@@ -10,7 +10,8 @@ export function latestPrice(prices: Price[], symbol: string) {
 }
 export function quoteTime(quote?: Price) {
   if (!quote) return '尚无报价';
-  return quote.quotedAt ? `${quote.quotedAt} 美东 · ${quote.source}` : `${quote.date} · ${quote.source || '手动'}`;
+  const stamp = quote.quotedAt ? quote.quotedAt.slice(5, 16) : quote.date.slice(5);
+  return `${stamp} 美东 · ${quote.source || '手动'}`;
 }
 
 function useQuote(symbol: string) {
@@ -88,13 +89,13 @@ export function MarketPage({ prices, symbols, market, onSaved, onEntry }: {
   const { quote, error, busy, retry } = useQuote(symbol);
   const rows = [...new Set([...symbols, ...prices.map(item => item.symbol)])].sort();
   return <>
-    <section className="market-search"><div className="market-intro"><Search size={22}/><div><h2>查找标的</h2><p className="muted">搜索美股或 ETF，查看价格后直接记账。</p></div></div>
+    <section className="market-search"><div className="market-intro"><Search size={18}/><div><h2>查找标的</h2><p className="muted">搜索美股或 ETF，查看价格后直接记账。</p></div></div>
       <SymbolPicker value={symbol} onChange={setSymbol} label="搜索美股或 ETF"/>
       {busy && <p className="market-search-status" role="status">正在读取标的报价…</p>}
       {error && <p className="market-search-status negative" role="alert">{error} <button onClick={retry}>重试查询</button></p>}
-      {quote && <div className="market-result"><div><h3>{quote.symbol} <span>{quote.name}</span></h3><p><strong>{money(quote.price)}</strong>{quote.changePercent != null && <span className={quote.changePercent >= 0 ? 'positive' : 'negative'}>{quote.changePercent > 0 ? '+' : ''}{percent(quote.changePercent / 100)}</span>}</p><small>{quote.quotedAt} 美东 · {quote.source} · USD · 可能延迟</small></div><div className="toolbar"><button disabled={market.busy || !desktop} onClick={() => void market.refresh([quote.symbol])}>更新到账本</button><button className="primary" onClick={() => onEntry(quote.symbol)}>记录交易</button></div></div>}
+      {quote && <div className="market-result"><div><h3>{quote.symbol} <span>{quote.name}</span></h3><p><strong>{money(quote.price)}</strong>{quote.changePercent != null && <span className={quote.changePercent >= 0 ? 'positive' : 'negative'}>{quote.changePercent > 0 ? '+' : ''}{percent(quote.changePercent / 100)}</span>}</p><small>{quote.quotedAt.slice(5, 16)} 美东 · {quote.source} · USD · 可能延迟</small></div><div className="toolbar"><button disabled={market.busy || !desktop} onClick={() => void market.refresh([quote.symbol])}>更新到账本</button><button className="primary" onClick={() => onEntry(quote.symbol)}>记录交易</button></div></div>}
     </section>
-    <section className="panel market-watchlist"><div className="section-heading"><div><h2>账本行情 <span className="count">{rows.length}</span></h2><p className="muted">进行中的战役启动时更新，应用可见时每 5 分钟更新。</p></div><button disabled={market.busy || !symbols.length || !desktop} onClick={() => void market.refresh()}><RefreshCw size={15} className={market.busy ? 'spinning' : ''}/>{market.busy ? '更新中…' : '更新持仓行情'}</button></div>
+    <section className="panel market-watchlist"><div className="section-heading"><div><h2>账本行情 <span className="count">{rows.length}</span></h2><p className="muted">进行中的战役启动时更新，应用可见时每 5 分钟更新。</p></div><button disabled={market.busy || !symbols.length || !desktop} onClick={() => void market.refresh()}><RefreshCw size={16} className={market.busy ? 'spinning' : ''}/>{market.busy ? '更新中…' : '更新持仓行情'}</button></div>
       {market.error && <p role="status" className="alert warning">行情更新未全部完成：{market.error}。已有报价保留，可重试或手动校准。</p>}
       <div className="table-wrap"><table><thead><tr><th>标的</th><th>账本参考价</th><th>报价时间 / 来源</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.map(item => { const price = latestPrice(prices, item); return <tr key={item}><td><button className="text-button" onClick={() => setSymbol(item)}>{item}</button></td><td>{money(price?.close)}</td><td>{quoteTime(price)}</td><td><span className="badge">{price ? price.quotedAt ? '已缓存 · 可能延迟' : '手动校准' : '待获取'}</span></td><td><button disabled={market.busy || !desktop} onClick={() => void market.refresh([item])}>更新报价</button></td></tr>; })}</tbody></table></div>
       {!rows.length && <p className="empty">还没有标的。搜索并记录第一笔交易后，自动跟踪持仓行情。</p>}

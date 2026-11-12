@@ -37,12 +37,17 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
     if (!element.current || !chartRows.length) return;
     const chart = echarts.init(element.current);
     chart.setOption({
-      backgroundColor: '#ffffff',
-      textStyle: { color: '#626873', fontFamily: 'Segoe UI, Microsoft YaHei, sans-serif' },
-      grid: { left: 20, right: 24, top: 56, bottom: 24, containLabel: true },
-      legend: { top: 8, textStyle: { color: '#626873' } },
+      backgroundColor: 'transparent',
+      textStyle: { color: '#575249', fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif', fontSize: 12 },
+      grid: { left: 16, right: 16, top: 44, bottom: 16, containLabel: true },
+      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: '#575249', fontSize: 12 } },
       tooltip: {
         trigger: 'axis',
+        backgroundColor: '#fffefa',
+        borderColor: 'rgba(30, 28, 23, .17)',
+        borderWidth: 1,
+        textStyle: { color: '#1e1c17', fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
         formatter: (parameter: unknown) => {
           const items = parameter as { axisValue?: string; seriesName: string; value: number }[];
           if (!items.length) return '';
@@ -52,16 +57,17 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
       xAxis: {
         type: 'category',
         data: chartRows.map(row => row.month),
-        axisLabel: { color: '#626873', formatter: (value: string) => value.slice(2) },
+        axisLine: { lineStyle: { color: 'rgba(30, 28, 23, .17)' } },
+        axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: string) => value.slice(2) },
         axisTick: { show: false },
       },
       yAxis: [
-        { type: 'value', name: '月度', axisLabel: { color: '#626873', formatter: (value: number) => `$${value}` }, splitLine: { lineStyle: { color: '#edf0f3' } } },
-        { type: 'value', name: '累计', axisLabel: { color: '#626873', formatter: (value: number) => `$${value}` }, splitLine: { show: false } },
+        { type: 'value', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: number) => `$${value.toLocaleString()}` }, splitLine: { lineStyle: { color: 'rgba(30, 28, 23, .07)' } } },
+        { type: 'value', show: false },
       ],
       series: [
-        { name: '月度合计', type: 'bar', barMaxWidth: 36, itemStyle: { color: '#2a78d6', borderRadius: [3, 3, 0, 0] }, data: chartRows.map(row => Number(row.total.toFixed(2))) },
-        { name: '区间累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 6, lineStyle: { color: '#eb6834' }, itemStyle: { color: '#eb6834' }, data: chartRows.map(row => Number(row.cumulative.toFixed(2))) },
+        { name: '月度合计', type: 'bar', barMaxWidth: 28, itemStyle: { color: '#ddd6c8', borderRadius: [2, 2, 0, 0] }, emphasis: { itemStyle: { color: '#cfc6b4' } }, data: chartRows.map(row => Number(row.total.toFixed(2))) },
+        { name: '区间累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 5, showSymbol: false, lineStyle: { color: '#0f5fbe', width: 2 }, itemStyle: { color: '#0f5fbe', borderColor: '#fffefa', borderWidth: 2 }, data: chartRows.map(row => Number(row.cumulative.toFixed(2))) },
       ],
     });
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(element.current);

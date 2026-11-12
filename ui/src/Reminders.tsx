@@ -32,10 +32,10 @@ export function ReminderCard({ positions, leadDays, onOpenExpiry, onOpenCalendar
   return <section className="panel reminder-card">
     <div className="section-heading">
       <div><h2><CalendarClock size={18}/> 到期提醒</h2><span className="muted">未来 {leadDays} 天 · 按美东交易日计算</span></div>
-      <div className="toolbar"><button onClick={onOpenCalendar}>到期日历</button><button onClick={onOpenExpiry}>到期处理<ChevronRight size={15}/></button></div>
+      <div className="toolbar"><button onClick={onOpenCalendar}>到期日历</button><button onClick={onOpenExpiry}>到期处理<ChevronRight size={16}/></button></div>
     </div>
     {!reminders.length ? <p className="empty">未来 {leadDays} 天内没有到期合约。</p> : <div className="reminder-list">
-      {overdue > 0 && <p className="reminder-summary negative" role="alert"><TriangleAlert size={15}/>{overdue} 个合约已过到期日，请核对后标记作废或指派。</p>}
+      {overdue > 0 && <p className="reminder-summary negative" role="alert"><TriangleAlert size={16}/>{overdue} 个合约已过到期日，请核对后标记作废或指派。</p>}
       {reminders.slice(0, 5).map(position => {
         const severity = reminderSeverity(position.daysLeft, leadDays);
         return <button key={position.contract} className={`reminder-row ${severity}`} onClick={() => onOpenCampaign(position.campaignId)}>
@@ -44,7 +44,7 @@ export function ReminderCard({ positions, leadDays, onOpenExpiry, onOpenCalendar
           <ChevronRight size={16}/>
         </button>;
       })}
-      {reminders.length > 5 && <button className="text-button reminder-more" onClick={onOpenExpiry}>另有 {reminders.length - 5} 个合约<ChevronRight size={15}/></button>}
+      {reminders.length > 5 && <button className="text-button reminder-more" onClick={onOpenExpiry}>另有 {reminders.length - 5} 个合约<ChevronRight size={16}/></button>}
     </div>}
   </section>;
 }
