@@ -25,6 +25,25 @@ export interface OverviewTotals {
   cashCoverage: number | null; cashShortfall: number;
 }
 export interface AllAccountsOverview { asOf: string; accounts: OverviewAccount[]; totals: OverviewTotals }
+export interface Holding {
+  accountId: string; accountName: string; campaignId: string; symbol: string; shares: number;
+  costA: number | null; costB: number | null; costC: number | null;
+  price: number | null; marketValue: number | null; costBasis: number | null;
+  unrealizedPnl: number | null; unrealizedPct: number | null;
+  premiumRealized: number; premiumOpen: number; dividends: number; startedAt: string;
+}
+export interface HoldingOption {
+  accountId: string; accountName: string; campaignId: string; symbol: string; contract: string;
+  right: string; strike: number; expiry: string; daysLeft: number; openQty: number;
+  multiplier: number; avgCredit: number; collateral: number;
+}
+export interface HoldingsTotals {
+  accountCount: number; holdingCount: number; pricedHoldings: number; unpricedHoldings: number;
+  totalShares: number; marketValue: number; costBasis: number; unrealizedPnl: number;
+  unrealizedPct: number | null; premiumRealized: number; premiumOpen: number;
+  optionCount: number; openContracts: number; optionCollateral: number;
+}
+export interface AllHoldings { asOf: string; holdings: Holding[]; options: HoldingOption[]; totals: HoldingsTotals }
 export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
 export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
@@ -85,3 +104,22 @@ export interface ImportCounts { total: number; ok: number; warning: number; dupl
 export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'vision'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
 export interface ImportSummary { imported: number; eventIds: string[]; accountId: string; notePrefix: string; duplicateCount: number; batchId: string | null; batchSaved: boolean }
 export interface ImportBatch { id: string; origin: string; createdAt: string; imported: number; remaining: number; undoneAt: string | null; undoneCount: number }
+
+export interface WebDavConfig {
+  url: string; username: string; remoteDir: string;
+  autoUpload: boolean; keep: number; encrypt: boolean; allowInsecureHttp: boolean;
+}
+export type WebDavPasswordSource = 'keychain' | 'session' | 'none';
+export interface WebDavSettings extends WebDavConfig {
+  configured: boolean; hasPassword: boolean; passwordSource: WebDavPasswordSource; passwordHint: string;
+  lastUploadAt: string | null; lastUploadFile: string | null; lastError: string | null; autoUploadReady: boolean;
+}
+export interface WebDavStatus {
+  configured: boolean; hasPassword: boolean; passwordSource: string;
+  lastUploadAt: string | null; lastUploadFile: string | null; lastError: string | null;
+  autoUploadReady: boolean; busy: boolean;
+}
+export interface RemoteBackup { fileName: string; sizeBytes: number; modifiedAt: string | null; etag: string | null; encrypted: boolean }
+export interface WebDavServerInfo { server: string | null; snapshotCount: number; writable: boolean }
+export interface WebDavDownload { validation: BackupValidation; localFile: string }
+export interface WebDavUpload { remote: RemoteBackup; sha256: string }

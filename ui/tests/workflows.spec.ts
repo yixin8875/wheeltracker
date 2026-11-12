@@ -39,6 +39,12 @@ async function setup(page: Page) {
           accounts: [{ id: 'main', name: '默认账户', premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }],
           totals: { accountCount: 1, cashTrackedAccounts: 1, untrackedAccounts: 0, untrackedPutAccounts: 0, premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, trackedCollateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
         };
+        case 'all_holdings_overview': return state.testHoldings ?? {
+          asOf: '2026-11-03',
+          holdings: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, dividends: 0, startedAt: '2026-01-02' }],
+          options: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, collateral: 0 }],
+          totals: { accountCount: 1, holdingCount: 1, pricedHoldings: 1, unpricedHoldings: 0, totalShares: 100, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 0 },
+        };
         case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1 };
         case 'send_test_notification': return null;
         case 'cash_movements': return [
@@ -1238,5 +1244,53 @@ test('overview flags untracked Put accounts and switches account', async ({ page
   await untracked.getByRole('button', { name: '打开账户' }).click();
   await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1)?.args.accountId)).toBe('acct-2');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
+});
+
+test('all-holdings page totals unrealized P&L and opens the campaign', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '全部持仓', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '全部账户持仓', exact: true })).toBeVisible();
+  const summary = page.locator('.holdings-summary');
+  await expect(summary).toContainText('$16,000.00');
+  await expect(summary).toContainText('+$1,200.00');
+  await expect(summary).toContainText('8.11%');
+  await expect(summary).toContainText('$14,800.00');
+  const row = page.locator('table.holdings-table').first().locator('tbody tr').filter({ hasText: 'TEST' });
+  await expect(row).toContainText('默认账户');
+  await expect(row).toContainText('$148.00');
+  await expect(row).toContainText('含未平仓 $147.00');
+  await expect(row).toContainText('$150.00');
+  await expect(row).toContainText('$160.00');
+  await expect(row).toContainText('+$1,200.00');
+  await expect(row).toContainText('8.11%');
+  await row.getByRole('button', { name: '打开战役' }).click();
+  await expect(page.getByRole('heading', { name: 'TEST', exact: true, level: 1 })).toBeVisible();
+});
+
+test('all-holdings flags unpriced positions and lists open puts', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testHoldings = {
+      asOf: '2026-11-03',
+      holdings: [
+        { accountId: 'acct-2', accountName: '长期账户', campaignId: 'other', symbol: 'OTHER', shares: 50, costA: 100, costB: 99, costC: 98, price: null, marketValue: null, costBasis: null, unrealizedPnl: null, unrealizedPct: null, premiumRealized: 50, premiumOpen: 0, dividends: 0, startedAt: '2026-02-01' },
+        { accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, dividends: 0, startedAt: '2026-01-02' },
+      ],
+      options: [{ accountId: 'acct-2', accountName: '长期账户', campaignId: 'other', symbol: 'PUT', contract: 'PUT 2026-12-18 50P', right: 'P', strike: 50, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1.5, collateral: 5000 }],
+      totals: { accountCount: 2, holdingCount: 2, pricedHoldings: 1, unpricedHoldings: 1, totalShares: 150, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 250, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 5000 },
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '全部持仓', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('有 1 个持仓尚无参考价');
+  const unpriced = page.locator('table.holdings-table').first().locator('tbody tr').filter({ hasText: '长期账户' });
+  await expect(unpriced).toContainText('无参考价');
+  await expect(unpriced).toContainText('已落袋 $50.00');
+  await expect(unpriced).toContainText('—');
+  const optionRow = page.locator('table.holdings-table').nth(1).locator('tbody tr').filter({ hasText: 'PUT 2026-12-18 50P' });
+  await expect(optionRow).toContainText('$5,000.00');
+  await expect(optionRow).toContainText('45 天');
+  await optionRow.getByRole('button', { name: '打开战役' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'campaign_detail').at(-1)?.args.accountId)).toBe('acct-2');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
 });

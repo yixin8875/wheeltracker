@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F3F4F6">
+<title>Wheel Tracker · Android 概念稿</title>
+<link rel="stylesheet" href="android-demo.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.8 12 3l9 7.8"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c.7-4 3.5-6 7.5-6s6.8 2 7.5 6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m11 18-6-6 6-6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .8-7.9A6 6 0 0 0 6.2 8.5 4.5 4.5 0 0 0 7 18Z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 19.5h18.4L12 3Z"/><path d="M12 9v5"/><circle cx="12" cy="17.3" r=".8" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+  <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h12v4"/><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M16 13h2"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/><path d="M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3 7.7 7.5 9.5 4.5-1.8 7.5-5 7.5-9.5V6L12 3Z"/><path d="m8.8 12 2.2 2.2 4.4-4.4"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M3 9a14 14 0 0 1 18 0"/><path d="M6 12.5a9.5 9.5 0 0 1 12 0"/><path d="M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 20h16"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-9"/><path d="M15 6h6v6"/></symbol>
+  <symbol id="i-credit-card" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l2 2M18 5l2 2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-arrow-down-left" viewBox="0 0 24 24"><path d="M17 7 7 17"/><path d="M16 17H7V8"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></symbol>
+</svg>
+
+<div class="stage">
+  <aside class="stage-copy">
+    <span class="stage-kicker">WHEEL TRACKER · ANDROID</span>
+    <h1>口袋里的<br>车轮策略账本</h1>
+    <p>不是桌面端的缩小版：底部导航、拇指区操作、卡片化持仓、底部抽屉录入。每一个界面都按手机的握持与滑动重新设计。</p>
+    <ul>
+      <li><b>3 步</b><span>记一笔卖出 Put</span></li>
+      <li><b>左滑</b><span>平仓 / 作废 / 指派</span></li>
+      <li><b>WebDAV</b><span>加密备份与整库恢复</span></li>
+    </ul>
+    <span class="stage-note">可交互概念稿 · 数据均为演示值</span>
+  </aside>
+
+  <div class="device">
+    <div class="screen" id="screen">
+      <div class="camera" aria-hidden="true"></div>
+      <div class="statusbar" aria-hidden="true">
+        <span id="clock">9:41</span>
+        <span class="sys">
+          <svg class="sys-ic" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+          <svg class="sys-ic" viewBox="0 0 24 24"><use href="#i-wifi"/></svg>
+          <svg class="sys-ic battery" viewBox="0 0 26 12"><rect x="0.5" y="0.5" width="21" height="11" rx="3" fill="none" stroke="currentColor" opacity=".5"/><rect x="2.5" y="2.5" width="13" height="7" rx="1.6" fill="currentColor"/><path d="M23 4v4c1.2-.3 1.8-1 1.8-2S24.2 4.3 23 4Z" fill="currentColor" opacity=".5"/></svg>
+        </span>
+      </div>
+
+      <div class="viewport" id="viewport">
+
+        <section class="view active" id="view-home">
+          <header class="home-head">
+            <button class="account-chip" onclick="openAccountSheet()">
+              <span class="avatar blue" id="acctAvatar">全</span>
+              <span class="acct-text"><b id="acctName">全部账户</b><small id="acctSub">3 个账户 · USD</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-down"/></svg>
+            </button>
+            <button class="icon-btn" aria-label="到期提醒" onclick="openNoticeSheet()">
+              <svg class="icon"><use href="#i-bell"/></svg><i class="dot-badge"></i>
+            </button>
+          </header>
+
+          <div class="greeting">
+            <p id="todayLine">11月12日 周四 · 美东交易日</p>
+            <h1 id="greeting">晚上好，Yixin</h1>
+          </div>
+
+          <div class="hero">
+            <div class="hero-top"><span id="heroLabel">已落袋净收租 · 全部账户</span><span class="hero-pill" id="heroPill">本月 +$2,840</span></div>
+            <div class="hero-value" id="heroRealized"><small>$</small><span>18,642</span><em>.35</em></div>
+            <div class="hero-sub">
+              <div><span>未平仓</span><b id="heroOpen">$1,627</b></div>
+              <div><span>Put 义务</span><b id="heroCollateral">$70,000</b></div>
+              <div><span>现金覆盖</span><b id="heroCoverage">203%</b></div>
+            </div>
+          </div>
+
+          <button class="cash-warning" id="cashWarning" onclick="showToast('现金覆盖率 = 账本现金 ÷ Put 资金义务')">
+            <svg class="icon sm"><use href="#i-alert"/></svg><span id="cashWarningText">Put 义务高于账户现金，存在资金缺口</span><svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+          </button>
+
+          <div class="quick-grid">
+            <button onclick="openEntrySheet()"><span class="q-icon blue"><svg class="icon"><use href="#i-plus"/></svg></span><span>记一笔</span></button>
+            <button onclick="switchTab('expiry')"><span class="q-icon amber"><svg class="icon"><use href="#i-clock"/></svg></span><span>到期</span></button>
+            <button onclick="openReports()"><span class="q-icon green"><svg class="icon"><use href="#i-chart"/></svg></span><span>报告</span></button>
+            <button onclick="openAccountSheet()"><span class="q-icon violet"><svg class="icon"><use href="#i-wallet"/></svg></span><span>账户</span></button>
+          </div>
+
+          <button class="alert-card" id="expiryAlert" onclick="switchTab('expiry')">
+            <span class="alert-icon"><svg class="icon"><use href="#i-alert"/></svg></span>
+            <span class="alert-copy"><b id="alertTitle">3 个合约需要处理</b><small id="alertSub">TSLA 今天 · MSFT 2 天后 · AMZN 已过期</small></span>
+            <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+          </button>
+
+          <div class="section-head"><h2>我的战役</h2><button class="link" onclick="switchTab('positions')">全部持仓</button></div>
+          <div id="campaignList" class="stack"></div>
+          <p class="footnote">A 纯股票成本 · B 扣除已落袋权利金 · C′ 再扣除未平仓权利金</p>
+        </section>
+
+        <section class="view" id="view-positions">
+          <header class="page-head">
+            <div><p class="eyebrow">当前持仓</p><h1>持仓</h1><p class="sub" id="posSub">3 个标的 · 5 个合约</p></div>
+            <button class="icon-btn" aria-label="刷新报价" onclick="refreshQuotes()"><svg class="icon"><use href="#i-refresh"/></svg></button>
+          </header>
+          <div class="segmented" id="posSeg" role="tablist">
+            <button id="segStocks" onclick="setPosTab('stocks')">股票</button>
+            <button id="segOptions" onclick="setPosTab('options')">期权</button>
+          </div>
+          <div id="positionsBody" class="stack"></div>
+        </section>
+
+        <section class="view" id="view-expiry">
+          <header class="page-head">
+            <div><p class="eyebrow">美东交易日</p><h1>到期处理</h1><p class="sub">按紧急度分组 · 可直接了结</p></div>
+            <button class="icon-btn" aria-label="检查到期" onclick="checkExpiry()"><svg class="icon"><use href="#i-bell"/></svg></button>
+          </header>
+          <div class="chips" id="expiryChips"></div>
+          <div class="week-card" id="weekStrip"></div>
+          <button class="notify-banner" onclick="checkExpiry()">
+            <span class="n-icon"><svg class="icon"><use href="#i-bell"/></svg></span>
+            <span><b>检查并发送提醒</b><small>每天 09:30 自动检查 · 同一合约只提醒一次</small></span>
+            <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+          </button>
+          <div id="expiryBody"></div>
+        </section>
+
+        <section class="view" id="view-me">
+          <header class="page-head">
+            <div><p class="eyebrow">本地账本</p><h1>我的</h1></div>
+            <button class="icon-btn" aria-label="设置" onclick="showToast('设置项位于下方分组')"><svg class="icon"><use href="#i-settings"/></svg></button>
+          </header>
+
+          <div class="profile-card">
+            <span class="avatar xl gradient">Y</span>
+            <div class="profile-copy"><b>Yixin</b><small id="meAccounts">3 个账户 · 现金 $142,300</small></div>
+            <span class="badge plain">本地优先</span>
+          </div>
+
+          <p class="group-label">账本</p>
+          <div class="list-card">
+            <button class="list-row" onclick="openAccountSheet()">
+              <span class="row-icon blue"><svg class="icon"><use href="#i-wallet"/></svg></span>
+              <span class="row-text"><b>账户与现金</b><small id="meAccountSub">全部账户 · 3 个</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="openReports()">
+              <span class="row-icon green"><svg class="icon"><use href="#i-chart"/></svg></span>
+              <span class="row-text"><b>报告</b><small>收租月报 · 年度归因 · 战役对比</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="openImportSheet()">
+              <span class="row-icon violet"><svg class="icon"><use href="#i-sparkles"/></svg></span>
+              <span class="row-text"><b>导入交易</b><small>CSV 文件 · 相册截图识别</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="refreshQuotes()">
+              <span class="row-icon amber"><svg class="icon"><use href="#i-trend"/></svg></span>
+              <span class="row-text"><b>行情与报价</b><small>腾讯财经 · 可能延迟</small></span>
+              <span class="row-value">更新</span>
+            </button>
+          </div>
+
+          <p class="group-label">数据</p>
+          <div class="list-card">
+            <button class="list-row" onclick="openBackup()">
+              <span class="row-icon blue"><svg class="icon"><use href="#i-cloud"/></svg></span>
+              <span class="row-text"><b>备份与同步</b><small id="meWebdavSub">WebDAV · 今天 08:30 已备份</small></span>
+              <span class="status-dot"></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="showToast('已生成 Excel 工作簿（演示）')">
+              <span class="row-icon green"><svg class="icon"><use href="#i-download"/></svg></span>
+              <span class="row-text"><b>导出账本</b><small>CSV · Excel 工作簿 · JSON</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="showToast('检查通过：1,284 笔交易 · 5 个战役 · 持仓一致')">
+              <span class="row-icon amber"><svg class="icon"><use href="#i-database"/></svg></span>
+              <span class="row-text"><b>重算并检查账本</b><small>从事件流重建持仓与成本</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+          </div>
+
+          <p class="group-label">偏好</p>
+          <div class="list-card">
+            <div class="list-row static">
+              <span class="row-icon violet"><svg class="icon"><use href="#i-settings"/></svg></span>
+              <span class="row-text"><b>外观</b><small>浅色 / 深色 / 跟随系统</small></span>
+              <span class="theme-seg" id="themeSeg"></span>
+            </div>
+            <button class="list-row" onclick="showToast('到期提醒：提前 7 天 · 每天 09:30 检查')">
+              <span class="row-icon amber"><svg class="icon"><use href="#i-bell"/></svg></span>
+              <span class="row-text"><b>到期提醒</b><small>提前 7 天 · 已开启</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+            <button class="list-row" onclick="showToast('当前分红不摊薄 B / C′ 成本')">
+              <span class="row-icon green"><svg class="icon"><use href="#i-layers"/></svg></span>
+              <span class="row-text"><b>成本口径</b><small>分红不摊薄成本</small></span>
+              <svg class="icon sm chev"><use href="#i-chev-right"/></svg>
+            </button>
+          </div>
+
+          <p class="me-footer">Wheel Tracker <span id="meVersion">0.7.0</span> · Android 概念稿<br>演示数据，不写入真实账本</p>
+        </section>
+
+        <section class="view subview" id="view-detail">
+          <header class="subhead">
+            <button class="icon-btn ghost" aria-label="返回" onclick="goBack()"><svg class="icon"><use href="#i-arrow-left"/></svg></button>
+            <div class="subhead-title"><h1 id="detailSymbol">NVDA</h1><p id="detailSub">主账户 · 持有 300 股</p></div>
+            <button class="icon-btn ghost" aria-label="更多" onclick="showToast('分享、编辑标的与删除战役将在后续版本提供')"><svg class="icon"><use href="#i-more"/></svg></button>
+          </header>
+          <div id="detailBody"></div>
+        </section>
+
+        <section class="view subview" id="view-reports">
+          <header class="subhead">
+            <button class="icon-btn ghost" aria-label="返回" onclick="goBack()"><svg class="icon"><use href="#i-arrow-left"/></svg></button>
+            <div class="subhead-title"><h1>报告</h1><p>已实现口径 · 美东交易日</p></div>
+            <button class="icon-btn ghost" aria-label="导出" onclick="showToast('已导出当前报告（演示）')"><svg class="icon"><use href="#i-download"/></svg></button>
+          </header>
+          <div id="reportBody"></div>
+        </section>
+
+        <section class="view subview" id="view-backup">
+          <header class="subhead">
+            <button class="icon-btn ghost" aria-label="返回" onclick="goBack()"><svg class="icon"><use href="#i-arrow-left"/></svg></button>
+            <div class="subhead-title"><h1>备份与同步</h1><p>WebDAV · 端到端加密</p></div>
+            <button class="icon-btn ghost" aria-label="编辑服务器" onclick="openServerSheet()"><svg class="icon"><use href="#i-settings"/></svg></button>
+          </header>
+          <div id="backupBody"></div>
+        </section>
+
+      </div>
+
+      <button class="fab" id="fab" onclick="openEntrySheet()"><svg class="icon"><use href="#i-plus"/></svg>记一笔</button>
+
+      <nav class="tabbar" aria-label="主导航">
+        <button class="tab active" data-tab="home" onclick="switchTab('home')"><span class="tab-ic"><svg class="icon"><use href="#i-home"/></svg></span><span class="tab-label">首页</span></button>
+        <button class="tab" data-tab="positions" onclick="switchTab('positions')"><span class="tab-ic"><svg class="icon"><use href="#i-layers"/></svg></span><span class="tab-label">持仓</span></button>
+        <button class="tab" data-tab="expiry" onclick="switchTab('expiry')"><span class="tab-ic"><svg class="icon"><use href="#i-clock"/></svg><i class="nav-badge" id="expiryBadge">3</i></span><span class="tab-label">到期</span></button>
+        <button class="tab" data-tab="me" onclick="switchTab('me')"><span class="tab-ic"><svg class="icon"><use href="#i-user"/></svg></span><span class="tab-label">我的</span></button>
+      </nav>
+
+      <div class="action-bar" id="detailActions">
+        <button class="btn ghost" onclick="openEntrySheet()"><svg class="icon sm"><use href="#i-plus"/></svg>记一笔</button>
+        <button class="btn primary" id="detailPrimary" onclick="openDetailPrimary()">卖 Call</button>
+      </div>
+
+      <div class="scrim" id="scrim" onclick="closeSheet()"></div>
+      <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="操作面板"></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<script src="android-demo-data.js"></script>
+<script src="android-demo-state.js"></script>
+<script src="android-demo-util.js"></script>
+<script src="android-demo-views.js"></script>
+<script src="android-demo-positions.js"></script>
+<script src="android-demo-expiry.js"></script>
+<script src="android-demo-detail.js"></script>
+<script src="android-demo-reports.js"></script>
+<script src="android-demo-backup.js"></script>
+<script src="android-demo-restore.js"></script>
+<script src="android-demo-sheets.js"></script>
+<script src="android-demo-account.js"></script>
+<script src="android-demo-entry.js"></script>
+<script src="android-demo-entry-forms.js"></script>
+<script src="android-demo-entry-save.js"></script>
+<script src="android-demo-actions.js"></script>
+<script src="android-demo-misc.js"></script>
+<script src="android-demo-init.js"></script>
+</body>
+</html>

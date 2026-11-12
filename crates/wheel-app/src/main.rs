@@ -7,10 +7,12 @@ mod import;
 mod market;
 mod notifications;
 mod restore;
+mod secrets;
 mod store;
 mod trade_text;
 mod views;
 mod vision;
+mod webdav;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -149,15 +151,28 @@ fn main() {
             let conn = store::open(&db_path)?;
             store::ensure_account(&conn, "main", "默认账户")?;
             let backup_day = store::utc_today().to_string();
-            if let Err(error) = backup::run_if_due(&conn, &db_path, &backup_day, stamp()) {
+            let pending_upload = match backup::run_if_due(&conn, &db_path, &backup_day, stamp()) {
                 // A failed automatic snapshot must not prevent the app opening.
-                eprintln!("automatic backup failed: {error:#}");
-            }
+                Err(error) => {
+                    eprintln!("automatic backup failed: {error:#}");
+                    None
+                }
+                Ok(Some(path)) => Some(path),
+                Ok(None) => None,
+            };
             app.manage(AppState {
                 conn: Mutex::new(conn),
                 db_path: db_path.display().to_string(),
                 data_dir: dir.display().to_string(),
             });
+            if let Some(path) = pending_upload {
+                // Upload after state is managed so a slow server never delays
+                // the window and the worker can always read the settings.
+                webdav::spawn_auto_upload(app.handle().clone(), path);
+            } else {
+                // A failed upload left a snapshot queued; retry it quietly.
+                webdav::spawn_retry_upload(app.handle().clone());
+            }
 
             setup_tray(app)?;
 
@@ -191,8 +206,10 @@ fn main() {
                 };
                 let db_path = PathBuf::from(&state.db_path);
                 let backup_day = store::utc_today().to_string();
-                if let Err(error) = backup::run_if_due(&conn, &db_path, &backup_day, stamp()) {
-                    eprintln!("automatic backup failed: {error:#}");
+                match backup::run_if_due(&conn, &db_path, &backup_day, stamp()) {
+                    Err(error) => eprintln!("automatic backup failed: {error:#}"),
+                    Ok(Some(path)) => webdav::spawn_auto_upload(handle.clone(), path),
+                    Ok(None) => {}
                 }
             });
             Ok(())
@@ -200,6 +217,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::dashboard,
             commands::all_accounts_overview,
+            commands::all_holdings_overview,
             commands::cash_movements,
             commands::check_expiries,
             commands::send_test_notification,
@@ -234,6 +252,15 @@ fn main() {
             commands::validate_backup,
             commands::stage_restore,
             commands::restore_status,
+            commands::webdav_get_settings,
+            commands::webdav_save_settings,
+            commands::webdav_test,
+            commands::webdav_list,
+            commands::webdav_backup_now,
+            commands::webdav_restore,
+            commands::webdav_stage_restore,
+            commands::webdav_delete,
+            commands::webdav_status,
             commands::import_preview,
             commands::import_commit,
             commands::import_save_mapping,
