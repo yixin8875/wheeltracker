@@ -1,6 +1,6 @@
 # P11 Android 客户端设计
 
-> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）· 2026-11-12
+> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）；M0.5 技术验证已完成（见第 12 节）· 2026-11-12
 > 关联：[P10 WebDAV 备份与导入](P10-webdav.md)
 
 ## 0. 定位
@@ -226,6 +226,7 @@
 | 阶段 | 内容 | 预估 |
 |---|---|---|
 | M0 | 可交互概念稿（本 Demo），验证信息架构与手势 | 已完成 |
+| M0.5 | Tauri Android 壳跑通：APK 构建、装机、bundled SQLite + wheel-core 重放、一张手机尺寸页面（见第 12 节） | 已完成 |
 | M1 | Tauri Android 壳、SQLite 只读、首页/持仓/到期、深色模式 | 1–2 周 |
 | M2 | 记一笔抽屉、合约操作、WebDAV 备份/恢复 | 1–2 周 |
 | M3 | 本地通知、离线、分享导入、生物识别 | 1 周 |
@@ -255,3 +256,56 @@
 2. 腾讯行情接口在移动网络/海外网络下的可用性与 UA 限制需要实测。
 3. 是否上架 Google Play：需要隐私政策、Data Safety 表单、目标 SDK 更新节奏。
 4. 平板/折叠屏是否单独布局：M4 之后再评估。
+
+---
+
+## 12. M0.5 技术验证结论（2026-11-12）
+
+目标：在真机/模拟器上证明「Tauri 2 Android 壳 + bundled SQLite + wheel-core 重放 + 前端渲染」这条链路成立。**不含真实账本、写入操作和任何移动端功能页面。**
+
+### 12.1 结论
+
+| 验证项 | 结果 | 证据 |
+|---|---|---|
+| APK 构建（x86_64 debug） | ✅ | `app-x86_64-debug.apk`，约 136 MB（debug 未裁剪，发布包会小很多） |
+| 安装与冷启动 | ✅ | `adb install -r` Success；`am start -W` → `Status: ok`，冷启动 8.3 s（模拟器 + 软件 GPU + debug 包，不代表真机） |
+| bundled SQLite 在 Android 上运行 | ✅ | 页面显示 `SQLite 3.46.0`；设备上 `run-as com.wheeltracker.mobile ls -l` 可见 `wheel-mobile.db`（12288 字节） |
+| `wheel-core` 在 Android 上重放 | ✅ | 4 条合成事件 → AAPL 战役：持股 100、成本 B 146.00、成本 C′ 144.50、已落袋 200.00、未平仓 150.00 |
+| 手机尺寸前端渲染 + IPC | ✅ | 390×844 视口首屏完整显示；`invoke('mobile_probe')` 成功；点「重新读取」时间戳更新，事件数仍为 4（seed 幂等） |
+| 运行期错误 | ✅ 无 | logcat 无 panic / AndroidRuntime / FATAL，仅有模拟器系统时钟告警 |
+| Rust 单元测试 | ✅ | `probe_seeds_and_replays_a_campaign` 通过 |
+
+![M0.5 探针页面（模拟器 1080×2400）](m05-probe.png)
+
+### 12.2 工程结构
+
+- `crates/wheel-mobile`：独立 Tauri 2 crate（`staticlib/cdylib/rlib`），只依赖 `wheel-core`、`rusqlite`、`tauri`，桌面窗口/托盘/更新逻辑一概不进移动 target。
+- `ui-mobile/`：独立 Vite + React + TypeScript 应用（dev 端口 1421），移动优先样式，不复用桌面 UI。
+- 探针命令 `mobile_probe`：打开应用私有目录的 `wheel-mobile.db`（WAL）→ 空库时写 4 条合成事件 → 从 SQLite 读回 → `wheel_core` 重放 → 返回战役口径。页面明确标注「探针数据，不是真实账本」。
+- `crates/wheel-mobile/gen/` 为 `tauri android init` 生成的 Gradle 工程，已加入 `.gitignore`，不提交。
+
+### 12.3 本机工具链
+
+- JDK 17（Temurin 17.0.21+9，`G:\dev\jdk-17`）
+- Android SDK `G:\dev\Android\Sdk`，NDK 28.2.13676358，`compileSdk/targetSdk 37`，`minSdk 24`
+- 模拟器 AVD `Forme_Test_API35`（x86_64，API 35），无窗口模式运行
+- Cargo 目标 `x86_64-linux-android`；`rusqlite` bundled 源码随 NDK 交叉编译
+
+### 12.4 Windows 无符号链接权限的绕行
+
+Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/android/app/src/main/jniLibs/<abi>/`。本机未开 Windows 开发者模式，软链失败（`Creation symbolic link is not allowed for this system`）。当前做法：
+
+1. 正常执行到软链报错为止（Rust 与前端产物已生成）；
+2. 手动复制 `target/x86_64-linux-android/debug/libwheel_mobile_lib.so` 到 `gen/android/app/src/main/jniLibs/x86_64/`；
+3. 把 `ui-mobile/dist/*` 复制到 `gen/android/app/src/main/assets/`；
+4. 直接调用 `gen/android/gradlew.bat assembleX86_64Debug`。
+
+这是**仅限本机**的绕行：`gen/android` 已被忽略，重新生成后需再做一次。正式方案二选一：开启 Windows 开发者模式，或在 CI 的 Linux runner 上构建（顺带产出 arm64 与 AAB）。
+
+### 12.5 下一步（M1）
+
+- 用真实 `wheel.db` schema 与 `wheel-app` 的 store/views 替换探针，只读打开桌面账本副本。
+- 首页/持仓/到期三个 Tab + 深色模式，按第 4 节规格实现。
+- 构建矩阵：`arm64-v8a` + `x86_64`，加 release 签名与体积检查。
+- 验证 360×800 与系统字体 1.3× 下不截断。
+- 决定 Android 构建放本机（开发者模式）还是 GitHub Actions。

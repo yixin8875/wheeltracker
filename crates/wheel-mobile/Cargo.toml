@@ -1,0 +1,22 @@
+[package]
+name = "wheel-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wheel Tracker Android spike shell (M0.5)."
+
+[lib]
+name = "wheel_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+wheel-core = { path = "../wheel-core" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+time.workspace = true
+anyhow.workspace = true

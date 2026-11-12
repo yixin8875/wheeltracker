@@ -4996,6 +4996,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wheel-mobile"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "time",
+ "wheel-core",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

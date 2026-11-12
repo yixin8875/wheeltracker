@@ -10,6 +10,7 @@ dist/
 /ui/playwright-report/
 /test-results/
 /crates/wheel-app/gen/
+/crates/wheel-mobile/gen/
 *.log
 __pycache__/
 
