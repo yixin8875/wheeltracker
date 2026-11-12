@@ -41,7 +41,7 @@ export function SymbolPicker({ value, onChange, label = '标的代码', autoFocu
   return <div className="symbol-picker" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
     <label htmlFor={id}>{label}</label>
     <div className="symbol-input"><Search size={16} aria-hidden="true"/><input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open} aria-controls={`${id}-list`} aria-activedescendant={open && active >= 0 && results[active] ? `${id}-${active}` : undefined}
-      autoFocus={autoFocus} required maxLength={80} pattern="[A-Za-z][A-Za-z0-9.\-]{0,19}" title="请选择搜索结果，或填写完整美股代码" autoComplete="off" placeholder="代码或公司名称，如 AAPL / Apple" value={value}
+      autoFocus={autoFocus} required maxLength={80} pattern="[A-Za-z][A-Za-z0-9.\-]{0,19}" title="请选择搜索结果，或填写完整美股代码" autoComplete="off" placeholder="代码或公司名称" value={value}
       onFocus={() => setOpen(true)} onChange={event => { onChange(event.target.value.toUpperCase()); setOpen(true); setRemote([]); setActive(-1); }}
       onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); setOpen(false); }

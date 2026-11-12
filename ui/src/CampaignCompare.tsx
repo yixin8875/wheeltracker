@@ -9,7 +9,11 @@ import { money, percent } from './lib';
 
 echarts.use([ScatterChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
-const COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#8b5cf6', '#d4a017', '#0e7490', '#db2777', '#4d7c0f'];
+const COLORS = ['#0f5fbe', '#7d7668', '#2f6f6a', '#a05f2c', '#5b6b8a', '#8a5a12', '#4d6b4f', '#9c4a44'];
+const INK_3 = '#8b8477';
+const LINE = 'rgba(30, 28, 23, .17)';
+const GRID = 'rgba(30, 28, 23, .07)';
+const FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 function utc(value: string) {
   return Date.parse(`${value}T00:00:00Z`);
@@ -73,28 +77,33 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
       return {
         name: symbol,
         type: 'scatter',
-        symbolSize: 16,
+        symbolSize: 14,
         data: comparisons
           .filter(item => item.campaign.symbol === symbol && item.returnPct != null)
           .map(item => ({
             name: item.campaign.id,
             value: [item.days, Number(((item.returnPct ?? 0) * 100).toFixed(2))],
             itemStyle: {
-              color: item.campaign.status === 'active' ? '#ffffff' : color,
+              color: item.campaign.status === 'active' ? '#fffefa' : color,
               borderColor: color,
-              borderWidth: item.campaign.status === 'active' ? 3 : 2,
+              borderWidth: 2,
             },
             comparison: item,
           })),
       };
     });
     chart.setOption({
-      backgroundColor: '#ffffff',
-      textStyle: { color: '#626873', fontFamily: 'Segoe UI, Microsoft YaHei, sans-serif' },
-      grid: { left: 20, right: 30, top: 60, bottom: 24, containLabel: true },
-      legend: { top: 8, textStyle: { color: '#626873' } },
+      backgroundColor: 'transparent',
+      textStyle: { color: '#575249', fontFamily: FONT, fontSize: 12 },
+      grid: { left: 16, right: 24, top: 48, bottom: 16, containLabel: true },
+      legend: { top: 4, itemWidth: 10, itemHeight: 10, itemGap: 16, textStyle: { color: '#575249', fontSize: 12 } },
       tooltip: {
         trigger: 'item',
+        backgroundColor: '#fffefa',
+        borderColor: LINE,
+        borderWidth: 1,
+        textStyle: { color: '#1e1c17', fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
         formatter: (parameter: unknown) => {
           const item = parameter as { data?: { comparison?: Comparison } };
           const comparison = item.data?.comparison;
@@ -106,12 +115,20 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
             `峰值投入：${money(comparison.capital)}`,
             `收益率：${percent(comparison.returnPct)}`,
             `周期：${comparison.campaign.cycles} 次了结`,
-            comparison.campaign.status === 'active' ? '<span style="color:#9a6700">进行中收益不含未平仓权利金与浮盈亏</span>' : '',
+            comparison.campaign.status === 'active' ? '<span style="color:#8a5a12">进行中收益不含未平仓权利金与浮盈亏</span>' : '',
           ].filter(Boolean).join('<br/>');
         },
       },
-      xAxis: { type: 'value', name: '持续天数', nameLocation: 'middle', nameGap: 28, minInterval: 1, axisLabel: { color: '#626873' }, splitLine: { lineStyle: { color: '#edf0f3' } } },
-      yAxis: { type: 'value', name: '已实现收益率 %', axisLabel: { color: '#626873', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#edf0f3' } } },
+      xAxis: {
+        type: 'value', name: '持续天数', nameLocation: 'middle', nameGap: 26, minInterval: 1,
+        nameTextStyle: { color: INK_3, fontSize: 11 }, axisLine: { lineStyle: { color: LINE } }, axisTick: { show: false },
+        axisLabel: { color: INK_3, fontSize: 11 }, splitLine: { lineStyle: { color: GRID } },
+      },
+      yAxis: {
+        type: 'value', name: '已实现收益率 %',
+        nameTextStyle: { color: INK_3, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { color: INK_3, fontSize: 11, formatter: '{value}%' }, splitLine: { lineStyle: { color: GRID } },
+      },
       series,
     });
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(element.current);

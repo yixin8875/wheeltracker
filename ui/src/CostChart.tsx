@@ -8,10 +8,16 @@ import { money } from './lib';
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
 const TRACKS = [
-  { name: 'A · 纯股票成本', key: 'costA' as const, color: '#2a78d6', type: 'dashed' },
-  { name: 'B · 已落袋有效成本', key: 'costB' as const, color: '#eb6834', type: 'solid' },
-  { name: 'C′ · 含未平仓权利金', key: 'costC' as const, color: '#1baf7a', type: 'dotted' },
+  { name: 'A · 纯股票成本', key: 'costA' as const, color: '#a39a88', type: 'dashed' },
+  { name: 'B · 已落袋有效成本', key: 'costB' as const, color: '#0f5fbe', type: 'solid' },
+  { name: 'C′ · 含未平仓权利金', key: 'costC' as const, color: '#c9c0ad', type: 'dotted' },
 ];
+const INK = '#1e1c17';
+const INK_2 = '#575249';
+const INK_3 = '#8b8477';
+const LINE = 'rgba(30, 28, 23, .17)';
+const GRID = 'rgba(30, 28, 23, .07)';
+const FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 export function CostChart({ points, prices = [], symbol, callStrike }: { points: CostPoint[]; prices?: Price[]; symbol?: string; callStrike?: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -51,33 +57,38 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
         symbolSize: 8,
         data: axis.map(date => costAt(date)?.[item.key] ?? null),
         connectNulls: true,
-        itemStyle: { color: item.color, borderColor: '#ffffff', borderWidth: 2 },
-        lineStyle: { width: 2, type: item.type },
+        itemStyle: { color: item.color, borderColor: '#fffefa', borderWidth: 2 },
+        lineStyle: { width: item.key === 'costB' ? 2.5 : 1.5, type: item.type, opacity: item.key === 'costB' ? 1 : .9 },
         markLine: item.key !== 'costB' || (!lastPrice && callStrike == null) ? undefined : {
           symbol: 'none',
           silent: true,
-          label: { color: '#626873', formatter: (parameter: { name?: string }) => parameter.name ?? '' },
+          label: { color: INK_3, fontSize: 11, formatter: (parameter: { name?: string }) => parameter.name ?? '' },
           data: [
-            lastPrice != null ? { name: `现价 ${money(lastPrice)}`, yAxis: lastPrice, lineStyle: { color: '#8b5cf6', type: 'dashed', width: 1 } } : null,
-            callStrike != null ? { name: `Call 行权价 ${money(callStrike)}`, yAxis: callStrike, lineStyle: { color: '#d4a017', type: 'dashed', width: 1 } } : null,
+            lastPrice != null ? { name: `现价 ${money(lastPrice)}`, yAxis: lastPrice, lineStyle: { color: INK, type: 'dashed', width: 1 } } : null,
+            callStrike != null ? { name: `Call 行权价 ${money(callStrike)}`, yAxis: callStrike, lineStyle: { color: '#8a5a12', type: 'dashed', width: 1 } } : null,
           ].filter(Boolean),
         },
       }));
     const priceSeries = quotes.length ? [{
       name: '参考价',
       type: 'line' as const,
-      symbolSize: 5,
+      symbolSize: 4,
       data: axis.map(date => quoteByDate.get(date) ?? null),
       connectNulls: false,
-      itemStyle: { color: '#6b7280' },
-      lineStyle: { width: 1.5, type: 'solid', opacity: 0.85 },
+      itemStyle: { color: INK_2 },
+      lineStyle: { width: 1.5, type: 'solid', opacity: .7 },
     }] : [];
     chart.setOption({
-      backgroundColor: '#ffffff', textStyle: { color: '#626873', fontFamily: 'Segoe UI, Microsoft YaHei, sans-serif' },
-      grid: { left: 20, right: 20, top: 88, bottom: 20, containLabel: true },
-      legend: { top: 10, textStyle: { color: '#626873' } },
+      backgroundColor: 'transparent', textStyle: { color: INK_2, fontFamily: FONT, fontSize: 12 },
+      grid: { left: 16, right: 20, top: 48, bottom: 16, containLabel: true },
+      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: INK_2, fontSize: 12 } },
       tooltip: {
         trigger: 'axis',
+        backgroundColor: '#fffefa',
+        borderColor: LINE,
+        borderWidth: 1,
+        textStyle: { color: INK, fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
         axisPointer: { type: 'cross' },
         formatter: (parameters: unknown) => {
           const list = parameters as { axisValue?: string }[];
@@ -99,8 +110,16 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
           ].filter(Boolean).join('<br/>');
         },
       },
-      xAxis: { type: 'category', data: axis, boundaryGap: false, axisLine: { lineStyle: { color: '#d5d7dc' } }, axisLabel: { color: '#626873', alignMinLabel: 'left', alignMaxLabel: 'right', hideOverlap: true } },
-      yAxis: { type: 'value', name: '美元 / 股', scale: true, axisLabel: { color: '#626873' }, splitLine: { lineStyle: { color: '#edf0f3' } } },
+      xAxis: {
+        type: 'category', data: axis, boundaryGap: false,
+        axisLine: { lineStyle: { color: LINE } }, axisTick: { show: false },
+        axisLabel: { color: INK_3, fontSize: 11, alignMinLabel: 'left', alignMaxLabel: 'right', hideOverlap: true, formatter: (value: string) => value.slice(5) },
+      },
+      yAxis: {
+        type: 'value', scale: true, axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { color: INK_3, fontSize: 11, formatter: (value: number) => `$${value}` },
+        splitLine: { lineStyle: { color: GRID } },
+      },
       series: [...series, ...priceSeries],
     });
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(element.current);
