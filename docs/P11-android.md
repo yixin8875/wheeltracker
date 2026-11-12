@@ -1,6 +1,6 @@
 # P11 Android 客户端设计
 
-> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）；M0.5 技术验证已完成（见第 12 节）· 2026-11-12
+> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）；M0.5/M1 已完成，M2 记账与合约操作已完成、WebDAV 待接入（见第 12、13 节）· 2026-11-12
 > 关联：[P10 WebDAV 备份与导入](P10-webdav.md)
 
 ## 0. 定位
@@ -227,8 +227,8 @@
 |---|---|---|
 | M0 | 可交互概念稿（本 Demo），验证信息架构与手势 | 已完成 |
 | M0.5 | Tauri Android 壳跑通：APK 构建、装机、bundled SQLite + wheel-core 重放、一张手机尺寸页面（见第 12 节） | 已完成 |
-| M1 | Tauri Android 壳、SQLite 只读、首页/持仓/到期、深色模式 | 1–2 周 |
-| M2 | 记一笔抽屉、合约操作、WebDAV 备份/恢复 | 1–2 周 |
+| M1 | 真实 `wheel.db`、首页/持仓/到期、深色模式（见第 13 节） | 已完成 |
+| M2 | 记一笔抽屉、合约操作已完成；WebDAV 备份/恢复待接入（见第 13 节） | 进行中 |
 | M3 | 本地通知、离线、分享导入、生物识别 | 1 周 |
 | M4 | 桌面小组件、Play Store 上架材料 | 1–2 周 |
 
@@ -309,3 +309,53 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 - 构建矩阵：`arm64-v8a` + `x86_64`，加 release 签名与体积检查。
 - 验证 360×800 与系统字体 1.3× 下不截断。
 - 决定 Android 构建放本机（开发者模式）还是 GitHub Actions。
+
+---
+
+## 13. M1 / M2 实现记录（2026-11-12）
+
+### 13.1 共享数据层
+
+新增 workspace crate `wheel-store`，把桌面端原先放在 `wheel-app` 里的纯数据代码移出来，桌面与移动共用同一套规则：
+
+| 模块 | 内容 |
+|---|---|
+| `store` | SQLite schema、事件读写、价格、账户、回放一致性检查 |
+| `events` | `NewEventReq` → `Event` 的校验与序号分配（两台设备同一套校验） |
+| `views` | 桌面/移动共用的 camelCase DTO、成本卡、持仓、汇总 |
+| `market` / `backup` / `restore` / `crypto` | 行情解析、快照、崩溃安全恢复、备份加密 |
+
+`wheel-app` 只保留 Tauri 外壳、窗口/托盘、通知与 WebDAV 编排，并通过 `pub use wheel_store::{…}` 保持原有 `crate::store` 路径不变。`wheel-mobile` 只依赖 `wheel-core` + `wheel-store` + `tauri` + `rusqlite`，不引入窗口/托盘/更新插件。
+
+### 13.2 移动端后端
+
+- 数据库：应用私有目录 `wheel.db`，与桌面同一 schema（`SCHEMA_VERSION = 4`），WAL。
+- 命令：`mobile_bootstrap`（账户、今天、库路径、演示标记）、`mobile_overview`（汇总、战役、期权、持股，按到期排序）、`mobile_add_event`（走 `wheel-store::events` 的同一套校验）。
+- 首次启动且账户无事件时写入 5 条合成 AAPL 事件（入金 → 卖 Put → 到期 → 买 100 股 → 卖 Call），日期相对安装日生成；一旦有事件就不再写入。
+- 写入后立即重新回放，页面数据不经过缓存，账本始终以事件为准。
+
+### 13.3 移动端界面
+
+- 4 个 Tab：首页（Hero + 快捷操作 + 到期提醒 + 战役卡）、持仓（股票/期权分段）、到期（已过期/7 天/30 天/更远筛选 + 平仓/作废/指派）、我的（账户、外观、数据、版本、库路径）。
+- FAB「记一笔」底部抽屉：11 种交易类型，期权方向切换、实时净权利金与占用资金预览；从持仓/到期进入时预填合约。
+- 深色模式跟随系统，也可手动浅色/深色；金额使用等宽数字；触摸目标 ≥ 44px。
+
+### 13.4 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| workspace 测试 | 169 通过（wheel-app 89、wheel-store 45+1 ignored、wheel-mobile 2、wheel-core 32） |
+| Android 首页 | 演示账本 5 条事件 → 已落袋 200.00、未平仓 150.00、Put 义务 0、AAPL 成本 B 146.00 / C′ 144.50 |
+| Android 到期 | 一张 CALL $160 · 20 天后到期，筛选与动作按钮可用 |
+| Android 写入 | 记一笔「入金 1000」→ 事件数 5→6，我的页现金 6,550.00（含入金、卖 Put、买股、卖 Call 现金流） |
+| 深色模式 | 模拟器与浏览器均验证 |
+| APK | x86_64 debug，构建成功；Windows 软链绕行同第 12.4 节 |
+
+![M1 首页：真实 wheel.db 回放（模拟器 1080×2400）](m1-android.png)
+
+### 13.5 尚未完成
+
+- **WebDAV**：桌面端 `webdav.rs` 仍绑定 `AppState` 与 Windows 凭据库，移动端需要先把它抽到 `wheel-store` 并换成可注入的凭据/目录上下文；Android 密码应进 Keystore 或 EncryptedSharedPreferences，绝不写 SQLite。
+- **真实账本导入**：目前移动端只会在空库时写演示数据；把桌面 `wheel.db` 导入手机需要 SAF 选择文件 + 校验/覆盖流程。
+- **发布**：arm64 构建、release 签名、AAB 与体积检查。
+- **通知/后台**：到期提醒仍是 v1 的启动/回前台检查。

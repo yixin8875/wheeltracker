@@ -4985,6 +4985,7 @@ dependencies = [
  "time",
  "tokio",
  "wheel-core",
+ "wheel-store",
  "windows-sys 0.61.2",
 ]
 
@@ -5006,6 +5007,23 @@ dependencies = [
  "tauri",
  "tauri-build",
  "time",
+ "wheel-core",
+ "wheel-store",
+]
+
+[[package]]
+name = "wheel-store"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "http",
+ "reqwest 0.12.28",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
  "wheel-core",
 ]
 

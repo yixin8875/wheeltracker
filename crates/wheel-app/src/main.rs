@@ -1,18 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod backup;
 mod commands;
-mod crypto;
 mod import;
-mod market;
 mod notifications;
-mod restore;
 mod secrets;
-mod store;
 mod trade_text;
-mod views;
 mod vision;
 mod webdav;
+
+// The ledger, views and backup stack is shared with the mobile shell.
+pub use wheel_store::{backup, crypto, events, market, restore, store, views};
 
 use std::path::PathBuf;
 use std::sync::Mutex;

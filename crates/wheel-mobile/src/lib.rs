@@ -1,240 +1,293 @@
-//! M0.5 Android spike: prove that Tauri, bundled SQLite and `wheel-core`
-//! replay work together on a phone-sized screen.
+//! Wheel Tracker Mobile shell (M1/M2).
 //!
-//! The probe deliberately uses a tiny dedicated table instead of the desktop
-//! schema. Extracting the shared data layer is an M1 task; this crate only
-//! validates the toolchain and the Rust/WebView boundary.
+//! The shell owns the SQLite connection and the app data directory; every
+//! ledger rule lives in `wheel-store` and `wheel-core`, exactly as on desktop.
+//! Commands below return the same camelCase views the desktop uses, plus a few
+//! mobile-only fields (account list, demo flag, database path).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection};
+use anyhow::{Context, Result};
+use rusqlite::Connection;
 use serde::Serialize;
-use tauri::Manager;
-use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
-use time::{Date, OffsetDateTime};
-use wheel_core::{replay, Event, OptionContract, Right, Settings};
+use tauri::{Manager, State};
+use time::Duration;
+use wheel_core::DerivedState;
+use wheel_store::{events, store, views};
 
-const ACCOUNT_ID: &str = "main";
-const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
-    format_description!("[year]-[month]-[day]");
+const DEMO_ACCOUNT: &str = "main";
+const DEMO_ACCOUNT_NAME: &str = "主账户";
+const DATABASE_FILE: &str = "wheel.db";
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CampaignCard {
-    symbol: String,
-    shares: u32,
-    cost_a: Option<f64>,
-    cost_b: Option<f64>,
-    cost_c: Option<f64>,
-    premium_realized: f64,
-    premium_open: f64,
-    status: String,
+struct MobileState {
+    conn: Mutex<Connection>,
+    db_path: PathBuf,
+    demo: bool,
+}
+
+impl MobileState {
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProbeView {
-    db_path: String,
-    sqlite_version: String,
+struct AccountView {
+    id: String,
+    name: String,
+    broker: Option<String>,
     event_count: usize,
-    campaigns: Vec<CampaignCard>,
-    generated_at: String,
-    note: String,
+    archived: bool,
 }
 
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS probe_events (
-  id           TEXT PRIMARY KEY,
-  seq          INTEGER NOT NULL,
-  occurred_at  TEXT NOT NULL,
-  kind         TEXT NOT NULL,
-  symbol       TEXT NOT NULL,
-  expiry       TEXT,
-  strike       REAL,
-  right        TEXT,
-  qty          INTEGER NOT NULL,
-  price        REAL NOT NULL,
-  fees         REAL NOT NULL
-);
-"#;
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapView {
+    account_id: String,
+    today: String,
+    db_path: String,
+    demo: bool,
+    accounts: Vec<AccountView>,
+}
 
-fn initialize(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA)?;
-    Ok(())
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverviewView {
+    account_id: String,
+    as_of: String,
+    db_path: String,
+    demo: bool,
+    summary: views::SummaryView,
+    campaigns: Vec<views::CampaignCardView>,
+    positions: Vec<views::PositionView>,
+    lots: Vec<views::LotView>,
+    accounts: Vec<AccountView>,
 }
 
 fn open_database(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .with_context(|| format!("cannot open mobile database at {}", path.display()))?;
-    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-    initialize(&conn)?;
-    Ok(conn)
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    store::open(path).with_context(|| format!("cannot open {}", path.display()))
 }
 
-fn seed_if_empty(conn: &Connection) -> Result<()> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| row.get(0))?;
-    if count > 0 {
-        return Ok(());
+fn accounts(conn: &Connection) -> Result<Vec<AccountView>> {
+    Ok(store::list_accounts(conn)?
+        .into_iter()
+        .map(|account| AccountView {
+            id: account.id,
+            name: account.name,
+            broker: account.broker,
+            event_count: account.event_count,
+            archived: account.archived_at.is_some(),
+        })
+        .collect())
+}
+
+fn derive(conn: &Connection, account_id: &str) -> Result<DerivedState> {
+    let events = store::list_events(conn, account_id)?;
+    let settings = store::get_settings(conn)?;
+    store::replay_checked(account_id, &events, settings)
+}
+
+fn day(offset: i64) -> String {
+    (store::today() + Duration::days(offset)).to_string()
+}
+
+/// A small, coherent ledger so a fresh install shows a real campaign instead of
+/// an empty screen. Dates are relative to the install day so the expiry tab has
+/// something to show. Never seeded once the account has any event.
+fn seed_demo(conn: &Connection) -> Result<bool> {
+    store::ensure_account(conn, DEMO_ACCOUNT, DEMO_ACCOUNT_NAME)?;
+    if store::count_events(conn, DEMO_ACCOUNT)? > 0 {
+        return Ok(false);
     }
-    let rows = [
-        ("m0-1", 1_i64, "2026-01-05", "sell_put", "AAPL", Some("2026-02-20"), Some(150.0), Some("put"), 1_i64, 2.0, 0.0),
-        ("m0-2", 2, "2026-02-20", "expire_put", "AAPL", Some("2026-02-20"), Some(150.0), Some("put"), 1, 0.0, 0.0),
-        ("m0-3", 3, "2026-02-23", "buy_shares", "AAPL", None, None, None, 100, 148.0, 0.0),
-        ("m0-4", 4, "2026-02-24", "sell_call", "AAPL", Some("2026-03-20"), Some(160.0), Some("call"), 1, 1.5, 0.0),
+    let request = |kind: &str,
+                   date: String,
+                   qty: u32,
+                   price: f64,
+                   amount: f64,
+                   expiry: Option<String>,
+                   strike: Option<f64>,
+                   right: Option<&str>| events::NewEventReq {
+        account_id: Some(DEMO_ACCOUNT.to_string()),
+        date,
+        kind: kind.to_string(),
+        symbol: "AAPL".to_string(),
+        qty,
+        price,
+        fees: 0.0,
+        amount,
+        expiry,
+        strike,
+        right: right.map(str::to_string),
+        multiplier: None,
+        split_numerator: None,
+        split_denominator: None,
+        split_cash_in_lieu: None,
+        note: Some("演示数据".to_string()),
+    };
+    let reqs = vec![
+        request(
+            "cash_deposit",
+            day(-60),
+            0,
+            0.0,
+            20_000.0,
+            None,
+            None,
+            None,
+        ),
+        request(
+            "option_open_short",
+            day(-60),
+            1,
+            2.0,
+            0.0,
+            Some(day(-45)),
+            Some(150.0),
+            Some("P"),
+        ),
+        request(
+            "option_expire",
+            day(-45),
+            1,
+            0.0,
+            0.0,
+            Some(day(-45)),
+            Some(150.0),
+            Some("P"),
+        ),
+        request("shares_buy", day(-45), 100, 148.0, 0.0, None, None, None),
+        request(
+            "option_open_short",
+            day(-20),
+            1,
+            1.5,
+            0.0,
+            Some(day(20)),
+            Some(160.0),
+            Some("C"),
+        ),
     ];
-    for row in rows {
-        conn.execute(
-            "INSERT INTO probe_events
-               (id, seq, occurred_at, kind, symbol, expiry, strike, right, qty, price, fees)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-fn load_events(conn: &Connection) -> Result<Vec<Event>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, seq, occurred_at, kind, symbol, expiry, strike, right, qty, price, fees
-         FROM probe_events ORDER BY seq",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, Option<String>>(5)?,
-            row.get::<_, Option<f64>>(6)?,
-            row.get::<_, Option<String>>(7)?,
-            row.get::<_, i64>(8)?,
-            row.get::<_, f64>(9)?,
-            row.get::<_, f64>(10)?,
-        ))
-    })?;
-
-    let mut events = Vec::new();
-    for row in rows {
-        let (
-            id,
-            seq,
-            occurred_at,
-            kind,
-            symbol,
-            expiry,
-            strike,
-            right,
-            qty,
-            price,
-            fees,
-        ) = row?;
-        let at = Date::parse(&occurred_at, DATE_FORMAT)
-            .with_context(|| format!("bad probe date {occurred_at}"))?;
-        let expiry = expiry
-            .as_deref()
-            .map(|value| Date::parse(value, DATE_FORMAT))
-            .transpose()
-            .context("bad probe expiry")?;
-        let right = match right.as_deref() {
-            Some("put") => Some(Right::Put),
-            Some("call") => Some(Right::Call),
-            _ => None,
-        };
-        let contract = || -> Result<OptionContract> {
-            let expiry = expiry.context("option row is missing expiry")?;
-            let strike = strike.context("option row is missing strike")?;
-            let right = right.context("option row is missing right")?;
-            Ok(OptionContract::new(&symbol, expiry, strike, right))
-        };
-        let event = match kind.as_str() {
-            "sell_put" | "sell_call" => Event::sell_option(
-                ACCOUNT_ID,
-                &id,
-                seq as u64,
-                at,
-                contract()?,
-                qty as u32,
-                price,
-                fees,
-            ),
-            "expire_put" | "expire_call" => Event::expire_option(
-                ACCOUNT_ID,
-                &id,
-                seq as u64,
-                at,
-                contract()?,
-                qty as u32,
-            ),
-            "buy_shares" => Event::buy_shares(
-                ACCOUNT_ID,
-                &id,
-                seq as u64,
-                at,
-                &symbol,
-                qty as u32,
-                price,
-                fees,
-            ),
-            other => bail!("unsupported probe event kind {other}"),
-        };
-        events.push(event);
-    }
-    Ok(events)
+    events::append_requests(conn, reqs).map_err(anyhow::Error::msg)?;
+    Ok(true)
 }
 
 #[tauri::command]
-fn mobile_probe(app: tauri::AppHandle) -> Result<ProbeView, String> {
-    probe(&app).map_err(|error| format!("{error:#}"))
+fn mobile_bootstrap(state: State<'_, MobileState>) -> Result<BootstrapView, String> {
+    bootstrap(&state).map_err(|error| format!("{error:#}"))
 }
 
-fn probe(app: &tauri::AppHandle) -> Result<ProbeView> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .context("no writable app data directory")?;
-    std::fs::create_dir_all(&dir)?;
-    let db_path = dir.join("wheel-mobile.db");
-    let conn = open_database(&db_path)?;
-    seed_if_empty(&conn)?;
-    let events = load_events(&conn)?;
-    let state = replay(ACCOUNT_ID, &events, Settings::default())?;
-    let sqlite_version: String =
-        conn.query_row("SELECT sqlite_version()", [], |row| row.get(0))?;
+fn bootstrap(state: &MobileState) -> Result<BootstrapView> {
+    let conn = state.conn();
+    Ok(BootstrapView {
+        account_id: DEMO_ACCOUNT.to_string(),
+        today: store::today().to_string(),
+        db_path: state.db_path.display().to_string(),
+        demo: state.demo,
+        accounts: accounts(&conn)?,
+    })
+}
 
-    let campaigns = state
+#[tauri::command]
+fn mobile_overview(
+    state: State<'_, MobileState>,
+    account_id: Option<String>,
+) -> Result<OverviewView, String> {
+    overview(&state, account_id).map_err(|error| format!("{error:#}"))
+}
+
+fn overview(state: &MobileState, account_id: Option<String>) -> Result<OverviewView> {
+    let account_id = events::account_or_default(account_id);
+    let conn = state.conn();
+    let derived = derive(&conn, &account_id)?;
+    let prices = store::latest_prices(&conn)?;
+    let today = store::today();
+
+    let mut campaigns: Vec<views::CampaignCardView> = derived
         .campaigns
         .iter()
-        .map(|campaign| CampaignCard {
-            symbol: campaign.symbol.clone(),
-            shares: campaign.shares,
-            cost_a: campaign.cost_a(),
-            cost_b: campaign.cost_b(state.settings.include_dividends_in_cost),
-            cost_c: campaign.cost_c(state.settings.include_dividends_in_cost),
-            premium_realized: campaign.premium_realized,
-            premium_open: campaign.premium_open,
-            status: format!("{:?}", campaign.status),
+        .map(|campaign| {
+            views::campaign_card(
+                campaign,
+                &derived,
+                prices.get(&campaign.symbol).copied(),
+                today,
+            )
         })
         .collect();
+    campaigns.sort_by(|a, b| {
+        let rank = |status: &str| if status == "active" { 0 } else { 1 };
+        rank(&a.status)
+            .cmp(&rank(&b.status))
+            .then_with(|| a.symbol.cmp(&b.symbol))
+    });
 
-    Ok(ProbeView {
-        db_path: db_path.display().to_string(),
-        sqlite_version,
-        event_count: events.len(),
+    let mut positions: Vec<views::PositionView> = derived
+        .positions
+        .iter()
+        .map(|position| views::position(position, today))
+        .collect();
+    positions.sort_by(|a, b| {
+        a.days_left
+            .cmp(&b.days_left)
+            .then_with(|| a.symbol.cmp(&b.symbol))
+    });
+
+    let lots = derived.lots.iter().map(views::lot).collect();
+
+    Ok(OverviewView {
+        account_id,
+        as_of: today.to_string(),
+        db_path: state.db_path.display().to_string(),
+        demo: state.demo,
+        summary: views::summary(&derived),
         campaigns,
-        generated_at: OffsetDateTime::now_utc().format(&Rfc3339)?,
-        note: "M0.5 探针数据：用于验证 Android 上的 SQLite、wheel-core 重放与前端渲染，不是真实账本。".into(),
+        positions,
+        lots,
+        accounts: accounts(&conn)?,
     })
+}
+
+#[tauri::command]
+fn mobile_add_event(
+    state: State<'_, MobileState>,
+    req: events::NewEventReq,
+) -> Result<String, String> {
+    let conn = state.conn();
+    let mut ids = events::append_requests(&conn, vec![req])?;
+    Ok(ids.remove(0))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![mobile_probe])
+        .setup(|app| {
+            let dir = app
+                .path()
+                .app_data_dir()
+                .context("no writable app data directory")?;
+            let db_path = dir.join(DATABASE_FILE);
+            let conn = open_database(&db_path)?;
+            let demo = seed_demo(&conn)?;
+            app.manage(MobileState {
+                conn: Mutex::new(conn),
+                db_path,
+                demo,
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            mobile_bootstrap,
+            mobile_overview,
+            mobile_add_event
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Wheel Tracker Mobile");
 }
@@ -243,26 +296,74 @@ pub fn run() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn probe_seeds_and_replays_a_campaign() {
-        let conn = Connection::open_in_memory().unwrap();
-        initialize(&conn).unwrap();
-        seed_if_empty(&conn).unwrap();
-        // Re-running the seed must not duplicate rows.
-        seed_if_empty(&conn).unwrap();
+    fn memory_state(name: &str) -> MobileState {
+        let path = std::env::temp_dir().join(format!(
+            "wheel-mobile-test-{}-{name}.db",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let conn = open_database(&path).unwrap();
+        MobileState {
+            conn: Mutex::new(conn),
+            db_path: path,
+            demo: false,
+        }
+    }
 
-        let events = load_events(&conn).unwrap();
-        assert_eq!(events.len(), 4);
-        let state = replay(ACCOUNT_ID, &events, Settings::default()).unwrap();
-        let campaign = state
+    #[test]
+    fn demo_ledger_replays_and_is_idempotent() {
+        let state = memory_state("seed");
+        let conn = state.conn();
+        assert!(seed_demo(&conn).unwrap());
+        assert!(!seed_demo(&conn).unwrap(), "second seed must be a no-op");
+
+        let derived = derive(&conn, DEMO_ACCOUNT).unwrap();
+        let campaign = derived
             .campaigns
             .iter()
             .find(|campaign| campaign.shares == 100)
             .expect("seeded share campaign");
-
         assert_eq!(campaign.cost_a(), Some(148.0));
         assert!((campaign.cost_b(false).unwrap() - 146.0).abs() < 1e-9);
         assert!((campaign.premium_realized - 200.0).abs() < 1e-9);
         assert!((campaign.premium_open - 150.0).abs() < 1e-9);
+        assert_eq!(derived.positions.len(), 1, "one open call");
+        let summary = views::summary(&derived);
+        assert_eq!(summary.open_contracts, 1);
+        assert!(!summary.collateral.is_sign_negative(), "no Put means +0 collateral");
+    }
+
+    #[test]
+    fn adding_an_event_writes_through_the_shared_validator() {
+        let state = memory_state("add");
+        let conn = state.conn();
+        seed_demo(&conn).unwrap();
+        let before = store::count_events(&conn, DEMO_ACCOUNT).unwrap();
+        let request = events::NewEventReq {
+            account_id: None,
+            date: store::today().to_string(),
+            kind: "option_close".into(),
+            symbol: "AAPL".into(),
+            qty: 1,
+            price: 0.5,
+            fees: 0.0,
+            amount: 0.0,
+            expiry: Some(day(20)),
+            strike: Some(160.0),
+            right: Some("C".into()),
+            multiplier: None,
+            split_numerator: None,
+            split_denominator: None,
+            split_cash_in_lieu: None,
+            note: None,
+        };
+        let id = events::append_requests(&conn, vec![request])
+            .unwrap()
+            .remove(0);
+        assert!(id.starts_with("ev-"));
+        assert_eq!(store::count_events(&conn, DEMO_ACCOUNT).unwrap(), before + 1);
+        assert!(derive(&conn, DEMO_ACCOUNT).unwrap().positions.is_empty());
     }
 }

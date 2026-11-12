@@ -2,10 +2,63 @@
 
 use serde::Serialize;
 use time::Date;
-use wheel_core::{Campaign, CostPoint, DerivedState, OptionPosition, PremiumEntry, ShareLot};
+use wheel_core::{
+    Campaign, CostPoint, DerivedState, Event, OptionPosition, PremiumEntry, Right, ShareLot,
+};
 
 fn date_str(date: Date) -> String {
     date.to_string()
+}
+
+pub fn summary(derived: &DerivedState) -> SummaryView {
+    let open_contracts = derived.positions.iter().map(|position| position.open_qty).sum();
+    // `Sum` for floats folds from -0.0, which would render as "-0" in the UI
+    // when no Put is open; normalize the empty/zero total to positive zero.
+    let mut collateral: f64 = derived
+        .positions
+        .iter()
+        .filter(|position| position.contract.right == Right::Put)
+        .map(|position| {
+            position.contract.strike
+                * f64::from(position.contract.multiplier)
+                * f64::from(position.open_qty)
+        })
+        .sum();
+    if collateral == 0.0 {
+        collateral = 0.0;
+    }
+    let shares_held = derived
+        .campaigns
+        .iter()
+        .filter(|campaign| campaign.is_active())
+        .map(|campaign| campaign.shares)
+        .sum();
+    let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
+    let cash_coverage = (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
+    let cash_shortfall: f64 = if cash_tracked {
+        (collateral - derived.account_cash).max(0.0)
+    } else {
+        0.0
+    };
+    SummaryView {
+        premium_realized: derived.total_premium_realized(),
+        premium_open: derived.total_premium_open(),
+        active_campaigns: derived
+            .campaigns
+            .iter()
+            .filter(|campaign| campaign.is_active())
+            .count(),
+        open_positions: derived.positions.len(),
+        open_contracts,
+        collateral,
+        shares_held,
+        account_cash: derived.account_cash,
+        cash_deposits: derived.cash_deposits,
+        cash_withdrawals: derived.cash_withdrawals,
+        cash_tracked,
+        cash_coverage,
+        cash_shortfall,
+    }
 }
 
 #[derive(Serialize)]
@@ -142,7 +195,7 @@ pub struct CampaignDetailView {
     pub entries: Vec<EntryView>,
     pub positions: Vec<PositionView>,
     pub lots: Vec<LotView>,
-    pub events: Vec<crate::commands::EventView>,
+    pub events: Vec<EventView>,
     pub call_scenarios: Vec<CallScenario>,
 }
 
@@ -437,5 +490,54 @@ pub fn lot(lot: &ShareLot) -> LotView {
         qty: lot.qty,
         remaining_qty: lot.remaining_qty,
         cost_per_share: lot.cost_per_share,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventView {
+    pub id: String,
+    pub account_id: String,
+    pub seq: u64,
+    pub date: String,
+    pub kind: String,
+    pub symbol: String,
+    pub qty: u32,
+    pub price: f64,
+    pub fees: f64,
+    pub amount: f64,
+    pub expiry: Option<String>,
+    pub strike: Option<f64>,
+    pub right: Option<String>,
+    pub multiplier: Option<u32>,
+    pub split_numerator: Option<u32>,
+    pub split_denominator: Option<u32>,
+    pub split_cash_in_lieu: Option<f64>,
+    pub note: String,
+}
+
+pub fn event_view(event: Event) -> EventView {
+    EventView {
+        expiry: event.contract.as_ref().map(|c| c.expiry.to_string()),
+        strike: event.contract.as_ref().map(|c| c.strike),
+        right: event
+            .contract
+            .as_ref()
+            .map(|c| c.right.as_str().to_string()),
+        multiplier: event.contract.as_ref().map(|c| c.multiplier),
+        split_numerator: event.split.map(|terms| terms.numerator),
+        split_denominator: event.split.map(|terms| terms.denominator),
+        split_cash_in_lieu: event.split.and_then(|terms| terms.cash_in_lieu),
+        date: event.occurred_at.to_string(),
+        kind: crate::store::kind_to_str(event.kind).to_string(),
+        id: event.id,
+        account_id: event.account_id,
+        seq: event.seq,
+        symbol: event.symbol,
+        qty: event.qty,
+        price: event.price,
+        fees: event.fees,
+        amount: event.amount,
+        note: event.note,
     }
 }

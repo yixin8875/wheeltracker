@@ -1,0 +1,20 @@
+[package]
+name = "wheel-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SQLite persistence, views and backup/restore shared by the desktop and mobile shells."
+
+[dependencies]
+wheel-core = { path = "../wheel-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rusqlite.workspace = true
+time.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset"] }
+ring = "0.17"
+
+[dev-dependencies]
+http = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
