@@ -5,6 +5,7 @@ import {
   type NewEventReq,
   type Position,
 } from './api'
+import { IconClose } from './Icons'
 
 interface EntryPreset {
   kind: EntryKind
@@ -151,7 +152,7 @@ export default function EntrySheet({
           <span className="sheet-grip" aria-hidden="true" />
           <h2>记一笔</h2>
           <button className="icon-button" onClick={onClose} aria-label="关闭">
-            ✕
+            <IconClose size={18} />
           </button>
         </header>
 

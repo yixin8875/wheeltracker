@@ -12,17 +12,31 @@ import {
 } from './api'
 import EntrySheet from './EntrySheet'
 import WebDavSheet from './WebDavSheet'
+import {
+  IconAuto,
+  IconCash,
+  IconClock,
+  IconHome,
+  IconLayers,
+  IconMoon,
+  IconPlus,
+  IconPut,
+  IconRefresh,
+  IconStock,
+  IconSun,
+  IconUser,
+} from './Icons'
 
 type Tab = 'home' | 'holdings' | 'expiry' | 'me'
 type Theme = 'auto' | 'light' | 'dark'
 type Segment = 'stocks' | 'options'
 type ExpiryFilter = 'all' | 'overdue' | 'week' | 'month' | 'later'
 
-const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'home', label: '首页', icon: '◎' },
-  { key: 'holdings', label: '持仓', icon: '▤' },
-  { key: 'expiry', label: '到期', icon: '◷' },
-  { key: 'me', label: '我的', icon: '☰' },
+const TABS: { key: Tab; label: string; icon: JSX.Element }[] = [
+  { key: 'home', label: '首页', icon: <IconHome /> },
+  { key: 'holdings', label: '持仓', icon: <IconLayers /> },
+  { key: 'expiry', label: '到期', icon: <IconClock /> },
+  { key: 'me', label: '我的', icon: <IconUser /> },
 ]
 
 const FILTERS: { key: ExpiryFilter; label: string }[] = [
@@ -172,14 +186,27 @@ export default function App() {
           </p>
           <h1>Wheel Tracker</h1>
         </div>
-        <button
-          className="icon-button"
-          onClick={() => setTheme(theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto')}
-          aria-label={`外观：${theme === 'auto' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}`}
-          title={`外观：${theme === 'auto' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}`}
-        >
-          {theme === 'auto' ? '◐' : theme === 'dark' ? '☾' : '☀'}
-        </button>
+        <div className="head-actions">
+          <button
+            className="icon-button"
+            onClick={() =>
+              setTheme(theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto')
+            }
+            aria-label={`外观：${theme === 'auto' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}`}
+            title={`外观：${theme === 'auto' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}`}
+          >
+            {theme === 'auto' ? <IconAuto /> : theme === 'dark' ? <IconMoon /> : <IconSun />}
+          </button>
+          {data && (
+            <button
+              className="record-button"
+              onClick={() => setSheet({ kind: 'option_open_short' })}
+            >
+              <IconPlus size={16} aria-hidden="true" />
+              记一笔
+            </button>
+          )}
+        </div>
       </header>
 
       {error && (
@@ -230,16 +257,6 @@ export default function App() {
         </main>
       )}
 
-      {data && (
-        <button
-          className="fab"
-          onClick={() => setSheet({ kind: 'option_open_short' })}
-          aria-label="记一笔"
-        >
-          <span aria-hidden="true">+</span> 记一笔
-        </button>
-      )}
-
       <nav className="tabbar" aria-label="主导航">
         {TABS.map((item) => (
           <button
@@ -248,7 +265,7 @@ export default function App() {
             onClick={() => setTab(item.key)}
             aria-current={tab === item.key ? 'page' : undefined}
           >
-            <span aria-hidden="true">{item.icon}</span>
+            {item.icon}
             {item.label}
           </button>
         ))}
@@ -298,22 +315,23 @@ function Home({
   const urgent = positions.filter((position) => position.daysLeft <= 3)
   return (
     <>
-      <section className="hero">
-        <div className="hero-top">
+      <section className="summary">
+        <div className="summary-head">
           <span>已落袋净收租</span>
-          <button className="ghost" onClick={onRefresh} disabled={busy}>
+          <button className="text-button" onClick={onRefresh} disabled={busy}>
+            <IconRefresh size={14} aria-hidden="true" />
             {busy ? '刷新中' : '刷新'}
           </button>
         </div>
-        <p className="hero-value">{money(summary.premiumRealized)}</p>
-        <div className="hero-grid">
+        <p className="summary-value">{money(summary.premiumRealized)}</p>
+        <div className="summary-grid">
           <div>
             <span>未平仓</span>
             <strong>{money(summary.premiumOpen)}</strong>
           </div>
           <div>
             <span>Put 义务</span>
-            <strong>{money(summary.collateral, 0)}</strong>
+            <strong>{money(summary.collateral)}</strong>
           </div>
           <div>
             <span>现金覆盖</span>
@@ -324,13 +342,16 @@ function Home({
 
       <div className="quick-row">
         <button onClick={() => onOpenSheet({ kind: 'option_open_short' })}>
-          <span>＋</span>卖 Put
+          <IconPut size={16} aria-hidden="true" />
+          卖 Put
         </button>
         <button onClick={() => onOpenSheet({ kind: 'shares_buy' })}>
-          <span>＄</span>买股票
+          <IconStock size={16} aria-hidden="true" />
+          买股票
         </button>
         <button onClick={() => onOpenSheet({ kind: 'cash_deposit' })}>
-          <span>↓</span>入金
+          <IconCash size={16} aria-hidden="true" />
+          入金
         </button>
       </div>
 
@@ -346,51 +367,56 @@ function Home({
       <section className="section">
         <div className="section-title">
           <h2>我的战役</h2>
-          <span className="badge">{campaigns.length}</span>
+          <span className="count">{campaigns.length}</span>
         </div>
         {campaigns.length === 0 && <p className="empty">还没有战役，先记一笔卖出 Put。</p>}
-        {campaigns.map((campaign) => (
-          <article className="card campaign" key={campaign.id}>
-            <div className="card-head">
-              <div>
-                <strong className="symbol">{campaign.symbol}</strong>
-                <span className={`tag ${campaignTone(campaign)}`}>
-                  {statusLabel(campaign.status)}
-                </span>
-              </div>
-              <span className="muted">{campaign.shares} 股</span>
-            </div>
-            <div className="figure-row">
-              <div>
-                <span>成本 B</span>
-                <strong>{money(campaign.costB)}</strong>
-              </div>
-              <div>
-                <span>成本 A</span>
-                <strong>{money(campaign.costA)}</strong>
-              </div>
-              <div>
-                <span>成本 C′</span>
-                <strong>{money(campaign.costC)}</strong>
-              </div>
-            </div>
-            <div className="card-foot">
-              <span>已落袋 {money(campaign.premiumRealized)}</span>
-              <span>未平仓 {money(campaign.premiumOpen)}</span>
-              {campaign.safetyMargin !== null && (
-                <span className={campaign.safetyMargin < 0 ? 'negative' : 'positive'}>
-                  安全边际 {percent(campaign.safetyMargin)}
-                </span>
-              )}
-            </div>
-            {campaign.nextOption && (
-              <p className="next-option">
-                下一张 {rightLabel(campaign.nextOption.right)} ${campaign.nextOption.strike}{' '}
-                · {campaign.nextOption.expiry} · {dteLabel(campaign.nextOption.daysLeft)}
-              </p>
-            )}
-          </article>
-        ))}
+        {campaigns.length > 0 && (
+          <div className="ledger">
+            {campaigns.map((campaign) => (
+              <article className="ledger-row campaign" key={campaign.id}>
+                <div className="card-head">
+                  <div>
+                    <strong className="symbol">{campaign.symbol}</strong>
+                    <span className={`status ${campaignTone(campaign)}`}>
+                      <i aria-hidden="true" />
+                      {statusLabel(campaign.status)}
+                    </span>
+                  </div>
+                  <span className="count">{campaign.shares} 股</span>
+                </div>
+                <div className="figure-row">
+                  <div>
+                    <span>成本 B</span>
+                    <strong>{money(campaign.costB)}</strong>
+                  </div>
+                  <div>
+                    <span>成本 A</span>
+                    <strong>{money(campaign.costA)}</strong>
+                  </div>
+                  <div>
+                    <span>成本 C′</span>
+                    <strong>{money(campaign.costC)}</strong>
+                  </div>
+                </div>
+                <div className="card-foot">
+                  <span>已落袋 {money(campaign.premiumRealized)}</span>
+                  <span>未平仓 {money(campaign.premiumOpen)}</span>
+                  {campaign.safetyMargin !== null && (
+                    <span className={campaign.safetyMargin < 0 ? 'negative' : 'positive'}>
+                      安全边际 {percent(campaign.safetyMargin)}
+                    </span>
+                  )}
+                </div>
+                {campaign.nextOption && (
+                  <p className="next-option">
+                    下一张 {rightLabel(campaign.nextOption.right)} ${campaign.nextOption.strike}{' '}
+                    · {campaign.nextOption.expiry} · {dteLabel(campaign.nextOption.daysLeft)}
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </>
   )
@@ -425,41 +451,49 @@ function Holdings({
       {segment === 'stocks' && (
         <section className="section">
           {lots.length === 0 && <p className="empty">没有持股。</p>}
-          {lots.map((lot) => (
-            <article className="card" key={lot.id}>
-              <div className="card-head">
-                <strong className="symbol">{lot.symbol}</strong>
-                <span className="badge">{lot.remainingQty} 股</span>
-              </div>
-              <div className="figure-row">
-                <div>
-                  <span>成本 / 股</span>
-                  <strong>{money(holdingsCost(campaigns, lot))}</strong>
-                </div>
-                <div>
-                  <span>买入价</span>
-                  <strong>{money(lot.costPerShare)}</strong>
-                </div>
-                <div>
-                  <span>建仓日</span>
-                  <strong>{lot.openedAt}</strong>
-                </div>
-              </div>
-            </article>
-          ))}
+          {lots.length > 0 && (
+            <div className="ledger">
+              {lots.map((lot) => (
+                <article className="ledger-row" key={lot.id}>
+                  <div className="card-head">
+                    <strong className="symbol">{lot.symbol}</strong>
+                    <span className="count">{lot.remainingQty} 股</span>
+                  </div>
+                  <div className="figure-row">
+                    <div>
+                      <span>成本 / 股</span>
+                      <strong>{money(holdingsCost(campaigns, lot))}</strong>
+                    </div>
+                    <div>
+                      <span>买入价</span>
+                      <strong>{money(lot.costPerShare)}</strong>
+                    </div>
+                    <div>
+                      <span>建仓日</span>
+                      <strong>{lot.openedAt}</strong>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
       {segment === 'options' && (
         <section className="section">
           {positions.length === 0 && <p className="empty">没有未平仓期权。</p>}
-          {positions.map((position) => (
-            <PositionCard
-              key={position.contract + position.openedAt}
-              position={position}
-              onOpenSheet={onOpenSheet}
-            />
-          ))}
+          {positions.length > 0 && (
+            <div className="ledger">
+              {positions.map((position) => (
+                <PositionCard
+                  key={position.contract + position.openedAt}
+                  position={position}
+                  onOpenSheet={onOpenSheet}
+                />
+              ))}
+            </div>
+          )}
         </section>
       )}
     </>
@@ -481,26 +515,31 @@ function Expiry({
 }) {
   return (
     <>
-      <div className="chip-row scroll" role="group" aria-label="到期筛选">
+      <div className="chip-row" role="group" aria-label="到期筛选">
         {FILTERS.map((item) => (
           <button
             key={item.key}
             className={`chip ${filter === item.key ? 'on' : ''}`}
             onClick={() => setFilter(item.key)}
           >
-            {item.label} {counts[item.key]}
+            {item.label}
+            <span className="count">{counts[item.key]}</span>
           </button>
         ))}
       </div>
       <section className="section">
         {positions.length === 0 && <p className="empty">这个区间没有到期合约。</p>}
-        {positions.map((position) => (
-          <PositionCard
-            key={position.contract + position.openedAt}
-            position={position}
-            onOpenSheet={onOpenSheet}
-          />
-        ))}
+        {positions.length > 0 && (
+          <div className="ledger">
+            {positions.map((position) => (
+              <PositionCard
+                key={position.contract + position.openedAt}
+                position={position}
+                onOpenSheet={onOpenSheet}
+              />
+            ))}
+          </div>
+        )}
       </section>
     </>
   )
@@ -515,15 +554,15 @@ function PositionCard({
 }) {
   const urgent = position.daysLeft <= 3
   return (
-    <article className={`card position ${urgent ? 'urgent' : ''}`}>
+    <article className="ledger-row position">
       <div className="card-head">
         <div>
           <strong className="symbol">{position.symbol}</strong>
-          <span className={`tag ${position.right.toUpperCase() === 'P' ? 'put' : 'call'}`}>
-            {rightLabel(position.right)}
-          </span>
+          <span className="side">{rightLabel(position.right)}</span>
         </div>
-        <span className={`badge ${position.daysLeft < 0 ? 'negative' : ''}`}>
+        <span
+          className={`days ${position.daysLeft < 0 ? 'negative' : urgent ? 'urgent' : ''}`}
+        >
           {dteLabel(position.daysLeft)}
         </span>
       </div>
@@ -571,7 +610,7 @@ function Profile({
             <span className="muted">当前账户</span>
             <strong className="symbol">{data.accounts[0]?.name ?? data.accountId}</strong>
           </div>
-          <span className="badge">{data.accounts[0]?.eventCount ?? 0} 条事件</span>
+          <span className="count">{data.accounts[0]?.eventCount ?? 0} 条事件</span>
         </div>
         <div className="figure-row">
           <div>
@@ -619,7 +658,7 @@ function Profile({
         </div>
         <div className="list-row">
           <span>版本</span>
-          <span className="muted">0.6.0 · M1/M2</span>
+          <span className="count">0.6.0</span>
         </div>
       </section>
 

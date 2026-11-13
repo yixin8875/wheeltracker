@@ -15,6 +15,7 @@ import {
   type WebDavConfig,
   type WebDavSettings,
 } from './api'
+import { IconClose } from './Icons'
 
 interface Props {
   onClose: () => void
@@ -206,7 +207,7 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
           <span className="sheet-grip" aria-hidden="true" />
           <h2>备份与同步</h2>
           <button className="icon-button" onClick={onClose} aria-label="关闭">
-            ✕
+            <IconClose size={18} />
           </button>
         </header>
 
@@ -266,7 +267,7 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
                     type="password"
                     value={serverPassword}
                     onChange={(event) => setServerPassword(event.target.value)}
-                    placeholder={settings?.hasPassword ? settings.passwordHint : '保存后加密存放在本机'}
+                    placeholder={settings?.hasPassword ? settings.passwordHint : '加密保存在本机'}
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
