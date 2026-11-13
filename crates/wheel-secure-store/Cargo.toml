@@ -1,0 +1,17 @@
+[package]
+name = "wheel-secure-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Android Keystore-backed secret storage for Wheel Tracker Mobile."
+links = "wheel-secure-store"
+
+[lib]
+name = "wheel_secure_store"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+serde.workspace = true
+tauri = { version = "2", features = [] }

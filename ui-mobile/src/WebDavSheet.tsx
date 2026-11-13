@@ -266,7 +266,7 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
                     type="password"
                     value={serverPassword}
                     onChange={(event) => setServerPassword(event.target.value)}
-                    placeholder={settings?.hasPassword ? settings.passwordHint : '仅本次运行保存'}
+                    placeholder={settings?.hasPassword ? settings.passwordHint : '保存后加密存放在本机'}
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
@@ -405,7 +405,7 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
               )}
 
               <p className="muted small">
-                密码只保存在本次运行的内存中，不写入账本；重启应用后需要重新输入。因此启动时自动上传暂不开放。
+                密码使用 Android Keystore 加密保存在本机，不写入账本；重启应用后继续沿用。自动上传仍未开放。
               </p>
             </>
           )}

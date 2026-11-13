@@ -5008,7 +5008,17 @@ dependencies = [
  "tauri-build",
  "time",
  "wheel-core",
+ "wheel-secure-store",
  "wheel-store",
+]
+
+[[package]]
+name = "wheel-secure-store"
+version = "0.6.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

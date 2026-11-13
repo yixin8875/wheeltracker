@@ -1,6 +1,6 @@
 # P11 Android 客户端设计
 
-> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）；M0.5/M1 已完成，M2 记账与合约操作已完成、WebDAV 待接入（见第 12、13 节）· 2026-11-12
+> 状态：概念稿 + 可交互 Demo（[android-demo.html](android-demo.html)）；M0.5/M1 已完成，M2 记账、合约操作与 WebDAV 备份/恢复已完成，密码由 Android Keystore 持久化（见第 12、13 节）· 2026-11-13
 > 关联：[P10 WebDAV 备份与导入](P10-webdav.md)
 
 ## 0. 定位
@@ -333,7 +333,7 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 - 数据库：应用私有目录 `wheel.db`，与桌面同一 schema（`SCHEMA_VERSION = 4`），WAL。
 - 命令：`mobile_bootstrap`（账户、今天、库路径、演示标记）、`mobile_overview`（汇总、战役、期权、持股，按到期排序）、`mobile_add_event`（走 `wheel-store::events` 的同一套校验）。
 - WebDAV 命令：`mobile_webdav_settings/status/save/test/list/backup/download/stage_restore/delete` 与 `mobile_restore_status`，全部复用 `wheel-store::webdav`、`backup`、`restore`。
-- 凭据：密码只存在 `MobileState` 的内存中，按「服务器地址 + 账号」隔离，换地址即丢弃；SQLite 只保存 URL、账号、目录、保留份数等设置。
+- 凭据：密码在保存时用 Android Keystore 的 AES-256-GCM 密钥加密，存入应用私有 SharedPreferences（`wheel_secure_store`，键按「服务器地址 + 账号」隔离）；启动时解密进 `MobileState` 内存，换地址即删除旧条目；SQLite 只保存 URL、账号、目录、保留份数等设置。
 - 恢复沿用桌面的「下载 → 校验 → 暂存 → 下次启动替换」流程；暂存期间 `mobile_add_event` 拒绝写入，启动时在打开 SQLite 之前执行 `restore::apply_pending`。
 - 首次启动且账户无事件时写入 5 条合成 AAPL 事件（入金 → 卖 Put → 到期 → 买 100 股 → 卖 Call），日期相对安装日生成；一旦有事件就不再写入。
 - 写入后立即重新回放，页面数据不经过缓存，账本始终以事件为准。
@@ -359,6 +359,7 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 | Android 备份 | 加密上传 44 KB → `PUT .tmp` → `MOVE` → `latest.json`，列表显示该快照 |
 | Android 恢复 | 下载加密快照并通过校验 → 安排恢复 → 完全退出重启后 `restore/applied-*.json` 生成，账本 5 条事件与成本 B 146.00 不变，安全副本 `pre-restore-*.sqlite` 保留 |
 | 密码落盘检查 | `settings` 表 LIKE 查询密码为 0 行（单元测试 `session_credential_is_scoped_to_one_server_and_never_written_to_sqlite`） |
+| Android 密码持久化 | 保存后 `shared_prefs/wheel_secure_store.xml` 仅见 AES-GCM 密文；强制停止并重启后，应用密码显示掩码提示「••••••1234」，无需重输；`wheel.db` 与 WAL 中无明文 |
 
 ![M1 首页：真实 wheel.db 回放（模拟器 1080×2400）](m1-android.png)
 
@@ -366,7 +367,7 @@ Tauri CLI 在 `tauri android build` 最后一步会把 `.so` 软链到 `gen/andr
 
 ### 13.5 尚未完成
 
-- **WebDAV 密码持久化**：目前只保存在运行期内存，重启后需要重新输入，因此「启动时自动上传」在移动端暂不开放。下一步用 Android Keystore 加密的 `EncryptedSharedPreferences` 保存密码，再打开自动上传；账本（SQLite）永远不存密码。
+- **WebDAV 自动上传**：服务器密码已用 Android Keystore 加密持久化，重启后无需重输；但加密备份密码仍只在单次操作中输入，因此「启动时自动上传」暂不开放。下一步持久化备份密码并接后台调度。
 - **真实账本导入**：目前移动端只会在空库时写演示数据；把桌面 `wheel.db` 导入手机需要 SAF 选择文件 + 校验/覆盖流程。
 - **发布**：arm64 构建、release 签名、AAB 与体积检查。
 - **通知/后台**：到期提醒仍是 v1 的启动/回前台检查。

@@ -14,6 +14,7 @@ use serde::Serialize;
 use tauri::{Manager, State};
 use time::{Duration, OffsetDateTime};
 use wheel_core::DerivedState;
+use wheel_secure_store::SecureStoreExt;
 use wheel_store::webdav::{
     Credential, RemoteBackup, ServerInfo, UploadOutcome, WebDavConfig, WebDavSettingsView,
     WebDavStatus,
@@ -28,9 +29,9 @@ struct MobileState {
     conn: Mutex<Connection>,
     db_path: PathBuf,
     demo: bool,
-    /// WebDAV password for this run only. Nothing here is written to disk: the
-    /// Android Keystore-backed store is not wired up yet, and the ledger
-    /// database must never hold a password.
+    /// WebDAV password for this run. It is restored from the Android
+    /// Keystore-backed secure store at launch and updated when settings are
+    /// saved; the ledger database must never hold a password.
     webdav: Mutex<Option<WebDavSession>>,
 }
 
@@ -38,10 +39,17 @@ struct MobileState {
 struct WebDavSession {
     target: String,
     password: String,
+    source: &'static str,
 }
 
 fn session_target(config: &WebDavConfig) -> String {
     format!("{}\n{}", config.url.trim(), config.username.trim())
+}
+
+/// Keystore entries are scoped to one server + account, so changing either
+/// makes the old secret unreachable.
+fn secure_key(config: &WebDavConfig) -> String {
+    format!("webdav:{}", session_target(config))
 }
 
 impl MobileState {
@@ -67,7 +75,7 @@ impl MobileState {
         session
             .as_ref()
             .filter(|session| session.target == session_target(config))
-            .map(|session| Credential::new(session.password.clone(), "session"))
+            .map(|session| Credential::new(session.password.clone(), session.source))
     }
 
     fn remember_webdav_password(&self, config: &WebDavConfig, password: Option<String>) {
@@ -79,12 +87,30 @@ impl MobileState {
             Some(password) if !password.is_empty() => Some(WebDavSession {
                 target: session_target(config),
                 password,
+                source: "session",
             }),
             Some(_) => None,
             None => session
                 .take()
                 .filter(|session| session.target == session_target(config)),
         };
+    }
+
+    /// Restores a password that came from the Android Keystore instead of the
+    /// current run's input.
+    fn remember_stored_password(&self, config: &WebDavConfig, password: String) {
+        if password.is_empty() {
+            return;
+        }
+        let mut session = self
+            .webdav
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *session = Some(WebDavSession {
+            target: session_target(config),
+            password,
+            source: "keystore",
+        });
     }
 }
 
@@ -346,22 +372,38 @@ fn mobile_webdav_status(state: State<'_, MobileState>) -> Result<WebDavStatus, S
 }
 
 #[tauri::command]
-fn mobile_webdav_save(
+async fn mobile_webdav_save(
+    app: tauri::AppHandle,
     state: State<'_, MobileState>,
     config: WebDavConfig,
     password: Option<String>,
 ) -> Result<WebDavSettingsView, String> {
     config.validate().map_err(|error| format!("{error:#}"))?;
-    let conn = state.conn();
-    let previous = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
-    let saved = webdav::save(&conn, &config).map_err(|error| format!("{error:#}"))?;
-    if previous.configured()
-        && (previous.url.trim() != saved.url || previous.username.trim() != saved.username)
-    {
+    let (previous, saved) = {
+        let conn = state.conn();
+        let previous = webdav::load(&conn).map_err(|error| format!("{error:#}"))?;
+        let saved = webdav::save(&conn, &config).map_err(|error| format!("{error:#}"))?;
+        (previous, saved)
+    };
+    if previous.configured() && session_target(&previous) != session_target(&saved) {
         // Never leave a password behind for an address the user moved away from.
+        let _ = app.secure_store().delete(&secure_key(&previous));
         state.remember_webdav_password(&previous, Some(String::new()));
     }
+    let saved_key = secure_key(&saved);
+    match password.as_deref() {
+        Some(value) if !value.is_empty() => {
+            app.secure_store()
+                .save(&saved_key, value)
+                .map_err(|error| format!("WebDAV 设置已保存，但密码无法加密存入本机：{error}"))?;
+        }
+        Some(_) => {
+            let _ = app.secure_store().delete(&saved_key);
+        }
+        None => {}
+    }
     state.remember_webdav_password(&saved, password);
+    let conn = state.conn();
     webdav::settings_view(&conn, &saved, state.webdav_credential(&saved).as_ref())
         .map_err(|error| format!("{error:#}"))
 }
@@ -551,6 +593,7 @@ async fn mobile_webdav_delete(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(wheel_secure_store::init())
         .setup(|app| {
             let dir = app
                 .path()
@@ -563,11 +606,31 @@ pub fn run() {
             }
             let conn = open_database(&db_path)?;
             let demo = seed_demo(&conn)?;
-            app.manage(MobileState {
+            let state = MobileState {
                 conn: Mutex::new(conn),
                 db_path,
                 demo,
                 webdav: Mutex::new(None),
+            };
+            app.manage(state);
+            // Reading the Keystore dispatches to the Android main thread, so
+            // it must not run inside setup, which is already on that thread.
+            // The cache is filled a moment later; the WebDAV sheet is only
+            // reachable after the user navigates there.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = handle.state::<MobileState>();
+                let stored_config = {
+                    let conn = state.conn();
+                    webdav::load(&conn).ok()
+                };
+                if let Some(config) = stored_config.filter(|config| config.configured()) {
+                    match handle.secure_store().load(&secure_key(&config)) {
+                        Ok(Some(password)) => state.remember_stored_password(&config, password),
+                        Ok(None) => {}
+                        Err(error) => eprintln!("secure store unavailable: {error}"),
+                    }
+                }
             });
             Ok(())
         })
@@ -662,6 +725,11 @@ mod tests {
             ..saved.clone()
         };
         assert!(state.webdav_credential(&other).is_none());
+        assert!(secure_key(&saved).starts_with("webdav:"));
+        assert_ne!(secure_key(&saved), secure_key(&other));
+
+        state.remember_stored_password(&saved, "keystore-secret".into());
+        assert_eq!(state.webdav_credential(&saved).unwrap().source, "keystore");
 
         let leaked: i64 = conn
             .query_row(

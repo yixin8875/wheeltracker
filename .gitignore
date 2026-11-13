@@ -11,6 +11,11 @@ dist/
 /test-results/
 /crates/wheel-app/gen/
 /crates/wheel-mobile/gen/
+
+# Tauri plugin build output
+/crates/wheel-secure-store/permissions/
+/crates/wheel-secure-store/android/.tauri/
+/crates/wheel-secure-store/android/build/
 *.log
 __pycache__/
 
