@@ -58,6 +58,55 @@ export interface VisionSettings {
   consent: boolean;
 }
 export type BackupKind = 'manual' | 'auto' | 'safety' | 'unknown';
+
+export type ScanPreset = 'steady_income' | 'balanced' | 'aggressive' | 'add_position';
+export type ScanFlag = 'locks_loss' | 'adds_shares' | 'insufficient_cash' | 'partial_coverage' | 'deep_itm' | 'near_expiry' | 'illiquid' | 'chain_stale' | 'estimated_price' | 'dividend_near';
+export type StrategyKind = 'covered_call' | 'cash_secured_put';
+export interface ScanSettings {
+  dteMin: number; dteMax: number; deltaMin: number; deltaMax: number;
+  allowLockedLoss: boolean; allowPuts: boolean; maxSharesMultiple: number;
+  maxExtraCapital: number | null; feePerContract: number;
+  priceSource: 'bid' | 'mark'; liquidityFilter: boolean; minOpenInterest: number;
+  maxSpreadPct: number; riskFreeRate: number; dividendYield: number;
+  putMaxStrikeRatio: number; preset: ScanPreset; projectionLimit: number;
+}
+export interface ScanLeg { side: 'short'; expiry: string; strike: number; right: string; qty: number; price: number; priceSource: 'bid' | 'mark'; multiplier: number }
+export interface ScanAssignment {
+  sharesAfter: number; sharesChange: number; costBAfter: number | null; realizedPnl: number;
+  lockedLoss: number; remainingShares: number; remainingCostB: number | null;
+  closesCampaign: boolean; saleProceeds: number; capitalAdded: number;
+}
+export interface ScanStress { price: number; pnl: number; baselinePnl: number }
+export interface ScanCandidate {
+  id: string; kind: StrategyKind; legs: ScanLeg[]; premiumTotal: number; fees: number;
+  costBAfter: number | null; costCAfter: number | null; costReductionPerShare: number;
+  breakeven: number | null; annualized: number; probItm: number | null; delta: number | null;
+  upsideCap: number | null; capital: number; assignment: ScanAssignment | null;
+  stress: ScanStress[]; flags: ScanFlag[];
+}
+export interface ScanCampaign {
+  id: string; symbol: string; shares: number; costA: number | null; costB: number | null;
+  costC: number | null; price: number; unrealizedPnl: number | null; unrealizedPct: number | null;
+  premiumRealized: number; coveredShares: number; freeShares: number; cash: number; cashTracked: boolean;
+}
+export interface ScanOutcome {
+  campaign: ScanCampaign; chainStale: boolean; scannedQuotes: number; dropped: number;
+  candidates: ScanCandidate[];
+}
+export type ChainFreshness = 'fresh' | 'delayed' | 'stale' | 'missing';
+export interface ChainStatus {
+  symbol: string; source: string; asOf: string; fetchedAt: string; underlying: number | null;
+  quoteCount: number; status: ChainFreshness; notes: string;
+}
+export interface ChainQuoteRow {
+  expiry: string; strike: number; right: string; bid: number | null; ask: number | null;
+  last: number | null; mark: number | null; iv: number | null; openInterest: number | null; volume: number | null;
+}
+export interface ChainImportPreview {
+  headers: string[]; delimiter: string; rows: ChainQuoteRow[];
+  errors: { line: number; message: string }[]; valid: number; invalid: number;
+}
+export interface ChainSync { status: ChainStatus; imported: number; skipped: number }
 export interface Backup { fileName: string; kind: BackupKind; sizeBytes: number; modifiedAt: string | null; encrypted: boolean }
 export interface BackupValidation { fileName: string; valid: boolean; integrity: string; events: number; accounts: number; prices: number; issues: string[] }
 export interface PendingRestore { version: number; backupFile: string; safetyFile: string; requestedAt: string; stagedFile: string | null }

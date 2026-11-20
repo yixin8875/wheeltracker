@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, type LucideIcon } from 'lucide-react';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
 import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
@@ -23,9 +23,10 @@ import { AllHoldingsPage } from './AllHoldings';
 import { MonthlyIncomeReport } from './MonthlyIncome';
 import { AnnualReportPage } from './AnnualReport';
 import { Updater } from './Updater';
+import { CostReduction } from './CostReduction';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'cost' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
 type NavGroup = { id: string; title: string; items: NavItem[] };
@@ -33,6 +34,7 @@ const navigation: NavGroup[] = [
   { id: 'daily', title: '日常', items: [
     { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
     { id: 'positions', label: '当前持仓', icon: Layers },
+    { id: 'cost', label: '降本扫描', icon: TrendingDown },
     { id: 'entry', label: '记一笔', icon: Plus },
   ] },
   { id: 'books', title: '账本', items: [
@@ -74,6 +76,7 @@ export default function App() {
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [scanCampaign, setScanCampaign] = useState<string | null>(null);
   const [initial, setInitial] = useState<Partial<NewEvent>>();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [entryKey, setEntryKey] = useState(0);
@@ -178,6 +181,7 @@ export default function App() {
   useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startEntry(); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, [startEntry]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   function openCampaign(id: string) { setSelected(id); setPage('detail'); }
+  function openCostScan(campaignId?: string) { setScanCampaign(campaignId ?? null); setPage('cost'); }
   function openHolding(targetAccount: string, campaignId: string) {
     if (targetAccount !== accountId) {
       try { localStorage.setItem(ACCOUNT_KEY, targetAccount); } catch { /* storage unavailable in preview */ }
@@ -258,6 +262,7 @@ export default function App() {
       </div>
       {ledgerTab === 'entries' ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/> : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent}/>}
     </>}
+    {page === 'cost' && !unavailable && <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} onEntry={prefill => startEntry(prefill)}/>}
     {page === 'entry' && <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved}/>}
     {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
     {page === 'expiry' && !unavailable && <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} onEntry={initial => startEntry(initial)} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')}/>}
@@ -274,7 +279,7 @@ export default function App() {
       <section className="panel"><div className="section-heading"><h2>股票持仓</h2></div><div className="table-wrap"><table><thead><tr><th>标的</th><th>股数</th><th>纯股票成本 / 股</th><th>有效成本 / 股</th><th>标的参考价</th><th>操作</th></tr></thead><tbody>{data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => <tr key={campaign.id}><td><button className="text-button" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</button></td><td>{campaign.shares}</td><td>{money(campaign.costA)}</td><td>{money(campaign.costB)}</td><td>{money(campaign.price)}</td><td><button onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</button></td></tr>)}</tbody></table></div>{!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="empty">暂无股票持仓。</p>}</section>
       <section className="panel"><div className="section-heading"><h2>未平仓期权</h2><span className="muted">按到期日排序</span></div><div className="table-wrap"><table><thead><tr><th>合约</th><th>手数</th><th>每手股数</th><th>每股净权利金</th><th>到期日</th><th>剩余天数</th><th>了结合约</th></tr></thead><tbody>{positions.map(position => <tr key={position.contract}><td>{position.contract}</td><td>{position.openQty}</td><td>{position.multiplier} 股/手</td><td>{money(position.avgCredit)}</td><td>{position.expiry}</td><td><span className={position.daysLeft < 0 ? 'negative' : position.daysLeft <= 7 ? 'warning-text' : ''}>{position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}</span></td><td><div className="toolbar">{['option_close', 'option_expire', 'option_assign'].map(kind => <button key={kind} onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier })}>{labels[kind]}</button>)}</div></td></tr>)}</tbody></table></div>{!positions.length && <p className="empty">暂无未平仓期权。</p>}</section>
     </>}
-    {page === 'detail' && !unavailable && <><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)}/><p className="footnote">{settings?.includeDividendsInCost ? '当前 B/C′ 成本已扣除累计分红。' : '当前分红不摊薄 B/C′ 成本，可在设置页调整。'}</p><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events} onUndo={setPendingDelete}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
+    {page === 'detail' && !unavailable && <><div className="toolbar"><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail && <button className="primary" onClick={() => openCostScan(detail.campaign.id)}>查看降本方案</button>}</div>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)}/><p className="footnote">{settings?.includeDividendsInCost ? '当前 B/C′ 成本已扣除累计分红。' : '当前分红不摊薄 B/C′ 成本，可在设置页调整。'}</p><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events} onUndo={setPendingDelete}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
     {page === 'market' && <MarketPage prices={prices} symbols={activeSymbols} market={market} onSaved={saved} onEntry={symbol => startEntry({ symbol })}/>}
     {page === 'settings' && <>
       <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'vision', 'data'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', vision: 'AI 识别', data: '备份与维护' }[tab]}</button>)}</div>

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/wheel-core",
+    "crates/wheel-scan",
     "crates/wheel-store",
     "crates/wheel-app",
     "crates/wheel-mobile",

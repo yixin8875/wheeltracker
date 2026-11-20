@@ -1,0 +1,11 @@
+[package]
+name = "wheel-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read-only cost-reduction scanner: option strategy projection over wheel-core."
+
+[dependencies]
+wheel-core = { path = "../wheel-core" }
+time.workspace = true
+serde.workspace = true

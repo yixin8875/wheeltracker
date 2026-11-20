@@ -9,7 +9,9 @@ mod vision;
 mod webdav;
 
 // The ledger, views and backup stack is shared with the mobile shell.
-pub use wheel_store::{backup, crypto, events, market, restore, store, views};
+pub use wheel_store::{
+    backup, crypto, events, market, option_chain, options_market, restore, store, views,
+};
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -266,6 +268,12 @@ fn main() {
             commands::get_vision_settings,
             commands::set_vision_settings,
             commands::vision_import_preview,
+            commands::option_chain_status,
+            commands::fetch_option_chain,
+            commands::option_chain_preview,
+            commands::option_chain_commit,
+            commands::option_chain_quotes,
+            commands::scan_cost_reduction,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Wheel Tracker");

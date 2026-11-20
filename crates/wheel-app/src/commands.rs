@@ -7,11 +7,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use time::macros::format_description;
+use time::OffsetDateTime;
 use wheel_core::{DerivedState, Event, EventKind, Right};
 
 use crate::events::{append_requests, build_event, NewEventReq};
 use crate::views::{event_view, EventView};
-use crate::{backup, notifications, restore, store, views, webdav, AppState};
+use crate::{
+    backup, notifications, option_chain, options_market, restore, store, views, webdav, AppState,
+};
 
 fn account_or_default(account_id: Option<String>) -> String {
     crate::events::account_or_default(account_id)
@@ -2546,6 +2550,238 @@ fn text_mapping() -> crate::import::ColumnMapping {
         delimiter: Some(Delimiter::Comma),
         has_header: Some(true),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Option chain (P12). A chain snapshot is market data, never a ledger event:
+// none of these commands append to the trading log.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainSyncView {
+    pub status: views::ChainStatusView,
+    pub imported: usize,
+    pub skipped: usize,
+}
+
+fn utc_stamp(now: OffsetDateTime) -> String {
+    now.format(format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second]"
+    ))
+    .unwrap_or_else(|_| "1970-01-01 00:00:00".to_string())
+}
+
+fn chain_status_for(
+    conn: &rusqlite::Connection,
+    symbol: &str,
+    now: OffsetDateTime,
+) -> Result<views::ChainStatusView, String> {
+    let Some(snapshot) =
+        option_chain::snapshot(conn, symbol).map_err(|error| error.to_string())?
+    else {
+        return Ok(views::ChainStatusView {
+            symbol: symbol.to_string(),
+            source: String::new(),
+            as_of: String::new(),
+            fetched_at: String::new(),
+            underlying: None,
+            quote_count: 0,
+            status: "missing".to_string(),
+            notes: String::new(),
+        });
+    };
+    let count = option_chain::quote_count(conn, symbol).map_err(|error| error.to_string())?;
+    Ok(views::chain_status(Some(&snapshot), count, now))
+}
+
+/// Without `symbols`, report every symbol that has a stored chain.
+#[tauri::command]
+pub fn option_chain_status(
+    state: State<'_, AppState>,
+    symbols: Option<Vec<String>>,
+) -> Result<Vec<views::ChainStatusView>, String> {
+    let conn = state.conn();
+    let now = OffsetDateTime::now_utc();
+    let symbols: Vec<String> = match symbols {
+        Some(list) => {
+            let mut unique = BTreeSet::new();
+            for symbol in list {
+                unique.insert(crate::market::normalize_symbol(&symbol)?);
+            }
+            unique.into_iter().collect()
+        }
+        None => option_chain::list_snapshots(&conn)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|snapshot| snapshot.symbol)
+            .collect(),
+    };
+    symbols
+        .iter()
+        .map(|symbol| chain_status_for(&conn, symbol, now))
+        .collect()
+}
+
+/// Fetch a delayed chain and only replace the stored snapshot on success, so a
+/// provider outage leaves the previous quotes readable.
+#[tauri::command]
+pub async fn fetch_option_chain(
+    state: State<'_, AppState>,
+    symbol: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<ChainSyncView, String> {
+    ensure_no_pending_restore(&state)?;
+    let from = match from {
+        Some(value) => store::parse_date(&value).map_err(|error| error.to_string())?,
+        None => OffsetDateTime::now_utc().date(),
+    };
+    let to = match to {
+        Some(value) => store::parse_date(&value).map_err(|error| error.to_string())?,
+        None => from + time::Duration::days(90),
+    };
+    let fetch = options_market::fetch(&symbol, from, to).await?;
+    // A restore may have been staged while the request was in flight.
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    option_chain::replace(&conn, &fetch.snapshot, &fetch.quotes)
+        .map_err(|error| format!("{error:#}"))?;
+    let now = OffsetDateTime::now_utc();
+    let status = chain_status_for(&conn, &fetch.snapshot.symbol, now)?;
+    Ok(ChainSyncView {
+        status,
+        imported: fetch.quotes.len(),
+        skipped: 0,
+    })
+}
+
+#[tauri::command]
+pub fn option_chain_preview(text: String) -> Result<views::ChainImportPreviewView, String> {
+    let outcome = option_chain::parse_text(&text).map_err(|error| format!("{error:#}"))?;
+    Ok(views::chain_import_preview(outcome))
+}
+
+/// Commit pasted rows. Valid rows are written; rejected rows are counted and
+/// shown in the import preview so the user can fix them before re-importing.
+#[tauri::command]
+pub fn option_chain_commit(
+    state: State<'_, AppState>,
+    symbol: String,
+    text: String,
+    source: Option<String>,
+) -> Result<ChainSyncView, String> {
+    ensure_no_pending_restore(&state)?;
+    let symbol = crate::market::normalize_symbol(&symbol)?;
+    let outcome = option_chain::parse_text(&text).map_err(|error| format!("{error:#}"))?;
+    if outcome.rows.is_empty() {
+        return Err("没有可导入的期权报价".to_string());
+    }
+    let imported = outcome.rows.len();
+    let skipped = outcome.errors.len();
+    let now = OffsetDateTime::now_utc();
+    let snapshot = option_chain::ChainSnapshot {
+        symbol: symbol.clone(),
+        source: source.unwrap_or_else(|| "manual".to_string()),
+        as_of: now.date().to_string(),
+        fetched_at: utc_stamp(now),
+        underlying: None,
+        notes: format!("手工导入 {imported} 行，跳过 {skipped} 行"),
+    };
+    let quotes: Vec<option_chain::OptionQuote> = outcome
+        .rows
+        .into_iter()
+        .map(|row| row.into_quote(&symbol))
+        .collect();
+    let conn = state.conn();
+    option_chain::replace(&conn, &snapshot, &quotes).map_err(|error| format!("{error:#}"))?;
+    let status = chain_status_for(&conn, &symbol, now)?;
+    Ok(ChainSyncView {
+        status,
+        imported,
+        skipped,
+    })
+}
+
+#[tauri::command]
+pub fn option_chain_quotes(
+    state: State<'_, AppState>,
+    symbol: String,
+) -> Result<Vec<views::ChainQuoteView>, String> {
+    let symbol = crate::market::normalize_symbol(&symbol)?;
+    let conn = state.conn();
+    let quotes = option_chain::quotes(&conn, &symbol).map_err(|error| error.to_string())?;
+    Ok(quotes.iter().map(views::chain_quote_row).collect())
+}
+
+/// Read-only cost-reduction scan: projects strategies against the stored chain
+/// and the current ledger. Writes no event and no snapshot.
+#[tauri::command]
+pub fn scan_cost_reduction(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    campaign_id: String,
+    settings: Option<wheel_scan::ScanSettings>,
+) -> Result<wheel_scan::ScanOutcome, String> {
+    let account_id = account_or_default(account_id);
+    let conn = state.conn();
+    let derived = derive(&conn, &account_id)?;
+    let symbol = derived
+        .campaign(&campaign_id)
+        .map(|campaign| campaign.symbol.clone())
+        .ok_or_else(|| "找不到要扫描的战役".to_string())?;
+    let prices = store::latest_prices(&conn).map_err(|error| error.to_string())?;
+    let price = prices
+        .get(&symbol)
+        .copied()
+        .ok_or_else(|| format!("{symbol} 缺少最新价格，请先更新行情"))?;
+    let covered_shares = derived
+        .positions_for(&campaign_id)
+        .iter()
+        .filter(|position| position.contract.right == Right::Call)
+        .map(|position| {
+            position
+                .open_qty
+                .saturating_mul(position.contract.multiplier)
+        })
+        .sum();
+    let quotes = option_chain::quotes(&conn, &symbol)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|quote| wheel_scan::ChainQuote {
+            expiry: quote.expiry,
+            strike: quote.strike,
+            right: quote.right,
+            bid: quote.bid,
+            ask: quote.ask,
+            mark: quote.mark,
+            iv: quote.iv,
+            open_interest: quote.open_interest,
+            volume: quote.volume,
+            multiplier: quote.multiplier,
+        })
+        .collect();
+    let now = OffsetDateTime::now_utc();
+    let chain_stale = option_chain::snapshot(&conn, &symbol)
+        .map_err(|error| error.to_string())?
+        .map(|snapshot| views::chain_freshness(&snapshot.fetched_at, now) == "stale")
+        .unwrap_or(false);
+    let events = store::list_events(&conn, &account_id).map_err(|error| error.to_string())?;
+    wheel_scan::scan(&wheel_scan::ScanInput {
+        account_id,
+        campaign_id,
+        today: now.date(),
+        price,
+        cash: derived.account_cash,
+        cash_tracked: derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0,
+        covered_shares,
+        chain_stale,
+        events,
+        ledger_settings: derived.settings,
+        quotes,
+        settings: settings.unwrap_or_default(),
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

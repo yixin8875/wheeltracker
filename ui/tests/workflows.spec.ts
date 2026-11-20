@@ -53,6 +53,20 @@ async function setup(page: Page) {
           { date: '2026-01-02', kind: 'cash_deposit', symbol: '', note: '期初入金', amount: 20000, balanceAfter: 20000 },
         ];
         case 'positions': return [...(state.testExtraPositions ?? []), { ...position, multiplier: state.testMultiplier ?? position.multiplier }];
+        case 'option_chain_status': return state.testChainStatus ?? [{ symbol: 'TEST', source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'delayed', notes: '' }];
+        case 'scan_cost_reduction': return state.testScan ?? {
+          campaign: { id: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, unrealizedPnl: 1200, unrealizedPct: 0.0811, premiumRealized: 200, coveredShares: 0, freeShares: 100, cash: 5200, cashTracked: true },
+          chainStale: false, scannedQuotes: 24, dropped: 0,
+          candidates: [{
+            id: 'cc|2026-12-18|165', kind: 'covered_call',
+            legs: [{ side: 'short', expiry: '2026-12-18', strike: 165, right: 'C', qty: 1, price: 2.1, priceSource: 'bid', multiplier: 100 }],
+            premiumTotal: 209.35, fees: 0.65, costBAfter: 145.91, costCAfter: 145.91,
+            costReductionPerShare: 2.09, breakeven: 145.91, annualized: 0.1545,
+            probItm: 0.31, delta: 0.28, upsideCap: 0.03125, capital: 0,
+            assignment: { sharesAfter: 0, sharesChange: -100, costBAfter: null, realizedPnl: -200, lockedLoss: 200, remainingShares: 0, remainingCostB: null, closesCampaign: true, saleProceeds: 16500, capitalAdded: 0 },
+            stress: [], flags: ['locks_loss'],
+          }],
+        };
         case 'list_events': return [...(state.testExtraEvents ?? []), ...(state.testSplit ? [splitEvent] : []), { id: 'ev', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 1, amount: 0, note: '=SUM(A1:A2)', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null }];
         case 'monthly_income': return state.testMonthly ?? {
           months: [
@@ -1293,4 +1307,25 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
   await optionRow.getByRole('button', { name: '打开战役' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'campaign_detail').at(-1)?.args.accountId)).toBe('acct-2');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
+});
+
+test('cost scanner shows projected candidates and prefills entry without writing', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '降本扫描', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '降本扫描', level: 1 })).toBeVisible();
+  await expect(page.getByText(/nasdaq · 240 条 · 延迟/)).toBeVisible();
+
+  await page.getByRole('button', { name: '扫描', exact: true }).click();
+  const row = page.locator('table tbody tr').filter({ hasText: '2026-12-18 165C' });
+  await expect(row).toContainText('$209.35');
+  await expect(row).toContainText('锁定亏损');
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'scan_cost_reduction').at(-1)?.args.campaignId)).toBe('campaign');
+
+  await row.getByRole('button', { name: '记一笔' }).click();
+  await expect(page.getByRole('heading', { name: '记录交易' })).toBeVisible();
+  await expect(page.getByLabel('行权价')).toHaveValue('165');
+  await expect(page.getByLabel('每股权利金 / 平仓价')).toHaveValue('2.1');
+  await expect(page.getByLabel('到期日')).toHaveValue('2026-12-18');
+  const writes = await page.evaluate(() => (window as any).testCalls.filter((call: any) => ['add_event', 'add_events'].includes(call.command)).length);
+  expect(writes).toBe(0);
 });

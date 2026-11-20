@@ -4985,6 +4985,7 @@ dependencies = [
  "time",
  "tokio",
  "wheel-core",
+ "wheel-scan",
  "wheel-store",
  "windows-sys 0.61.2",
 ]
@@ -5010,6 +5011,15 @@ dependencies = [
  "wheel-core",
  "wheel-secure-store",
  "wheel-store",
+]
+
+[[package]]
+name = "wheel-scan"
+version = "0.6.0"
+dependencies = [
+ "serde",
+ "time",
+ "wheel-core",
 ]
 
 [[package]]

@@ -12,6 +12,8 @@ pub mod backup;
 pub mod crypto;
 pub mod events;
 pub mod market;
+pub mod option_chain;
+pub mod options_market;
 pub mod restore;
 pub mod store;
 pub mod views;

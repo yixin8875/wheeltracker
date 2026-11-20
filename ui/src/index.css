@@ -673,3 +673,24 @@ tfoot th { border-top: 1px solid var(--line); border-bottom: 0; background: var(
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Cost-reduction scanner (P12) */
+.badge.danger { background: #fbeeec; color: #8f2f2a; }
+.badge.warning { background: #f7efdf; color: #7a5410; }
+.cost-reduction .footnote { max-width: 80ch; margin-bottom: 16px; }
+.scan-campaign {
+  display: flex; flex-wrap: wrap; gap: 28px;
+  margin: 4px 0 14px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.scan-campaign span { display: flex; flex-direction: column; gap: 4px; }
+.scan-campaign small { font-size: 12px; color: var(--ink-3); }
+.scan-campaign strong { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.scan-flags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px; }
+.scan-import { margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line); }
+.scan-import-preview { margin-top: 12px; }
+.scan-detail > td { background: var(--surface-2); }
+.scan-detail-body { padding: 6px 4px 2px; }
+.scan-detail-grid { display: flex; flex-wrap: wrap; gap: 24px; margin-bottom: 14px; }
+.scan-detail-grid span { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--ink-3); }
+.scan-detail-grid strong { font-size: 14px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+.scan-assignment p { margin-bottom: 12px; font-size: 13px; }

@@ -1,10 +1,13 @@
 //! DTOs sent to the frontend. Field names are camelCase over IPC.
 
 use serde::Serialize;
-use time::Date;
+use time::macros::format_description;
+use time::{Date, OffsetDateTime, PrimitiveDateTime};
 use wheel_core::{
     Campaign, CostPoint, DerivedState, Event, OptionPosition, PremiumEntry, Right, ShareLot,
 };
+
+use crate::option_chain::{ChainSnapshot, OptionQuote, ParseOutcome, ParsedQuote};
 
 fn date_str(date: Date) -> String {
     date.to_string()
@@ -539,5 +542,156 @@ pub fn event_view(event: Event) -> EventView {
         fees: event.fees,
         amount: event.amount,
         note: event.note,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Option-chain views
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainStatusView {
+    pub symbol: String,
+    pub source: String,
+    pub as_of: String,
+    pub fetched_at: String,
+    pub underlying: Option<f64>,
+    pub quote_count: i64,
+    pub status: String,
+    pub notes: String,
+}
+
+pub fn chain_status(
+    snapshot: Option<&ChainSnapshot>,
+    quote_count: i64,
+    now: OffsetDateTime,
+) -> ChainStatusView {
+    let Some(snapshot) = snapshot else {
+        return ChainStatusView {
+            symbol: String::new(),
+            source: String::new(),
+            as_of: String::new(),
+            fetched_at: String::new(),
+            underlying: None,
+            quote_count: 0,
+            status: "missing".to_string(),
+            notes: String::new(),
+        };
+    };
+    let status = chain_freshness(&snapshot.fetched_at, now);
+    ChainStatusView {
+        symbol: snapshot.symbol.clone(),
+        source: snapshot.source.clone(),
+        as_of: snapshot.as_of.clone(),
+        fetched_at: snapshot.fetched_at.clone(),
+        underlying: snapshot.underlying,
+        quote_count,
+        status,
+        notes: snapshot.notes.clone(),
+    }
+}
+
+/// `fresh` ≤ 15 min, `delayed` ≤ 24 h, otherwise `stale`. Exposed so the
+/// scanner can warn per row without re-reading the whole status view.
+pub fn chain_freshness(fetched_at: &str, now: OffsetDateTime) -> String {
+    let Ok(fetched) = PrimitiveDateTime::parse(
+        fetched_at,
+        format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
+    ) else {
+        return "stale".to_string();
+    };
+    let age = now - fetched.assume_utc();
+    if age.whole_minutes() <= 15 {
+        "fresh".to_string()
+    } else if age.whole_hours() <= 24 {
+        "delayed".to_string()
+    } else {
+        "stale".to_string()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainQuoteView {
+    pub expiry: String,
+    pub strike: f64,
+    pub right: String,
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub last: Option<f64>,
+    pub mark: Option<f64>,
+    pub iv: Option<f64>,
+    pub open_interest: Option<i64>,
+    pub volume: Option<i64>,
+}
+
+pub fn chain_quote(quote: &ParsedQuote) -> ChainQuoteView {
+    ChainQuoteView {
+        expiry: date_str(quote.expiry),
+        strike: quote.strike,
+        right: quote.right.as_str().to_string(),
+        bid: quote.bid,
+        ask: quote.ask,
+        last: quote.last,
+        mark: quote.mark(),
+        iv: quote.iv,
+        open_interest: quote.open_interest,
+        volume: quote.volume,
+    }
+}
+
+/// A stored quote as read back from SQLite, including option-chain Greeks that
+/// may have been filled in after import.
+pub fn chain_quote_row(quote: &OptionQuote) -> ChainQuoteView {
+    ChainQuoteView {
+        expiry: date_str(quote.expiry),
+        strike: quote.strike,
+        right: quote.right.as_str().to_string(),
+        bid: quote.bid,
+        ask: quote.ask,
+        last: quote.last,
+        mark: quote.mark,
+        iv: quote.iv,
+        open_interest: quote.open_interest,
+        volume: quote.volume,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainRowErrorView {
+    pub line: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainImportPreviewView {
+    pub headers: Vec<String>,
+    pub delimiter: String,
+    pub rows: Vec<ChainQuoteView>,
+    pub errors: Vec<ChainRowErrorView>,
+    pub valid: usize,
+    pub invalid: usize,
+}
+
+pub fn chain_import_preview(outcome: ParseOutcome) -> ChainImportPreviewView {
+    let valid = outcome.rows.len();
+    let invalid = outcome.errors.len();
+    ChainImportPreviewView {
+        headers: outcome.headers,
+        delimiter: outcome.delimiter.to_string(),
+        rows: outcome.rows.iter().map(chain_quote).collect(),
+        errors: outcome
+            .errors
+            .iter()
+            .map(|error| ChainRowErrorView {
+                line: error.line,
+                message: error.message.clone(),
+            })
+            .collect(),
+        valid,
+        invalid,
     }
 }

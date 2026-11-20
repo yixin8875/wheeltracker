@@ -16,7 +16,7 @@ use wheel_core::{
 
 /// Bumped when the persisted event schema changes. A database written by a
 /// newer build is refused rather than silently read with missing columns.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -65,6 +65,38 @@ CREATE TABLE IF NOT EXISTS prices (
   close  REAL NOT NULL,
   PRIMARY KEY (symbol, date)
 );
+
+-- Latest option-chain snapshot per symbol, isolated from the price ledger.
+CREATE TABLE IF NOT EXISTS option_chain_snapshot (
+  symbol      TEXT PRIMARY KEY,
+  source      TEXT NOT NULL,
+  as_of       TEXT NOT NULL,
+  fetched_at  TEXT NOT NULL,
+  underlying  REAL,
+  notes       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS option_quotes (
+  symbol        TEXT NOT NULL,
+  expiry        TEXT NOT NULL,
+  strike        REAL NOT NULL,
+  right         TEXT NOT NULL,
+  bid           REAL,
+  ask           REAL,
+  last          REAL,
+  mark          REAL,
+  iv            REAL,
+  delta         REAL,
+  gamma         REAL,
+  theta         REAL,
+  vega          REAL,
+  open_interest INTEGER,
+  volume        INTEGER,
+  multiplier    INTEGER NOT NULL DEFAULT 100,
+  updated_at    TEXT NOT NULL,
+  PRIMARY KEY (symbol, expiry, strike, right)
+);
+CREATE INDEX IF NOT EXISTS idx_option_quotes_symbol ON option_quotes (symbol, expiry, strike);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
