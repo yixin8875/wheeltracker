@@ -78,7 +78,7 @@ def check_versions() -> str:
     if root_package.get("version") != version:
         problems.append("ui/package-lock.json packages[''] version differs")
 
-    for crate in ("wheel-app", "wheel-core"):
+    for crate in ("wheel-app", "wheel-core", "wheel-scan"):
         found = lock_version(crate)
         if found != version:
             problems.append(f"Cargo.lock has {crate} {found}, expected {version}")

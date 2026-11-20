@@ -65,7 +65,7 @@ def main() -> None:
 
     lock_path = ROOT / "Cargo.lock"
     lock = read(lock_path)
-    for crate in ("wheel-app", "wheel-core"):
+    for crate in ("wheel-app", "wheel-core", "wheel-scan"):
         pattern = re.compile(
             rf'(\[\[package\]\]\s*\nname = "{re.escape(crate)}"\s*\nversion = ")[^"]+(")'
         )
