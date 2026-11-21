@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Position } from './types';
 import { money } from './lib';
 
@@ -57,7 +57,7 @@ export function ExpiryCalendar({ asOf, positions, onOpenCampaign }: {
   return <div className="calendar-page">
     <section className="panel">
       <div className="section-heading">
-        <div><h2><CalendarDays size={18}/> 到期日历</h2><span className="muted">{total} 个未平仓合约 · 日期按美东交易日</span></div>
+        <div><span className="muted">{total} 个未平仓合约 · 日期按美东交易日</span></div>
         <div className="toolbar">
           <button aria-label="上一个月" onClick={() => setCursor(shiftMonth(cursor.year, cursor.month, -1))}><ChevronLeft size={16}/></button>
           <strong className="calendar-month">{monthTitle(cursor.year, cursor.month)}</strong>

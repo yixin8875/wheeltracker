@@ -283,16 +283,16 @@ export function WebDavSettings({ onNotice, onError, onRestoreStatus }: {
 
       <div className="toolbar">
         <button className="primary" disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void backupNow()}>
-          <CloudUpload size={15}/>{working === 'upload' ? '上传中…' : '立即上传备份'}
+          <CloudUpload size={16}/>{working === 'upload' ? '上传中…' : '立即上传备份'}
         </button>
         <button disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void refreshRemote()}>
-          <RefreshCw size={15}/>{working === 'list' ? '读取中…' : '刷新云端快照'}
+          <RefreshCw size={16}/>{working === 'list' ? '读取中…' : '刷新云端快照'}
         </button>
         <button disabled={!desktop || busy} onClick={() => {
           setEditing(value => !value);
           if (settings) setForm(formOf(settings));
           setTestResult(null);
-        }}><Server size={15}/>{editing ? '收起设置' : '编辑设置'}</button>
+        }}><Server size={16}/>{editing ? '收起设置' : '编辑设置'}</button>
       </div>
 
       {!editing && settings?.configured && (
@@ -433,7 +433,7 @@ export function WebDavSettings({ onNotice, onError, onRestoreStatus }: {
 
       {selectedItem && !download && selectedItem.encrypted && (
         <div className="restore-validation">
-          <div className="section-heading"><h3><Lock size={17}/> {selectedItem.fileName}</h3><span className="badge">已加密</span></div>
+          <div className="section-heading"><h3><Lock size={16}/> {selectedItem.fileName}</h3><span className="badge">已加密</span></div>
           <label className="restore-password">备份密码
             <input
               type="password"
@@ -457,7 +457,7 @@ export function WebDavSettings({ onNotice, onError, onRestoreStatus }: {
       {download && selectedItem && (
         <div className="restore-validation">
           <div className="section-heading">
-            <h3><ShieldCheck size={17}/> {selectedItem.fileName}</h3>
+            <h3><ShieldCheck size={16}/> {selectedItem.fileName}</h3>
             <span className={`badge ${download.validation.valid ? 'active' : 'closed'}`}>{download.validation.valid ? '校验通过' : '不可恢复'}</span>
           </div>
           <div className="validation-values">

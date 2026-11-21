@@ -10,7 +10,7 @@ export function latestPrice(prices: Price[], symbol: string) {
 }
 export function quoteTime(quote?: Price) {
   if (!quote) return '尚无报价';
-  const stamp = quote.quotedAt ? quote.quotedAt.slice(5, 16) : quote.date.slice(5);
+  const stamp = (quote.quotedAt || quote.date).slice(0, 16).replace('T', ' ');
   return `${stamp} 美东 · ${quote.source || '手动'}`;
 }
 

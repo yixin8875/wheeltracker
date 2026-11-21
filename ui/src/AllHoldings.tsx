@@ -1,4 +1,4 @@
-import { Layers, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { money, percent } from './lib';
 import type { AllHoldings } from './types';
 
@@ -19,7 +19,7 @@ export function AllHoldingsPage({ view, onOpenHolding }: {
   const { holdings, options, totals } = view;
   return <section className="panel overview">
     <div className="section-heading">
-      <div><h2><Layers size={18}/> 全部账户持仓</h2><span className="muted">{view.asOf} · 只读汇总 · 各账户分别列示，不合并持仓</span></div>
+      <div><h2>持仓汇总</h2><span className="muted">{view.asOf} · 只读 · 各账户分别列示，不合并持仓</span></div>
     </div>
 
     <div className="summary-strip overview-summary holdings-summary">
@@ -63,6 +63,6 @@ export function AllHoldingsPage({ view, onOpenHolding }: {
       </tr>)}</tbody>
     </table></div>}
 
-    <p className="footnote">实际成本 = 纯股票成本扣减已落袋净权利金（按当前口径计入分红）；持仓盈亏 =（参考价 − 实际成本）× 股数，不含未平仓期权的浮动价值。合计只统计已有参考价的持仓，未记录参考价的持仓单独提示。已归档账户不参与统计；各账户持仓分别列示，不合并为一个虚假组合。</p>
+    <p className="footnote">实际成本 = 纯股票成本扣减已落袋净权利金（含分红）；持仓盈亏 =（参考价 − 实际成本）× 股数，不含未平仓期权。合计只统计有参考价的持仓；已归档账户不参与统计。</p>
   </section>;
 }

@@ -80,7 +80,7 @@ export function VisionSettings() {
   return (
     <section className="panel vision-settings">
       <div className="section-heading">
-        <h2>AI 截图识别</h2>
+        <h2>识别服务</h2>
         <span className="muted">OpenAI 兼容的 /chat/completions 接口</span>
       </div>
       {error && <div className="alert error" role="alert">{error}</div>}

@@ -93,7 +93,7 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
     || closeToTray !== settings?.closeToTray
   );
   return <section className="panel">
-    <div className="section-heading"><h2>到期提醒</h2><span className="muted">应用内提醒 · 可选 Windows 系统通知与托盘</span></div>
+    <div className="section-heading"><h2>提醒设置</h2><span className="muted">应用内提醒 · 可选 Windows 系统通知与托盘</span></div>
     {error && <p className="negative" role="alert">{error}</p>}
     {status && <p className="positive" role="status">{status}</p>}
     <form onSubmit={save} className="accounting-preferences">

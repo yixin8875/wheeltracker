@@ -121,6 +121,8 @@ async function setup(page: Page) {
         case 'app_info':
           if (state.testRejectMetadata) throw new Error('metadata read failed');
           return { version: '0.5.0', dbPath: 'test-only/wheel.db' };
+        case 'plugin:updater|check': return state.testUpdate ?? null;
+        case 'plugin:resource|close': return null;
         case 'list_accounts': return [...state.testAccounts];
         case 'create_account': {
           if (state.testAccounts.some((account: any) => account.name === args.name)) throw new Error('账户名称已存在。');
@@ -640,7 +642,7 @@ test('AI screenshot import sends the user to settings when recognition is not en
   await page.getByRole('button', { name: '确认上传并识别', exact: true }).click();
   await expect(page.getByText('AI 截图识别未启用，请前往设置 → AI 识别。')).toBeVisible();
   await page.getByRole('button', { name: '前往设置 → AI 识别', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '识别服务' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'AI 识别', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
 
@@ -648,7 +650,7 @@ test('AI recognition settings save the key only as a masked hint and clear it on
   await setup(page);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: 'AI 识别', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'AI 截图识别' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '识别服务' })).toBeVisible();
   const key = page.getByLabel('API Key');
   await expect(key).toHaveValue('');
   await expect(key).toHaveAttribute('placeholder', /尾号 1234/);
@@ -1192,7 +1194,7 @@ test('account cash panel explains coverage and reconciles against broker cash', 
 test('expiry centre groups overdue contracts and sends a check notification', async ({ page }) => {
   await setup(page);
   await page.locator('nav').getByRole('button', { name: '到期处理', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /到期处理中心/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '到期处理', exact: true })).toBeVisible();
   await expect(page.locator('.expiry-summary')).toContainText('已过期');
   await expect(page.locator('.expiry-summary')).toContainText('$15,000.00');
   const group = page.locator('.expiry-group').filter({ hasText: '已过期' });
@@ -1227,8 +1229,8 @@ test('notification preferences and a test toast can be saved', async ({ page }) 
 
 test('all-accounts overview totals cash and opens an account read-only', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '全部账户', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '全部账户总览', exact: true })).toBeVisible();
+  await page.locator('nav').getByRole('button', { name: '账户总览', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '账户总览', exact: true })).toBeVisible();
   const summary = page.locator('.overview-summary');
   await expect(summary).toContainText('$5,200.00');
   await expect(summary).toContainText('$15,000.00');
@@ -1238,7 +1240,7 @@ test('all-accounts overview totals cash and opens an account read-only', async (
   const row = page.locator('.overview-table tbody tr').filter({ hasText: '默认账户' });
   await expect(row).toContainText('$5,200.00');
   await expect(row).toContainText('1 个 · 1 手');
-  await expect(page.getByText('总览只汇总现金、义务与未平仓权利金')).toBeVisible();
+  await expect(page.getByText('只汇总现金、义务与未平仓权利金')).toBeVisible();
   await row.getByRole('button', { name: '打开账户' }).click();
   await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible();
 });
@@ -1255,7 +1257,7 @@ test('overview flags untracked Put accounts and switches account', async ({ page
       totals: { accountCount: 2, cashTrackedAccounts: 1, untrackedAccounts: 1, untrackedPutAccounts: 1, premiumRealized: 200, premiumOpen: 200, activeCampaigns: 2, openPositions: 2, openContracts: 2, collateral: 35000, trackedCollateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
     };
   });
-  await page.locator('nav').getByRole('button', { name: '全部账户', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '账户总览', exact: true }).click();
   await expect(page.getByText('有 1 个账户持有未平仓 Put，但尚未记录入金 / 出金')).toBeVisible();
   const untracked = page.locator('.overview-table tbody tr').filter({ hasText: '长期账户' });
   await expect(untracked).toContainText('未记录现金');
@@ -1269,8 +1271,8 @@ test('overview flags untracked Put accounts and switches account', async ({ page
 
 test('all-holdings page totals unrealized P&L and opens the campaign', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '全部持仓', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '全部账户持仓', exact: true })).toBeVisible();
+  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '跨账户持仓', exact: true })).toBeVisible();
   const summary = page.locator('.holdings-summary');
   await expect(summary).toContainText('$16,000.00');
   await expect(summary).toContainText('+$1,200.00');
@@ -1301,7 +1303,7 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
       totals: { accountCount: 2, holdingCount: 2, pricedHoldings: 1, unpricedHoldings: 1, totalShares: 150, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 250, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 5000 },
     };
   });
-  await page.locator('nav').getByRole('button', { name: '全部持仓', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('有 1 个持仓尚无参考价');
   const unpriced = page.locator('table.holdings-table').first().locator('tbody tr').filter({ hasText: '长期账户' });
   await expect(unpriced).toContainText('无参考价');
@@ -1334,4 +1336,24 @@ test('cost scanner shows projected candidates and prefills entry without writing
   await expect(page.getByLabel('到期日')).toHaveValue('2026-12-18');
   const writes = await page.evaluate(() => (window as any).testCalls.filter((call: any) => ['add_event', 'add_events'].includes(call.command)).length);
   expect(writes).toBe(0);
+});
+
+test('settings can check for updates manually and shares the result with the banner', async ({ page }) => {
+  await setup(page);
+  // The startup check runs once; it finds nothing until the test installs a fake release.
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'plugin:updater|check').length)).toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '关于与更新', exact: true }).click();
+  const status = page.locator('.update-status');
+  await expect(status).toContainText('已是最新版本 v0.5.0');
+  await expect(page.getByText('当前版本 v0.5.0')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as any).testUpdate = { rid: 7, currentVersion: '0.5.0', version: '0.7.0', date: '2026-11-20T12:00:00Z', body: 'synthetic notes', rawJson: {} };
+  });
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(status).toContainText('发现新版本 v0.7.0');
+  await expect(page.getByRole('button', { name: '下载并安装 v0.7.0', exact: true })).toBeVisible();
+  await expect(page.locator('.update-banner')).toContainText('发现新版本');
 });

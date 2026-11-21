@@ -255,7 +255,7 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
 
     <section className="panel">
       <div className="section-heading"><h2>筛选</h2><span className="muted">预设只改变过滤与排序，没有综合评分</span></div>
-      <div className="settings-tabs" aria-label="扫描预设">
+      <div className="segmented" aria-label="扫描预设">
         {presets.map(preset => <button key={preset.id} aria-pressed={settings.preset === preset.id} onClick={() => choosePreset(preset.id)} title={preset.note}>{preset.label}</button>)}
       </div>
       <p className="muted">{presets.find(preset => preset.id === settings.preset)?.note}</p>
@@ -288,7 +288,7 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
       {outcome.chainStale && <p className="muted">每行均带「链已过期」标签。</p>}
       {!outcome.candidates.length && <p className="empty">当前筛选下没有候选。可放宽容差、接受锁定亏损，或导入更完整的期权链。</p>}
       {!!outcome.candidates.length && <div className="table-wrap"><table>
-        <thead><tr><th>方案</th><th>合约</th><th>手数</th><th>净权利金</th><th>B′</th><th>C′</th><th>每股降本</th><th>年化</th><th>概率 ITM</th><th>标签</th><th>操作</th></tr></thead>
+        <thead><tr><th>方案</th><th>合约</th><th className="num">手数</th><th className="num">净权利金</th><th className="num">B′</th><th className="num">C′</th><th className="num">每股降本</th><th className="num">年化</th><th className="num">概率 ITM</th><th>标签</th><th>操作</th></tr></thead>
         <tbody>{outcome.candidates.map(candidate => {
           const leg = candidate.legs[0];
           const open = expanded === candidate.id;
@@ -296,13 +296,13 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
             <tr>
               <td>{kindLabels[candidate.kind]}</td>
               <td>{leg ? `${leg.expiry} ${leg.strike}${leg.right}` : '—'}</td>
-              <td>{leg?.qty ?? '—'}</td>
-              <td>{money(candidate.premiumTotal)}</td>
-              <td>{money(candidate.costBAfter)}</td>
-              <td>{money(candidate.costCAfter)}</td>
-              <td>{money(candidate.costReductionPerShare)}</td>
-              <td>{percent(candidate.annualized)}</td>
-              <td>{candidate.probItm == null ? '—' : percent(candidate.probItm)}</td>
+              <td className="num">{leg?.qty ?? '—'}</td>
+              <td className="num">{money(candidate.premiumTotal)}</td>
+              <td className="num">{money(candidate.costBAfter)}</td>
+              <td className="num">{money(candidate.costCAfter)}</td>
+              <td className="num">{money(candidate.costReductionPerShare)}</td>
+              <td className="num">{percent(candidate.annualized)}</td>
+              <td className="num">{candidate.probItm == null ? '—' : percent(candidate.probItm)}</td>
               <td className="scan-flags">{candidate.flags.map(flag => <span key={flag} className={`badge ${flagTone[flag] ?? 'closed'}`}>{flagLabels[flag]}</span>)}</td>
               <td>
                 <div className="toolbar">

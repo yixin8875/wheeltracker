@@ -558,6 +558,16 @@ struct NasdaqRow {
     drill_down_url: Option<String>,
 }
 
+/// Nasdaq answers a symbol it does not classify under the requested asset class
+/// with HTTP 200 and `{"data":null,"status":{"rCode":400}}`, not an HTTP error.
+/// Callers use this to retry the same symbol under another asset class.
+pub fn nasdaq_has_data(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("data").map(|data| !data.is_null()))
+        .unwrap_or(false)
+}
+
 pub fn parse_nasdaq(
     symbol: &str,
     body: &str,
@@ -804,5 +814,14 @@ mod tests {
             .find(|quote| quote.right == Right::Put)
             .unwrap();
         assert_eq!(put.open_interest, Some(11835));
+    }
+
+    #[test]
+    fn detects_null_data_envelope() {
+        let missing = r#"{"data":null,"message":null,"status":{"rCode":400,"bCodeMessage":[{"code":1001,"errorMessage":"Symbol not exists."}]}}"#;
+        assert!(!nasdaq_has_data(missing));
+        assert!(!nasdaq_has_data("not json"));
+        let present = r#"{"data":{"totalRecord":966,"table":{"rows":[]}}}"#;
+        assert!(nasdaq_has_data(present));
     }
 }

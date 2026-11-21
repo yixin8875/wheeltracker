@@ -112,7 +112,7 @@ export function AccountsPanel({ accounts, currentId, onSwitch, onAccounts, onNot
   }
 
   return <section className="panel account-panel">
-    <div className="section-heading"><h2>账户</h2><span className="muted">每个账户有独立账本、持仓与成本</span></div>
+    <div className="section-heading"><h2>可用账户</h2><span className="muted">每个账户有独立账本、持仓与成本</span></div>
     <p className="muted">切换账户只会改变当前查看的账本，不会合并数据。行情报价与成本口径为全局设置。归档会从切换器隐藏账户但保留全部数据；只有没有任何交易的空账户可以删除。</p>
     <div className="table-wrap"><table><thead><tr><th>名称</th><th>币种</th><th>交易</th><th>建立日期</th><th>操作</th></tr></thead><tbody>
       {active.map(account => <tr key={account.id}>

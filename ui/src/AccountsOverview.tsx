@@ -1,4 +1,4 @@
-import { Landmark, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { money, percent } from './lib';
 import type { AllAccountsOverview, OverviewAccount } from './types';
 
@@ -18,7 +18,7 @@ export function AccountsOverview({ overview, onOpenAccount }: {
   const { accounts, totals } = overview;
   return <section className="panel overview">
     <div className="section-heading">
-      <div><h2><Landmark size={18}/> 全部账户总览</h2><span className="muted">{overview.asOf} · 只读汇总 · 不合并持仓或成本</span></div>
+      <div><h2>汇总</h2><span className="muted">{overview.asOf} · 只读 · 不合并持仓或成本</span></div>
     </div>
 
     <div className="summary-strip overview-summary">
@@ -46,6 +46,6 @@ export function AccountsOverview({ overview, onOpenAccount }: {
       </tr>)}</tbody>
     </table></div>}
 
-    <p className="footnote">总览只汇总现金、义务与未平仓权利金，不合并不同账户的持仓、成本或报表；切换账户后可查看单账户详情。已归档账户不参与统计。现金仍只反映账本事件，不含未记录的利息、在途资金或融资额度。</p>
+    <p className="footnote">只汇总现金、义务与未平仓权利金，不合并账户间的持仓、成本或报表；已归档账户不参与统计。现金只反映账本事件，不含利息、在途资金或融资额度。</p>
   </section>;
 }

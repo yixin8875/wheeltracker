@@ -131,20 +131,20 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
 
   return <>
     <section className="panel">
-      <div className="section-heading"><h2>备份与维护</h2><span className="muted">v{info?.version ?? '0.3.0'}</span></div>
+      <div className="section-heading"><h2>本地备份与导出</h2><span className="muted">v{info?.version ?? '—'}</span></div>
       <p className="muted break-path">本地数据库：{info?.dbPath ?? '请在桌面应用中查看'}</p>
       <div className="toolbar">
         <button disabled={!desktop || Boolean(working)} onClick={() => void rebuild()}>{working === 'rebuild' ? '检查中…' : '重算并检查账本'}</button>
-        <button disabled={!desktop || Boolean(working)} onClick={() => void manualBackup()}><DatabaseBackup size={15}/>{working === 'backup' ? '备份中…' : '备份 SQLite'}</button>
+        <button disabled={!desktop || Boolean(working)} onClick={() => void manualBackup()}><DatabaseBackup size={16}/>{working === 'backup' ? '备份中…' : '备份 SQLite'}</button>
         <button disabled={!events.length} onClick={() => downloadCsv('wheel-events.csv', [['id', 'date', 'kind', 'symbol', 'qty', 'multiplier', 'split_numerator', 'split_denominator', 'split_cash_in_lieu', 'price', 'fees', 'amount', 'expiry', 'strike', 'right', 'note'], ...events.map(event => [event.id, event.date, event.kind, event.symbol, event.qty, event.multiplier, event.splitNumerator, event.splitDenominator, event.splitCashInLieu, event.price, event.fees, event.amount, event.expiry, event.strike, event.right, event.note])])}>导出交易 CSV</button>
-        <button disabled={!events.length} onClick={() => { exportWorkbook({ entries, events, positions, campaigns }); onNotice(`已生成 Excel 工作簿：台账 ${entries.length} 条、交易 ${events.length} 笔、持仓 ${positions.length} 个、战役 ${campaigns.length} 个。`); }}><FileSpreadsheet size={15}/>导出 Excel 工作簿</button>
-        <button disabled={!desktop || Boolean(working)} onClick={() => void exportJson()}><FileJson size={15}/>{working === 'json' ? '导出中…' : '导出 JSON'}</button>
+        <button disabled={!events.length} onClick={() => { exportWorkbook({ entries, events, positions, campaigns }); onNotice(`已生成 Excel 工作簿：台账 ${entries.length} 条、交易 ${events.length} 笔、持仓 ${positions.length} 个、战役 ${campaigns.length} 个。`); }}><FileSpreadsheet size={16}/>导出 Excel 工作簿</button>
+        <button disabled={!desktop || Boolean(working)} onClick={() => void exportJson()}><FileJson size={16}/>{working === 'json' ? '导出中…' : '导出 JSON'}</button>
       </div>
       <div className="backup-password-row">
         <label>加密密码（可选，至少 8 位）
           <input type="password" aria-label="备份加密密码" autoComplete="new-password" placeholder="留空则生成普通 .sqlite" value={backupPassword} disabled={!desktop || Boolean(working)} onChange={event => setBackupPassword(event.target.value)}/>
         </label>
-        <span className="muted">填写后生成 .sqlite.enc 加密备份；密码遗失将无法恢复，请另行保存。JSON 导出包含所有账户的事件、报价与设置，仅供查看与迁移，不能直接恢复。</span>
+        <span className="muted">填写后生成 .sqlite.enc 加密备份；密码遗失无法恢复。JSON 含全部事件、报价与设置，仅供查看与迁移，不能恢复。</span>
       </div>
     </section>
 
@@ -156,12 +156,12 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
           <input type="number" min={1} max={100} step={1} value={autoKeep} disabled={!desktop || !settings || Boolean(working)} onChange={event => setAutoKeep(Number(event.target.value))}/>
           份自动备份
         </label>
-        <p className="muted">启动应用和每 30 分钟检查一次 UTC 日期；同一天只生成一份 auto-*.sqlite。手动备份与恢复前安全快照永不被自动清理。</p>
+        <p className="muted">启动时与每 30 分钟检查一次 UTC 日期，同一天只生成一份 auto-*.sqlite。手动备份与恢复前快照不会被自动清理。</p>
         <button className="primary" disabled={!desktop || !settings || Boolean(working) || !autoChanged} onClick={() => void saveAutoBackup()}>{working === 'preferences' ? '保存中…' : '保存自动备份设置'}</button>
       </div>
     </section>
 
-    {(pending || restoreStatus?.lastResult || restoreStatus?.failed.length) && <section className="panel restore-panel">
+    {(pending || restoreStatus?.lastResult || (restoreStatus?.failed.length ?? 0) > 0) && <section className="panel restore-panel">
       <div className="section-heading"><h2><ArchiveRestore size={18}/> 恢复状态</h2></div>
       {pending && <div className="alert warning" role="alert"><strong>等待重启：</strong>将从 {pending.backupFile} 恢复。请完全退出并重新启动应用；重启前账本只读。恢复前安全快照：{pending.safetyFile}。</div>}
       {restoreStatus?.lastResult && <div className={`alert ${restoreStatus.lastResult.ok ? 'success' : 'error'}`} role="status">
@@ -181,7 +181,7 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
         </div>)}
       </div>}
       {selectedBackup?.encrypted && !validation && <div className="restore-validation">
-        <div className="section-heading"><h3><Lock size={17}/> {selectedBackup.fileName}</h3><span className="badge">已加密</span></div>
+        <div className="section-heading"><h3><Lock size={16}/> {selectedBackup.fileName}</h3><span className="badge">已加密</span></div>
         <label className="restore-password">恢复密码
           <input type="password" aria-label="恢复密码" autoComplete="current-password" value={restorePassword} disabled={!desktop || Boolean(working)} onChange={event => setRestorePassword(event.target.value)}/>
         </label>
@@ -189,7 +189,7 @@ export function SettingsData({ accountId, info, events, campaigns, entries, posi
         <button disabled={!desktop || Boolean(working) || restorePassword.length < 8} onClick={() => void inspect(selectedBackup)}>{working === 'validate' ? '解密校验中…' : '解密并校验'}</button>
       </div>}
       {validation && <div className="restore-validation">
-        <div className="section-heading"><h3><ShieldCheck size={17}/> {validation.fileName}</h3><span className={`badge ${validation.valid ? 'active' : 'closed'}`}>{validation.valid ? '校验通过' : '不可恢复'}</span></div>
+        <div className="section-heading"><h3><ShieldCheck size={16}/> {validation.fileName}</h3><span className={`badge ${validation.valid ? 'active' : 'closed'}`}>{validation.valid ? '校验通过' : '不可恢复'}</span></div>
         <div className="validation-values"><span>完整性<strong>{validation.integrity || '未知'}</strong></span><span>事件<strong>{validation.events}</strong></span><span>账户<strong>{validation.accounts}</strong></span><span>报价<strong>{validation.prices}</strong></span></div>
         {!!validation.issues.length && <ul className="negative validation-issues">{validation.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
         <p className="muted">恢复会在下次启动、打开数据库之前执行：先把当前账本归档，再替换为所选备份。若替换失败，会保留原数据库。暂存恢复后，账本在重启前只读。</p>
