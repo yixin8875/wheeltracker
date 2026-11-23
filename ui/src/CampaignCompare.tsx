@@ -3,17 +3,23 @@ import * as echarts from 'echarts/core';
 import { ScatterChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import { ScatterChart as ScatterIcon } from 'lucide-react';
+import { ScatterChartIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { Campaign, Entry } from './types';
 import { money, percent } from './lib';
 
 echarts.use([ScatterChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
-const COLORS = ['#0f5fbe', '#7d7668', '#2f6f6a', '#a05f2c', '#5b6b8a', '#8a5a12', '#4d6b4f', '#9c4a44'];
-const INK_3 = '#8b8477';
-const LINE = 'rgba(30, 28, 23, .17)';
-const GRID = 'rgba(30, 28, 23, .07)';
-const FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
+const COLORS = ['#18181b', '#52525b', '#71717a', '#a16207', '#0f766e', '#6d28d9', '#b45309', '#9f1239'];
+const INK = '#18181b';
+const INK_2 = '#52525b';
+const INK_3 = '#71717a';
+const LINE = 'rgba(24, 24, 27, .18)';
+const GRID = 'rgba(24, 24, 27, .07)';
+const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 function utc(value: string) {
   return Date.parse(`${value}T00:00:00Z`);
@@ -84,7 +90,7 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
             name: item.campaign.id,
             value: [item.days, Number(((item.returnPct ?? 0) * 100).toFixed(2))],
             itemStyle: {
-              color: item.campaign.status === 'active' ? '#fffefa' : color,
+              color: item.campaign.status === 'active' ? '#ffffff' : color,
               borderColor: color,
               borderWidth: 2,
             },
@@ -94,16 +100,16 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
     });
     chart.setOption({
       backgroundColor: 'transparent',
-      textStyle: { color: '#575249', fontFamily: FONT, fontSize: 12 },
+      textStyle: { color: INK_2, fontFamily: FONT, fontSize: 12 },
       grid: { left: 16, right: 24, top: 48, bottom: 16, containLabel: true },
-      legend: { top: 4, itemWidth: 10, itemHeight: 10, itemGap: 16, textStyle: { color: '#575249', fontSize: 12 } },
+      legend: { top: 4, itemWidth: 10, itemHeight: 10, itemGap: 16, textStyle: { color: INK_2, fontSize: 12 } },
       tooltip: {
         trigger: 'item',
-        backgroundColor: '#fffefa',
+        backgroundColor: '#ffffff',
         borderColor: LINE,
         borderWidth: 1,
-        textStyle: { color: '#1e1c17', fontSize: 12 },
-        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
+        textStyle: { color: INK, fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(24,24,27,.10); border-radius: 8px;',
         formatter: (parameter: unknown) => {
           const item = parameter as { data?: { comparison?: Comparison } };
           const comparison = item.data?.comparison;
@@ -115,7 +121,7 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
             `峰值投入：${money(comparison.capital)}`,
             `收益率：${percent(comparison.returnPct)}`,
             `周期：${comparison.campaign.cycles} 次了结`,
-            comparison.campaign.status === 'active' ? '<span style="color:#8a5a12">进行中收益不含未平仓权利金与浮盈亏</span>' : '',
+            comparison.campaign.status === 'active' ? '<span style="color:#a16207">进行中收益不含未平仓权利金与浮盈亏</span>' : '',
           ].filter(Boolean).join('<br/>');
         },
       },
@@ -135,24 +141,55 @@ export function CampaignCompare({ campaigns, entries, asOf }: { campaigns: Campa
     return () => { observer.disconnect(); chart.dispose(); };
   }, [comparisons, symbols, colors, table]);
 
-  return <section className="panel">
-    <div className="section-heading">
-      <div><h2><ScatterIcon size={18}/> 战役对比</h2><span className="muted">{campaigns.length} 个战役 · 按标的着色</span></div>
-      <div className="toolbar"><span className="muted compare-legend-note">空心为进行中 · 实心为已结束</span><button onClick={() => setTable(!table)}>{table ? '查看图表' : '查看数据'}</button></div>
-    </div>
-    <p className="muted compare-note">横轴为持续天数，纵轴为已实现收益 ÷ 峰值投入。峰值投入按每日未平仓 Put 占用资金加当日持股的纯股票成本取最大值；进行中战役的已实现收益不含未平仓权利金与股票浮盈亏。</p>
-    {!campaigns.length ? <p className="empty">记录第一笔卖 Put 或股票买入后，这里会显示历次战役的收益对比。</p> : table ? <div key="compare-data" className="table-wrap"><table>
-      <thead><tr><th>标的</th><th>起止</th><th>天数</th><th>状态</th><th>已实现收益</th><th>峰值投入</th><th>收益率</th><th>周期</th></tr></thead>
-      <tbody>{comparisons.map(item => <tr key={item.campaign.id}>
-        <td>{item.campaign.symbol}</td>
-        <td>{item.campaign.startedAt} → {item.campaign.endedAt ?? '进行中'}</td>
-        <td>{item.days}</td>
-        <td><span className={`badge ${item.campaign.status}`}>{item.campaign.status === 'active' ? '进行中' : '已结束'}</span></td>
-        <td className={item.realized < 0 ? 'negative' : 'positive'}>{money(item.realized)}</td>
-        <td>{item.capital > 0 ? money(item.capital) : '—'}</td>
-        <td>{percent(item.returnPct)}</td>
-        <td>{item.campaign.cycles}</td>
-      </tr>)}</tbody>
-    </table></div> : <div key="compare-plot" ref={element} className="compare-chart" role="img" aria-label="战役散点图：横轴持续天数，纵轴已实现收益率，可切换数据表读取全部数值"/>}
-  </section>;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base"><ScatterChartIcon className="size-4 text-muted-foreground" />战役对比</CardTitle>
+        <CardDescription>{campaigns.length} 个战役 · 按标的着色</CardDescription>
+      </CardHeader>
+      <CardPanel className="space-y-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <span className="compare-legend-note text-xs text-muted-foreground">空心为进行中 · 实心为已结束</span>
+          <Button variant="outline" size="sm" onClick={() => setTable(!table)}>{table ? '查看图表' : '查看数据'}</Button>
+        </div>
+        <p className="compare-note text-xs leading-relaxed text-muted-foreground">横轴为持续天数，纵轴为已实现收益 ÷ 峰值投入。峰值投入按每日未平仓 Put 占用资金加当日持股的纯股票成本取最大值；进行中战役的已实现收益不含未平仓权利金与股票浮盈亏。</p>
+        {!campaigns.length ? (
+          <p className="text-sm text-muted-foreground">记录第一笔卖 Put 或股票买入后，这里会显示历次战役的收益对比。</p>
+        ) : table ? (
+          <div key="compare-data" className="overflow-hidden rounded-xl border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>标的</TableHead>
+                  <TableHead>起止</TableHead>
+                  <TableHead className="text-right">天数</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead className="text-right">已实现收益</TableHead>
+                  <TableHead className="text-right">峰值投入</TableHead>
+                  <TableHead className="text-right">收益率</TableHead>
+                  <TableHead className="text-right">周期</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {comparisons.map(item => (
+                  <TableRow key={item.campaign.id}>
+                    <TableCell className="font-medium">{item.campaign.symbol}</TableCell>
+                    <TableCell className="num text-xs">{item.campaign.startedAt} → {item.campaign.endedAt ?? '进行中'}</TableCell>
+                    <TableCell className="num text-right">{item.days}</TableCell>
+                    <TableCell><Badge variant={item.campaign.status === 'active' ? 'warning' : 'secondary'} size="sm">{item.campaign.status === 'active' ? '进行中' : '已结束'}</Badge></TableCell>
+                    <TableCell className={`num text-right ${item.realized < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(item.realized)}</TableCell>
+                    <TableCell className="num text-right">{item.capital > 0 ? money(item.capital) : '—'}</TableCell>
+                    <TableCell className="num text-right">{percent(item.returnPct)}</TableCell>
+                    <TableCell className="num text-right">{item.campaign.cycles}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div key="compare-plot" ref={element} className="compare-chart chart-surface" role="img" aria-label="战役散点图：横轴持续天数，纵轴已实现收益率，可切换数据表读取全部数值" />
+        )}
+      </CardPanel>
+    </Card>
+  );
 }

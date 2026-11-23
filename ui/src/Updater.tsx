@@ -1,3 +1,5 @@
+import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { updatePercent, useUpdate } from './update';
 
 /**
@@ -11,18 +13,24 @@ export function Updater() {
   if (!update || phase === 'idle' || phase === 'checking' || phase === 'current') return null;
   const percent = updatePercent(downloaded, total);
 
-  return <div className={`alert update-banner ${phase === 'error' ? 'error' : ''}`} role="status">
-    {phase === 'error'
-      ? <span>更新 {update.version} 安装失败：{error}</span>
-      : phase === 'ready'
-        ? <span>新版本 {update.version} 已安装，重启应用后生效。</span>
-        : phase === 'downloading'
-          ? <span>正在下载 {update.version}{percent == null ? '…' : ` · ${percent}%`}<progress max={100} value={percent ?? 0}/></span>
-          : <span>发现新版本 <strong>v{update.version}</strong>（当前 v{update.currentVersion}）。</span>}
-    <div className="toolbar">
-      {phase === 'ready'
-        ? <button className="primary" onClick={() => void restart()}>重启应用</button>
-        : <button className="primary" disabled={phase === 'downloading'} onClick={() => void install()}>{phase === 'downloading' ? '下载中…' : phase === 'error' ? '重试安装' : '下载并安装'}</button>}
-    </div>
-  </div>;
+  return (
+    <Alert variant={phase === 'error' ? 'error' : phase === 'ready' ? 'success' : 'info'} role="status" className={`update-banner ${phase === 'error' ? 'error' : ''}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="min-w-0 text-sm">
+          {phase === 'error'
+            ? <span>更新 {update.version} 安装失败：{error}</span>
+            : phase === 'ready'
+              ? <span>新版本 {update.version} 已安装，重启应用后生效。</span>
+              : phase === 'downloading'
+                ? <span>正在下载 {update.version}{percent == null ? '…' : ` · ${percent}%`}<progress className="ms-2 inline-block h-1.5 w-32 align-middle accent-primary" max={100} value={percent ?? 0} /></span>
+                : <span>发现新版本 <strong>v{update.version}</strong>（当前 v{update.currentVersion}）。</span>}
+        </span>
+        <div className="toolbar flex shrink-0 gap-2">
+          {phase === 'ready'
+            ? <Button size="xs" onClick={() => void restart()}>重启应用</Button>
+            : <Button size="xs" disabled={phase === 'downloading'} onClick={() => void install()}>{phase === 'downloading' ? '下载中…' : phase === 'error' ? '重试安装' : '下载并安装'}</Button>}
+        </div>
+      </div>
+    </Alert>
+  );
 }

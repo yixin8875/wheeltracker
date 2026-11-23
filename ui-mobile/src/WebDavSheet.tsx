@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { RefreshCwIcon, XIcon } from 'lucide-react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import {
   restoreStatus,
   webdavBackup,
@@ -15,12 +21,13 @@ import {
   type WebDavConfig,
   type WebDavSettings,
 } from './api'
-import { IconClose } from './Icons'
 
 interface Props {
   onClose: () => void
   onChanged: (message: string) => void
 }
+
+const FIELD_INPUT = 'h-10 [&_input]:h-full [&_input]:leading-10'
 
 function size(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '—'
@@ -48,6 +55,63 @@ function toConfig(settings: WebDavSettings): WebDavConfig {
     encrypt: settings.encrypt,
     allowInsecureHttp: settings.allowInsecureHttp,
   }
+}
+
+function Field({
+  label,
+  wide,
+  children,
+}: {
+  label: string
+  wide?: boolean
+  children: ReactNode
+}) {
+  return (
+    <label
+      className={cn(
+        'flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground',
+        wide && 'col-span-2',
+      )}
+    >
+      <span>{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function Toggle({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean
+  onChange: () => void
+  children: ReactNode
+}) {
+  return (
+    <Button
+      variant="ghost"
+      onClick={onChange}
+      aria-pressed={checked}
+      className="h-12 w-full justify-between rounded-none px-3.5 text-sm font-normal"
+    >
+      <span>{children}</span>
+      <span
+        aria-hidden="true"
+        className={cn(
+          'relative h-6 w-10 shrink-0 rounded-full transition-colors',
+          checked ? 'bg-primary' : 'bg-input',
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 left-0.5 size-5 rounded-full bg-background shadow-sm transition-transform',
+            checked && 'translate-x-4',
+          )}
+        />
+      </span>
+    </Button>
+  )
 }
 
 export default function WebDavSheet({ onClose, onChanged }: Props) {
@@ -195,75 +259,87 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
     })
 
   return (
-    <div className="sheet-backdrop" onClick={onClose} role="presentation">
+    <div
+      className="fixed inset-0 z-40 flex animate-in items-end justify-center bg-black/40 backdrop-blur-sm duration-150 fade-in-0"
+      onClick={onClose}
+      role="presentation"
+    >
       <section
-        className="sheet"
+        className="max-h-[92dvh] w-full max-w-[30rem] animate-in overflow-y-auto rounded-t-2xl border bg-background p-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-xl duration-300 fade-in-0 slide-in-from-bottom-6"
         role="dialog"
         aria-modal="true"
         aria-label="备份与同步"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="sheet-head">
-          <span className="sheet-grip" aria-hidden="true" />
-          <h2>备份与同步</h2>
-          <button className="icon-button" onClick={onClose} aria-label="关闭">
-            <IconClose size={18} />
-          </button>
+        <span
+          aria-hidden="true"
+          className="mx-auto mb-1 block h-1 w-9 rounded-full bg-border"
+        />
+        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-3 border-b bg-background px-4 py-2.5">
+          <h2 className="font-heading text-base font-semibold">备份与同步</h2>
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭">
+            <XIcon />
+          </Button>
         </header>
 
-        <div className="sheet-body">
+        <div className="mt-4 flex flex-col gap-4">
           {error && (
-            <div className="alert" role="alert">
-              <strong>操作失败</strong>
-              <span>{error}</span>
-            </div>
+            <Alert variant="error" role="alert">
+              <AlertTitle>操作失败</AlertTitle>
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
           )}
           {notice && (
-            <p className="notice-inline" role="status">
+            <p
+              role="status"
+              className="rounded-lg border border-info/32 bg-info/4 px-3.5 py-2.5 text-xs leading-relaxed text-foreground"
+            >
               {notice}
             </p>
           )}
           {pending && (
-            <div className="alert warn" role="status">
-              <strong>已安排恢复</strong>
-              <span>
+            <Alert variant="warning" role="status">
+              <AlertTitle>已安排恢复</AlertTitle>
+              <AlertDescription className="text-xs">
                 {pending.backupFile} · 完全退出并重新打开应用后生效，此前不能记新账。
-              </span>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
           {!pending && lastResult && (
-            <p className="muted small">上次恢复：{lastResult.message}</p>
+            <p className="text-xs text-muted-foreground">上次恢复：{lastResult.message}</p>
           )}
 
-          {!config && !error && <p className="empty">正在读取设置…</p>}
+          {!config && !error && (
+            <p className="py-8 text-center text-sm text-muted-foreground">正在读取设置…</p>
+          )}
 
           {config && (
             <>
-              <div className="field-grid">
-                <label className="field wide">
-                  <span>服务器地址</span>
-                  <input
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="服务器地址" wide>
+                  <Input
+                    className={FIELD_INPUT}
                     value={config.url}
                     onChange={(event) => update({ url: event.target.value })}
-                    placeholder="https://dav.jianguoyun.com/dav/"
+                    placeholder="https://dav.example.com/dav/"
                     inputMode="url"
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
-                </label>
-                <label className="field">
-                  <span>账号</span>
-                  <input
+                </Field>
+                <Field label="账号">
+                  <Input
+                    className={FIELD_INPUT}
                     value={config.username}
                     onChange={(event) => update({ username: event.target.value })}
                     placeholder="you@example.com"
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
-                </label>
-                <label className="field">
-                  <span>应用密码</span>
-                  <input
+                </Field>
+                <Field label="应用密码">
+                  <Input
+                    className={FIELD_INPUT}
                     type="password"
                     value={serverPassword}
                     onChange={(event) => setServerPassword(event.target.value)}
@@ -271,77 +347,86 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
-                </label>
-                <label className="field">
-                  <span>远程目录</span>
-                  <input
+                </Field>
+                <Field label="远程目录">
+                  <Input
+                    className={FIELD_INPUT}
                     value={config.remoteDir}
                     onChange={(event) => update({ remoteDir: event.target.value })}
                     placeholder="/wheel/"
                     autoCapitalize="none"
                     autoCorrect="off"
                   />
-                </label>
-                <label className="field">
-                  <span>保留份数</span>
-                  <input
+                </Field>
+                <Field label="保留份数">
+                  <Input
+                    className={FIELD_INPUT}
                     value={String(config.keep)}
                     onChange={(event) =>
                       update({ keep: Math.max(1, Math.trunc(Number(event.target.value) || 1)) })
                     }
                     inputMode="numeric"
                   />
-                </label>
+                </Field>
               </div>
 
-              <div className="toggle-list">
-                <button
-                  className={`toggle ${config.encrypt ? 'on' : ''}`}
-                  onClick={() => update({ encrypt: !config.encrypt })}
-                  aria-pressed={config.encrypt}
+              <div className="divide-y overflow-hidden rounded-xl border">
+                <Toggle
+                  checked={config.encrypt}
+                  onChange={() => update({ encrypt: !config.encrypt })}
                 >
-                  <span>加密上传</span>
-                  <span className="switch" aria-hidden="true" />
-                </button>
-                <button
-                  className={`toggle ${config.allowInsecureHttp ? 'on' : ''}`}
-                  onClick={() => update({ allowInsecureHttp: !config.allowInsecureHttp })}
-                  aria-pressed={config.allowInsecureHttp}
+                  加密上传
+                </Toggle>
+                <Toggle
+                  checked={config.allowInsecureHttp}
+                  onChange={() => update({ allowInsecureHttp: !config.allowInsecureHttp })}
                 >
-                  <span>允许局域网 HTTP</span>
-                  <span className="switch" aria-hidden="true" />
-                </button>
+                  允许局域网 HTTP
+                </Toggle>
               </div>
 
-              <div className="sheet-actions">
-                <button className="ghost" onClick={() => void onTest()} disabled={Boolean(busy)}>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => void onTest()}
+                  disabled={Boolean(busy)}
+                >
                   {busy === '测试连接' ? '连接中…' : '测试连接'}
-                </button>
-                <button className="primary" onClick={() => void onSave()} disabled={Boolean(busy)}>
+                </Button>
+                <Button size="lg" onClick={() => void onSave()} disabled={Boolean(busy)}>
                   {busy === '保存' ? '保存中…' : '保存'}
-                </button>
+                </Button>
               </div>
 
-              {settings?.lastError && <p className="muted small">上次错误：{settings.lastError}</p>}
+              {settings?.lastError && (
+                <p className="text-xs text-destructive-foreground">上次错误：{settings.lastError}</p>
+              )}
               {settings?.lastUploadAt && (
-                <p className="muted small">
+                <p className="text-xs text-muted-foreground">
                   上次上传：{when(settings.lastUploadAt)} · {settings.lastUploadFile ?? '—'}
                 </p>
               )}
 
               {known && (
                 <>
-                  <div className="section-title spaced">
-                    <h2>云端快照</h2>
-                    <button className="link" onClick={() => void onList()} disabled={Boolean(busy)}>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <h3 className="font-heading text-sm font-semibold">云端快照</h3>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => void onList()}
+                      disabled={Boolean(busy)}
+                    >
+                      <RefreshCwIcon className={busy === '刷新云端' ? 'animate-spin' : undefined} />
                       {busy === '刷新云端' ? '刷新中…' : '刷新'}
-                    </button>
+                    </Button>
                   </div>
 
                   {config.encrypt && (
-                    <label className="field wide">
-                      <span>备份密码（加密上传 / 恢复加密快照）</span>
-                      <input
+                    <Field label="备份密码（加密上传 / 恢复加密快照）" wide>
+                      <Input
+                        className={FIELD_INPUT}
                         type="password"
                         value={backupPassword}
                         onChange={(event) => setBackupPassword(event.target.value)}
@@ -349,63 +434,88 @@ export default function WebDavSheet({ onClose, onChanged }: Props) {
                         autoCapitalize="none"
                         autoCorrect="off"
                       />
-                    </label>
+                    </Field>
                   )}
 
-                  <button
-                    className="primary wide"
+                  <Button
+                    size="lg"
+                    className="w-full"
                     onClick={() => void onBackup()}
                     disabled={Boolean(busy)}
                   >
                     {busy === '备份' ? '上传中…' : '立即备份到 WebDAV'}
-                  </button>
+                  </Button>
 
                   {snapshots && snapshots.length === 0 && (
-                    <p className="empty">云端还没有本应用上传的快照。</p>
+                    <p className="py-4 text-center text-xs text-muted-foreground">
+                      云端还没有本应用上传的快照。
+                    </p>
                   )}
                   {snapshots?.map((entry) => (
-                    <article className="card snapshot" key={entry.fileName}>
-                      <div className="card-head">
-                        <div>
-                          <strong className="mono small">{entry.fileName}</strong>
-                          <span className="muted small">
-                            {size(entry.sizeBytes)} · {when(entry.modifiedAt)}
-                            {entry.encrypted ? ' · 加密' : ''}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="position-actions">
-                        <button onClick={() => void onDownload(entry)} disabled={Boolean(busy)}>
+                    <Card key={entry.fileName}>
+                      <CardHeader className="gap-1 p-3.5 pb-2">
+                        <CardTitle className="num truncate text-xs font-medium">
+                          {entry.fileName}
+                        </CardTitle>
+                        <CardDescription className="text-[11px]">
+                          {size(entry.sizeBytes)} · {when(entry.modifiedAt)}
+                          {entry.encrypted ? ' · 加密' : ''}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardPanel className="grid grid-cols-2 gap-2 p-3.5 pt-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-9"
+                          onClick={() => void onDownload(entry)}
+                          disabled={Boolean(busy)}
+                        >
                           恢复…
-                        </button>
-                        <button
-                          className="danger"
+                        </Button>
+                        <Button
+                          variant="destructive-outline"
+                          size="sm"
+                          className="h-9"
                           onClick={() => void onDelete(entry)}
                           disabled={Boolean(busy)}
                         >
                           删除
-                        </button>
-                      </div>
-                    </article>
+                        </Button>
+                      </CardPanel>
+                    </Card>
                   ))}
 
                   {candidate && (
-                    <div className="card confirm">
-                      <p>
-                        将 {candidate.fileName} 换入本机账本。当前账本会留一份安全副本，恢复在下次启动时执行。
-                      </p>
-                      <div className="position-actions">
-                        <button onClick={() => setCandidate(null)}>取消</button>
-                        <button className="primary" onClick={() => void onStage()}>
-                          安排恢复
-                        </button>
-                      </div>
-                    </div>
+                    <Card className="border-warning/40 bg-warning/4">
+                      <CardPanel className="flex flex-col gap-3 p-3.5">
+                        <p className="text-xs leading-relaxed">
+                          将 {candidate.fileName} 换入本机账本。当前账本会留一份安全副本，恢复在下次启动时执行。
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9"
+                            onClick={() => setCandidate(null)}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-9"
+                            onClick={() => void onStage()}
+                            disabled={Boolean(busy)}
+                          >
+                            安排恢复
+                          </Button>
+                        </div>
+                      </CardPanel>
+                    </Card>
                   )}
                 </>
               )}
 
-              <p className="muted small">
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
                 密码使用 Android Keystore 加密保存在本机，不写入账本；重启应用后继续沿用。自动上传仍未开放。
               </p>
             </>

@@ -1,4 +1,9 @@
 import { useState } from 'react';
+import { DownloadIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { NativeSelect } from '@/components/native-select';
 import { downloadCsv, labels, money } from './lib';
 import type { EventRow } from './types';
 
@@ -48,32 +53,83 @@ export function EventLog({ events, onUndo, onEdit }: { events: EventRow[]; onUnd
     ]);
   }
 
-  return <section className="panel">
-    <div className="section-heading">
-      <div><h2>交易事件日志</h2><span className="muted">{filtered.length} / {events.length} 笔 · 修改与撤销前都会重新校验后续交易</span></div>
-      <button onClick={exportRows} disabled={!filtered.length}>导出交易 CSV</button>
-    </div>
-    <div className="filters">
-      <label>标的<input aria-label="事件标的筛选" placeholder="全部标的" value={symbol} onChange={event => setSymbol(event.target.value)}/></label>
-      <label>类型<select aria-label="事件类型筛选" value={kind} onChange={event => setKind(event.target.value)}><option value="">全部类型</option>{KINDS.map(value => <option key={value} value={value}>{labels[value] ?? value}</option>)}</select></label>
-      <label>日期自<input aria-label="事件起始日期" type="date" value={from} onChange={event => setFrom(event.target.value)}/></label>
-      <label>至<input aria-label="事件结束日期" type="date" value={until} onChange={event => setUntil(event.target.value)}/></label>
-    </div>
-    <div className="table-wrap"><table>
-      <thead><tr><th>日期</th><th>类型</th><th>标的 / 合约</th><th>数量 / 拆股比例</th><th>每股价格</th><th>费用</th><th>金额 / 零股补偿</th><th>备注</th><th>操作</th></tr></thead>
-      <tbody>{[...filtered].reverse().map(event => <tr key={event.id}>
-        <td>{event.date}</td>
-        <td>{labels[event.kind] ?? event.kind}</td>
-        <td>{event.symbol || '账户'} {event.expiry} {event.strike}{event.right}{event.multiplier && event.multiplier !== 100 ? ` · ${event.multiplier} 股/手` : ''}</td>
-        <td>{quantityLabel(event)}</td>
-        <td>{priceLabel(event)}</td>
-        <td>{feeLabel(event)}</td>
-        <td>{amountLabel(event)}</td>
-        <td className="note-cell">{event.note}</td>
-        <td><div className="row-actions"><button onClick={() => onEdit(event)}>修改</button><button onClick={() => onUndo(event.id)}>撤销</button></div></td>
-      </tr>)}</tbody>
-    </table></div>
-    {!filtered.length && <p className="empty">{events.length ? '没有符合筛选条件的事件。' : '暂无交易记录。'}</p>}
-    <p className="footnote">修改会保留原记录的 ID 与序号，并在保存前重新回放整本账；若后续交易依赖这条记录，会拒绝修改并提示先撤销后续交易。撤销不会物理删除记录：原始数据仍保留在数据库中用于审计，但撤销后不再出现在当前界面、CSV 或 JSON 导出中。</p>
-  </section>;
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-heading text-base font-semibold">交易事件日志</h2>
+          <p className="text-xs text-muted-foreground">{filtered.length} / {events.length} 笔 · 修改与撤销前都会重新校验后续交易</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={exportRows} disabled={!filtered.length}>
+          <DownloadIcon />
+          导出交易 CSV
+        </Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="grid gap-1.5 text-xs text-muted-foreground">
+          标的
+          <Input aria-label="事件标的筛选" placeholder="全部标的" value={symbol} onChange={event => setSymbol(event.target.value)} />
+        </label>
+        <label className="grid gap-1.5 text-xs text-muted-foreground">
+          类型
+          <NativeSelect aria-label="事件类型筛选" value={kind} onChange={event => setKind(event.target.value)}>
+            <option value="">全部类型</option>
+            {KINDS.map(value => <option key={value} value={value}>{labels[value] ?? value}</option>)}
+          </NativeSelect>
+        </label>
+        <label className="grid gap-1.5 text-xs text-muted-foreground">
+          日期自
+          <Input aria-label="事件起始日期" type="date" value={from} onChange={event => setFrom(event.target.value)} />
+        </label>
+        <label className="grid gap-1.5 text-xs text-muted-foreground">
+          至
+          <Input aria-label="事件结束日期" type="date" value={until} onChange={event => setUntil(event.target.value)} />
+        </label>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>日期</TableHead>
+              <TableHead>类型</TableHead>
+              <TableHead>标的 / 合约</TableHead>
+              <TableHead>数量 / 拆股比例</TableHead>
+              <TableHead>每股价格</TableHead>
+              <TableHead>费用</TableHead>
+              <TableHead>金额 / 零股补偿</TableHead>
+              <TableHead>备注</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {[...filtered].reverse().map(event => (
+              <TableRow key={event.id}>
+                <TableCell>{event.date}</TableCell>
+                <TableCell>{labels[event.kind] ?? event.kind}</TableCell>
+                <TableCell>{event.symbol || '账户'} {event.expiry} {event.strike}{event.right}{event.multiplier && event.multiplier !== 100 ? ` · ${event.multiplier} 股/手` : ''}</TableCell>
+                <TableCell className="num">{quantityLabel(event)}</TableCell>
+                <TableCell className="num">{priceLabel(event)}</TableCell>
+                <TableCell className="num">{feeLabel(event)}</TableCell>
+                <TableCell className="num">{amountLabel(event)}</TableCell>
+                <TableCell className="note-cell max-w-[230px] whitespace-normal">{event.note}</TableCell>
+                <TableCell>
+                  <div className="row-actions flex gap-1.5">
+                    <Button variant="outline" size="xs" onClick={() => onEdit(event)}>修改</Button>
+                    <Button variant="ghost" size="xs" onClick={() => onUndo(event.id)}>撤销</Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {!filtered.length && <p className="text-sm text-muted-foreground">{events.length ? '没有符合筛选条件的事件。' : '暂无交易记录。'}</p>}
+      <p className="footnote text-xs leading-relaxed text-muted-foreground">
+        修改会保留原记录的 ID 与序号，并在保存前重新回放整本账；若后续交易依赖这条记录，会拒绝修改并提示先撤销后续交易。撤销不会物理删除记录：原始数据仍保留在数据库中用于审计，但撤销后不再出现在当前界面、CSV 或 JSON 导出中。
+      </p>
+    </section>
+  );
 }

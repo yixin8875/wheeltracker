@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { XIcon } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import {
   addEvent,
   type EntryKind,
   type NewEventReq,
   type Position,
 } from './api'
-import { IconClose } from './Icons'
 
 interface EntryPreset {
   kind: EntryKind
@@ -47,6 +51,8 @@ const KIND_LABEL: Record<string, string> = Object.fromEntries(
   ]),
 )
 
+const FIELD_INPUT = 'h-10 [&_input]:h-full [&_input]:leading-10'
+
 function isOption(kind: EntryKind) {
   return kind.startsWith('option_')
 }
@@ -58,6 +64,50 @@ function isCash(kind: EntryKind) {
 function number(value: string) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function Field({
+  label,
+  wide,
+  children,
+}: {
+  label: string
+  wide?: boolean
+  children: ReactNode
+}) {
+  return (
+    <label
+      className={cn(
+        'flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground',
+        wide && 'col-span-2',
+      )}
+    >
+      <span>{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function ChipButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean
+  children: ReactNode
+  onClick: () => void
+}) {
+  return (
+    <Button
+      size="sm"
+      variant={active ? 'secondary' : 'outline'}
+      aria-pressed={active}
+      onClick={onClick}
+      className="rounded-full"
+    >
+      {children}
+    </Button>
+  )
 }
 
 export default function EntrySheet({
@@ -140,209 +190,233 @@ export default function EntrySheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose} role="presentation">
+    <div
+      className="fixed inset-0 z-40 flex animate-in items-end justify-center bg-black/40 backdrop-blur-sm duration-150 fade-in-0"
+      onClick={onClose}
+      role="presentation"
+    >
       <section
-        className="sheet"
+        className="max-h-[92dvh] w-full max-w-[30rem] animate-in overflow-y-auto rounded-t-2xl border bg-background p-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-xl duration-300 fade-in-0 slide-in-from-bottom-6"
         role="dialog"
         aria-modal="true"
         aria-label="记一笔"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="sheet-head">
-          <span className="sheet-grip" aria-hidden="true" />
-          <h2>记一笔</h2>
-          <button className="icon-button" onClick={onClose} aria-label="关闭">
-            <IconClose size={18} />
-          </button>
+        <span
+          aria-hidden="true"
+          className="mx-auto mb-1 block h-1 w-9 rounded-full bg-border"
+        />
+        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-3 border-b bg-background px-4 py-2.5">
+          <h2 className="font-heading text-base font-semibold">记一笔</h2>
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭">
+            <XIcon />
+          </Button>
         </header>
 
-        <div className="sheet-body">
-          <div className="chip-row" role="group" aria-label="期权操作">
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="期权操作">
             {OPTION_ACTIONS.map((action) => (
-              <button
+              <ChipButton
                 key={action.kind}
-                className={`chip ${kind === action.kind ? 'on' : ''}`}
+                active={kind === action.kind}
                 onClick={() => setKind(action.kind)}
               >
                 {action.label}
-              </button>
+              </ChipButton>
             ))}
           </div>
-          <div className="chip-row" role="group" aria-label="股票与现金">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="股票与现金">
             {[...SHARE_ACTIONS, ...OTHER_ACTIONS].map((action) => (
-              <button
+              <ChipButton
                 key={action.kind}
-                className={`chip ${kind === action.kind ? 'on' : ''}`}
+                active={kind === action.kind}
                 onClick={() => setKind(action.kind)}
               >
                 {action.label}
-              </button>
+              </ChipButton>
             ))}
           </div>
 
           {option && (
-            <div className="segmented" role="group" aria-label="期权方向">
-              <button
-                className={right === 'P' ? 'on' : ''}
+            <div
+              className="inline-flex w-full rounded-lg border bg-muted/40 p-0.5"
+              role="group"
+              aria-label="期权方向"
+            >
+              <Button
+                size="sm"
+                variant={right === 'P' ? 'secondary' : 'ghost'}
+                aria-pressed={right === 'P'}
+                className="flex-1"
                 onClick={() => setRight('P')}
               >
                 卖 Put
-              </button>
-              <button
-                className={right === 'C' ? 'on' : ''}
+              </Button>
+              <Button
+                size="sm"
+                variant={right === 'C' ? 'secondary' : 'ghost'}
+                aria-pressed={right === 'C'}
+                className="flex-1"
                 onClick={() => setRight('C')}
               >
                 卖 Call
-              </button>
+              </Button>
             </div>
           )}
 
-          <div className="field-grid">
+          <div className="grid grid-cols-2 gap-3">
             {!cash && !amountOnly && (
-              <label className="field">
-                <span>标的</span>
-                <input
+              <Field label="标的" wide>
+                <Input
+                  className={FIELD_INPUT}
                   value={symbol}
                   onChange={(event) => setSymbol(event.target.value.toUpperCase())}
                   placeholder="AAPL"
                   autoCapitalize="characters"
                   inputMode="text"
                 />
-              </label>
+              </Field>
             )}
-            <label className="field">
-              <span>日期</span>
-              <input
+            <Field label="日期">
+              <Input
+                className={FIELD_INPUT}
                 type="date"
                 value={date}
                 onChange={(event) => setDate(event.target.value)}
               />
-            </label>
+            </Field>
 
             {option && (
               <>
-                <label className="field">
-                  <span>到期日</span>
-                  <input
+                <Field label="到期日">
+                  <Input
+                    className={FIELD_INPUT}
                     type="date"
                     value={expiry}
                     onChange={(event) => setExpiry(event.target.value)}
                   />
-                </label>
-                <label className="field">
-                  <span>行权价</span>
-                  <input
+                </Field>
+                <Field label="行权价">
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="decimal"
                     value={strike}
                     onChange={(event) => setStrike(event.target.value)}
                     placeholder="150"
                   />
-                </label>
+                </Field>
               </>
             )}
 
             {(option || shares) && (
               <>
-                <label className="field">
-                  <span>{option ? '手数' : '股数'}</span>
-                  <input
+                <Field label={option ? '手数' : '股数'}>
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="numeric"
                     value={qty}
                     onChange={(event) => setQty(event.target.value)}
                   />
-                </label>
-                <label className="field">
-                  <span>{option ? '权利金 / 股' : '成交价'}</span>
-                  <input
+                </Field>
+                <Field label={option ? '权利金 / 股' : '成交价'}>
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="decimal"
                     value={price}
                     onChange={(event) => setPrice(event.target.value)}
                     placeholder="0.00"
                   />
-                </label>
-                <label className="field">
-                  <span>费用</span>
-                  <input
+                </Field>
+                <Field label="费用">
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="decimal"
                     value={fees}
                     onChange={(event) => setFees(event.target.value)}
                   />
-                </label>
+                </Field>
               </>
             )}
 
             {kind === 'dividend' && (
               <>
-                <label className="field">
-                  <span>股数（可空）</span>
-                  <input
+                <Field label="股数（可空）">
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="numeric"
                     value={qty}
                     onChange={(event) => setQty(event.target.value)}
                   />
-                </label>
-                <label className="field">
-                  <span>每股分红</span>
-                  <input
+                </Field>
+                <Field label="每股分红">
+                  <Input
+                    className={FIELD_INPUT}
                     type="number"
                     inputMode="decimal"
                     value={price}
                     onChange={(event) => setPrice(event.target.value)}
                   />
-                </label>
+                </Field>
               </>
             )}
 
             {(cash || amountOnly) && (
-              <label className="field">
-                <span>金额</span>
-                <input
+              <Field label="金额">
+                <Input
+                  className={FIELD_INPUT}
                   type="number"
                   inputMode="decimal"
                   value={amount}
                   onChange={(event) => setAmount(event.target.value)}
                   placeholder="0.00"
                 />
-              </label>
+              </Field>
             )}
 
-            <label className="field wide">
-              <span>备注</span>
-              <input
+            <Field label="备注" wide>
+              <Input
+                className={FIELD_INPUT}
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="可选"
               />
-            </label>
+            </Field>
           </div>
 
           {option && kind === 'option_open_short' && (
-            <div className="preview">
-              <div>
-                <span>净权利金</span>
-                <strong>{preview.net.toFixed(2)}</strong>
+            <div className="grid grid-cols-2 gap-3 rounded-xl border bg-muted/40 px-3.5 py-3">
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[11px] text-muted-foreground">净权利金</span>
+                <strong className="num text-base font-medium">{preview.net.toFixed(2)}</strong>
               </div>
-              <div>
-                <span>占用资金</span>
-                <strong>{preview.collateral.toFixed(2)}</strong>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[11px] text-muted-foreground">占用资金</span>
+                <strong className="num text-base font-medium">
+                  {preview.collateral.toFixed(2)}
+                </strong>
               </div>
             </div>
           )}
 
           {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
+            <Alert variant="error" role="alert">
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
           )}
 
-          <button className="primary wide" onClick={() => void submit()} disabled={busy}>
+          <Button
+            size="xl"
+            className="w-full"
+            onClick={() => void submit()}
+            disabled={busy}
+          >
             {busy ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </div>
       </section>
     </div>

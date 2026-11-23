@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Cloud, CloudDownload, CloudUpload, Lock, RefreshCw, Server, ShieldCheck, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { CloudIcon, CloudDownloadIcon, CloudUploadIcon, LockIcon, RefreshCwIcon, ServerIcon, ShieldCheckIcon, Trash2Icon } from 'lucide-react';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { Input } from '@/components/ui/input';
 import { api, desktop } from './lib';
 import type { RemoteBackup, RestoreStatus, WebDavConfig, WebDavDownload, WebDavServerInfo, WebDavSettings as WebDavSettingsData, WebDavUpload } from './types';
 
@@ -39,6 +45,16 @@ function formOf(settings: WebDavSettingsData): WebDavConfig {
     encrypt: settings.encrypt,
     allowInsecureHttp: settings.allowInsecureHttp
   };
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+      <span>{label}</span>
+      {children}
+      {hint ? <span className="font-normal leading-relaxed">{hint}</span> : null}
+    </label>
+  );
 }
 
 /**
@@ -257,250 +273,287 @@ export function WebDavSettings({ onNotice, onError, onRestoreStatus }: {
   const busy = Boolean(working);
 
   return (
-    <section className="panel">
-      <div className="section-heading">
-        <h2><Cloud size={18}/> WebDAV 备份</h2>
-        <span className="muted">{settings?.configured ? hostOf(settings.url) : '未配置'}</span>
-      </div>
+    <Card className="webdav-panel">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base"><CloudIcon className="size-4 text-muted-foreground" />WebDAV 备份</CardTitle>
+        <CardDescription>{settings?.configured ? hostOf(settings.url) : '未配置'}</CardDescription>
+      </CardHeader>
+      <CardPanel className="space-y-4">
+        {!desktop && <p className="text-xs text-muted-foreground">当前是浏览器预览。WebDAV 备份仅在桌面应用中可用。</p>}
 
-      {!desktop && <p className="muted">当前是浏览器预览。WebDAV 备份仅在桌面应用中可用。</p>}
+        {settings?.lastError && <Alert variant="error" role="alert" className="alert error"><strong>上次云端操作失败：</strong>{settings.lastError}</Alert>}
 
-      {settings?.lastError && <div className="alert error" role="alert"><strong>上次云端操作失败：</strong>{settings.lastError}</div>}
-
-      {settings ? <p className="muted">
-        上次上传：{timeLabel(settings.lastUploadAt)}{settings.lastUploadFile ? ` · ${settings.lastUploadFile}` : ''}
-        {' · '}密码：{settings.hasPassword
-          ? (settings.passwordSource === 'keychain' ? `系统凭据库 ${settings.passwordHint}` : `本次运行内存 ${settings.passwordHint}`)
-          : '未保存'}
-        {' · '}自动上传：{settings.autoUploadReady ? '已就绪' : settings.autoUpload ? '未就绪' : '已关闭'}
-      </p> : <p className="muted">尚未读取 WebDAV 设置。</p>}
-
-      {settings?.autoUpload && settings.encrypt && !settings.autoUploadReady && (
-        <div className="alert warning">
-          自动上传已开启但尚未就绪：加密上传需要在本次运行中提供备份密码。请填写下方备份密码并执行一次「立即上传备份」。
-        </div>
-      )}
-
-      <div className="toolbar">
-        <button className="primary" disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void backupNow()}>
-          <CloudUpload size={16}/>{working === 'upload' ? '上传中…' : '立即上传备份'}
-        </button>
-        <button disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void refreshRemote()}>
-          <RefreshCw size={16}/>{working === 'list' ? '读取中…' : '刷新云端快照'}
-        </button>
-        <button disabled={!desktop || busy} onClick={() => {
-          setEditing(value => !value);
-          if (settings) setForm(formOf(settings));
-          setTestResult(null);
-        }}><Server size={16}/>{editing ? '收起设置' : '编辑设置'}</button>
-      </div>
-
-      {!editing && settings?.configured && (
-        <div className="backup-password-row">
-          <label>WebDAV 应用密码（留空使用已保存密码）
-            <input
-              type="password"
-              aria-label="WebDAV 应用密码"
-              autoComplete="current-password"
-              value={password}
-              disabled={busy}
-              onChange={event => setPassword(event.target.value)}
-              placeholder={settings.hasPassword ? `已保存 ${settings.passwordHint}` : '未保存密码'}
-            />
-          </label>
-          {settings.encrypt ? <label>备份加密密码（本次运行，不保存）
-            <input
-              type="password"
-              aria-label="备份加密密码"
-              autoComplete="new-password"
-              value={backupPassword}
-              disabled={busy}
-              onChange={event => setBackupPassword(event.target.value)}
-              placeholder="至少 8 位；遗失不可恢复"
-            />
-          </label> : <span className="muted">未加密上传：WebDAV 服务商可读取快照内容（包括 SQLite 中的 AI API Key）。</span>}
-        </div>
-      )}
-
-      {editing && (
-        <div className="accounting-preferences">
-          <label>服务器地址
-            <input
-              type="url"
-              value={form.url}
-              disabled={busy}
-              onChange={event => setForm(current => ({ ...current, url: event.target.value }))}
-              placeholder="https://dav.jianguoyun.com/dav/"
-            />
-          </label>
-          <label>账号
-            <input
-              type="text"
-              autoComplete="username"
-              value={form.username}
-              disabled={busy}
-              onChange={event => setForm(current => ({ ...current, username: event.target.value }))}
-              placeholder="坚果云 / Nextcloud 账号"
-            />
-          </label>
-          <label>应用密码
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              disabled={busy}
-              onChange={event => setPassword(event.target.value)}
-              placeholder={settings?.hasPassword ? `已保存 ${settings.passwordHint}；留空不修改` : '服务器生成的应用密码'}
-            />
-          </label>
-          <label>远程目录
-            <input
-              type="text"
-              value={form.remoteDir}
-              disabled={busy}
-              onChange={event => setForm(current => ({ ...current, remoteDir: event.target.value }))}
-              placeholder="/wheel/"
-            />
-          </label>
-          <label>远端保留
-            <input
-              type="number"
-              min={1}
-              max={100}
-              step={1}
-              value={form.keep}
-              disabled={busy}
-              onChange={event => setForm(current => ({ ...current, keep: Number(event.target.value) }))}
-            />
-            份自动上传快照（手动快照不会被自动删除）
-          </label>
-          <label className="check"><input
-            type="checkbox"
-            checked={form.autoUpload}
-            disabled={busy}
-            onChange={event => setForm(current => ({ ...current, autoUpload: event.target.checked }))}
-          />每日自动备份后自动上传</label>
-          <label className="check"><input
-            type="checkbox"
-            checked={form.encrypt}
-            disabled={busy}
-            onChange={event => setForm(current => ({ ...current, encrypt: event.target.checked }))}
-          />加密上传（每次运行需提供备份密码）</label>
-          <label className="check"><input
-            type="checkbox"
-            checked={form.allowInsecureHttp}
-            disabled={busy}
-            onChange={event => setForm(current => ({ ...current, allowInsecureHttp: event.target.checked }))}
-          />允许不安全 HTTP（仅限 localhost / 局域网）</label>
-          <p className="muted">
-            应用密码保存在 Windows 凭据管理器；凭据库不可用时只保留在本次运行内存中，绝不写入 SQLite。
-            恢复是整库替换而非同步：同一时间请只在一台设备上记账。手动快照与 pre-restore 安全快照不会被远端保留策略清理。
+        {settings ? (
+          <p className="webdav-status text-xs leading-relaxed text-muted-foreground">
+            上次上传：{timeLabel(settings.lastUploadAt)}{settings.lastUploadFile ? ` · ${settings.lastUploadFile}` : ''}
+            {' · '}密码：{settings.hasPassword
+              ? (settings.passwordSource === 'keychain' ? `系统凭据库 ${settings.passwordHint}` : `本次运行内存 ${settings.passwordHint}`)
+              : '未保存'}
+            {' · '}自动上传：{settings.autoUploadReady ? '已就绪' : settings.autoUpload ? '未就绪' : '已关闭'}
           </p>
-          <div className="toolbar">
-            <button className="primary" disabled={busy} onClick={() => void saveConfig()}>{working === 'save' ? '保存中…' : '保存设置'}</button>
-            <button disabled={busy || !form.url.trim()} onClick={() => void testConnection()}>{working === 'test' ? '测试中…' : '测试连接'}</button>
-            <button disabled={busy} onClick={() => { setEditing(false); if (settings) setForm(formOf(settings)); setTestResult(null); }}>取消</button>
-          </div>
-          {testResult && <div className={`alert ${testResult.writable ? 'success' : 'warning'}`} role="status">
-            连接成功 · {testResult.writable ? '目录可写' : '目录只读（无法上传）'} · {testResult.snapshotCount} 份快照{testResult.server ? ` · ${testResult.server}` : ''}
-          </div>}
+        ) : <p className="text-xs text-muted-foreground">尚未读取 WebDAV 设置。</p>}
+
+        {settings?.autoUpload && settings.encrypt && !settings.autoUploadReady && (
+          <Alert variant="warning" className="alert warning">
+            自动上传已开启但尚未就绪：加密上传需要在本次运行中提供备份密码。请填写下方备份密码并执行一次「立即上传备份」。
+          </Alert>
+        )}
+
+        <div className="toolbar flex flex-wrap gap-2">
+          <Button size="sm" disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void backupNow()}>
+            <CloudUploadIcon />{working === 'upload' ? '上传中…' : '立即上传备份'}
+          </Button>
+          <Button variant="outline" size="sm" disabled={!desktop || !settings?.configured || busy || editing} onClick={() => void refreshRemote()}>
+            <RefreshCwIcon />{working === 'list' ? '读取中…' : '刷新云端快照'}
+          </Button>
+          <Button variant="ghost" size="sm" disabled={!desktop || busy} onClick={() => {
+            setEditing(value => !value);
+            if (settings) setForm(formOf(settings));
+            setTestResult(null);
+          }}><ServerIcon />{editing ? '收起设置' : '编辑设置'}</Button>
         </div>
-      )}
 
-      <div className="section-heading">
-        <h3>云端快照</h3>
-        <span className="muted">{remote ? `${remote.length} 份 · 时间为本地时区` : '点击「刷新云端快照」读取'}</span>
-      </div>
-
-      {remote && (remote.length ? <div className="backup-list" role="list">
-        {remote.map(item => <div key={item.fileName} className={`backup-row ${selected === item.fileName ? 'selected' : ''}`} role="listitem">
-          <div className="backup-meta">
-            <strong>{item.fileName}</strong>
-            <span>
-              <span className={`backup-kind ${item.fileName.startsWith('auto-') ? 'auto' : 'manual'}`}>{item.fileName.startsWith('auto-') ? '自动备份' : '手动备份'}</span>
-              {item.encrypted && <span className="backup-lock"><Lock size={12}/>已加密</span>}
-              {' · '}{sizeLabel(item.sizeBytes)}{' · '}{timeLabel(item.modifiedAt)}
-            </span>
+        {!editing && settings?.configured && (
+          <div className="backup-password-row grid gap-3 rounded-xl border bg-muted/30 p-3 sm:grid-cols-2">
+            <Field label="WebDAV 应用密码（留空使用已保存密码）">
+              <Input
+                type="password"
+                aria-label="WebDAV 应用密码"
+                autoComplete="current-password"
+                value={password}
+                disabled={busy}
+                onChange={event => setPassword(event.target.value)}
+                placeholder={settings.hasPassword ? `已保存 ${settings.passwordHint}` : '未保存密码'}
+              />
+            </Field>
+            {settings.encrypt ? (
+              <Field label="备份加密密码（本次运行，不保存）">
+                <Input
+                  type="password"
+                  aria-label="备份加密密码"
+                  autoComplete="new-password"
+                  value={backupPassword}
+                  disabled={busy}
+                  onChange={event => setBackupPassword(event.target.value)}
+                  placeholder="至少 8 位；遗失不可恢复"
+                />
+              </Field>
+            ) : <span className="self-end text-xs leading-relaxed text-muted-foreground">未加密上传：WebDAV 服务商可读取快照内容（包括 SQLite 中的 AI API Key）。</span>}
           </div>
-          <div className="toolbar">
-            <button disabled={busy} onClick={() => void inspectRemote(item)}>
-              <CloudDownload size={14}/>{working === 'download' && selected === item.fileName ? '下载校验中…' : '恢复'}
-            </button>
-            <button className="danger" disabled={busy} onClick={() => setDeleteTarget(item)}><Trash2 size={14}/>删除</button>
-          </div>
-        </div>)}
-      </div> : <p className="empty">云端目录中没有本应用的快照。上传后会显示在这里。</p>)}
+        )}
 
-      {selectedItem && !download && selectedItem.encrypted && (
-        <div className="restore-validation">
-          <div className="section-heading"><h3><Lock size={16}/> {selectedItem.fileName}</h3><span className="badge">已加密</span></div>
-          <label className="restore-password">备份密码
-            <input
-              type="password"
-              aria-label="云端备份密码"
-              autoComplete="current-password"
-              value={restorePassword}
+        {editing && (
+          <div className="accounting-preferences grid gap-3 rounded-xl border p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="服务器地址">
+                <Input
+                  type="url"
+                  value={form.url}
+                  disabled={busy}
+                  onChange={event => setForm(current => ({ ...current, url: event.target.value }))}
+                  placeholder="https://dav.jianguoyun.com/dav/"
+                />
+              </Field>
+              <Field label="账号">
+                <Input
+                  type="text"
+                  autoComplete="username"
+                  value={form.username}
+                  disabled={busy}
+                  onChange={event => setForm(current => ({ ...current, username: event.target.value }))}
+                  placeholder="坚果云 / Nextcloud 账号"
+                />
+              </Field>
+              <Field label="应用密码">
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  disabled={busy}
+                  onChange={event => setPassword(event.target.value)}
+                  placeholder={settings?.hasPassword ? `已保存 ${settings.passwordHint}；留空不修改` : '服务器生成的应用密码'}
+                />
+              </Field>
+              <Field label="远程目录">
+                <Input
+                  type="text"
+                  value={form.remoteDir}
+                  disabled={busy}
+                  onChange={event => setForm(current => ({ ...current, remoteDir: event.target.value }))}
+                  placeholder="/wheel/"
+                />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>远端保留</span>
+              <Input
+                type="number"
+                className="w-24"
+                min={1}
+                max={100}
+                step={1}
+                value={form.keep}
+                disabled={busy}
+                onChange={event => setForm(current => ({ ...current, keep: Number(event.target.value) }))}
+              />
+              <span>份自动上传快照（手动快照不会被自动删除）</span>
+            </div>
+            <label className="check flex items-center gap-2 text-sm"><input
+              type="checkbox"
+              className="size-3.5 rounded border-input accent-primary"
+              checked={form.autoUpload}
               disabled={busy}
-              onChange={event => setRestorePassword(event.target.value)}
-            />
-          </label>
-          <p className="muted">下载后先在本机校验完整性与 schema；密码只用于校验和暂存，不会保存。</p>
-          <div className="toolbar">
-            <button disabled={busy || restorePassword.length < 8} onClick={() => void inspectRemote(selectedItem)}>
-              {working === 'download' ? '下载校验中…' : '下载并校验'}
-            </button>
-            <button disabled={busy} onClick={() => { setSelected(null); setRestorePassword(''); }}>取消</button>
+              onChange={event => setForm(current => ({ ...current, autoUpload: event.target.checked }))}
+            />每日自动备份后自动上传</label>
+            <label className="check flex items-center gap-2 text-sm"><input
+              type="checkbox"
+              className="size-3.5 rounded border-input accent-primary"
+              checked={form.encrypt}
+              disabled={busy}
+              onChange={event => setForm(current => ({ ...current, encrypt: event.target.checked }))}
+            />加密上传（每次运行需提供备份密码）</label>
+            <label className="check flex items-center gap-2 text-sm"><input
+              type="checkbox"
+              className="size-3.5 rounded border-input accent-primary"
+              checked={form.allowInsecureHttp}
+              disabled={busy}
+              onChange={event => setForm(current => ({ ...current, allowInsecureHttp: event.target.checked }))}
+            />允许不安全 HTTP（仅限 localhost / 局域网）</label>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              应用密码保存在 Windows 凭据管理器；凭据库不可用时只保留在本次运行内存中，绝不写入 SQLite。
+              恢复是整库替换而非同步：同一时间请只在一台设备上记账。手动快照与 pre-restore 安全快照不会被远端保留策略清理。
+            </p>
+            <div className="toolbar flex flex-wrap gap-2">
+              <Button size="sm" disabled={busy} onClick={() => void saveConfig()}>{working === 'save' ? '保存中…' : '保存设置'}</Button>
+              <Button variant="outline" size="sm" disabled={busy || !form.url.trim()} onClick={() => void testConnection()}>{working === 'test' ? '测试中…' : '测试连接'}</Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setEditing(false); if (settings) setForm(formOf(settings)); setTestResult(null); }}>取消</Button>
+            </div>
+            {testResult && (
+              <Alert variant={testResult.writable ? 'success' : 'warning'} role="status" className={testResult.writable ? 'success' : 'warning'}>
+                连接成功 · {testResult.writable ? '目录可写' : '目录只读（无法上传）'} · {testResult.snapshotCount} 份快照{testResult.server ? ` · ${testResult.server}` : ''}
+              </Alert>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {download && selectedItem && (
-        <div className="restore-validation">
-          <div className="section-heading">
-            <h3><ShieldCheck size={16}/> {selectedItem.fileName}</h3>
-            <span className={`badge ${download.validation.valid ? 'active' : 'closed'}`}>{download.validation.valid ? '校验通过' : '不可恢复'}</span>
-          </div>
-          <div className="validation-values">
-            <span>完整性<strong>{download.validation.integrity || '未知'}</strong></span>
-            <span>事件<strong>{download.validation.events}</strong></span>
-            <span>账户<strong>{download.validation.accounts}</strong></span>
-            <span>报价<strong>{download.validation.prices}</strong></span>
-          </div>
-          {!!download.validation.issues.length && <ul className="negative validation-issues">{download.validation.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
-          <p className="muted">
-            已下载到本机：{download.localFile}。恢复会在下次启动、打开数据库之前执行：先为当前账本创建 pre-restore 安全快照，再整库替换；
-            暂存期间账本只读。云端快照不是同步协议，恢复会覆盖本机自该快照之后的修改。
-          </p>
-          <div className="toolbar">
-            <button
-              className="danger"
-              disabled={!download.validation.valid || busy}
-              onClick={() => setConfirm(selectedItem)}
-            >恢复此快照…</button>
-            <button disabled={busy} onClick={() => { setDownload(null); setSelected(null); setRestorePassword(''); }}>关闭</button>
-          </div>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t pt-4">
+          <h3 className="font-heading text-sm font-semibold">云端快照</h3>
+          <span className="text-xs text-muted-foreground">{remote ? `${remote.length} 份 · 时间为本地时区` : '点击「刷新云端快照」读取'}</span>
         </div>
-      )}
 
-      {confirm && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="webdav-restore-title" className="modal">
-        <h2 id="webdav-restore-title">确认从云端恢复账本？</h2>
-        <p>将从 <strong>{confirm.fileName}</strong> 恢复。系统会先为当前账本创建 pre-restore 安全快照，并归档当前数据库及其 WAL/SHM 文件。</p>
-        <p>恢复会在下次启动时生效。请完全退出应用并重新启动；暂存期间所有写入会被拒绝。</p>
-        <p className="muted">这是整库替换，不是合并。若另一台设备在此快照之后写入，那些修改不会出现在恢复后的账本中。</p>
-        <div className="toolbar">
-          <button autoFocus disabled={busy} onClick={() => setConfirm(null)}>取消</button>
-          <button className="danger" disabled={busy} onClick={() => void stageRemote()}>{working === 'stage' ? '正在安排…' : '确认安排恢复'}</button>
-        </div>
-      </section></div>}
+        {remote && (remote.length ? (
+          <div className="backup-list grid gap-2" role="list">
+            {remote.map(item => (
+              <div key={item.fileName} className={`backup-row flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${selected === item.fileName ? 'selected bg-accent/60' : ''}`} role="listitem">
+                <div className="backup-meta min-w-0">
+                  <strong className="block truncate text-sm font-medium">{item.fileName}</strong>
+                  <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    <Badge variant={item.fileName.startsWith('auto-') ? 'secondary' : 'info'} size="sm">{item.fileName.startsWith('auto-') ? '自动备份' : '手动备份'}</Badge>
+                    {item.encrypted && <span className="backup-lock inline-flex items-center gap-1"><LockIcon className="size-3" />已加密</span>}
+                    · {sizeLabel(item.sizeBytes)} · {timeLabel(item.modifiedAt)}
+                  </span>
+                </div>
+                <div className="toolbar flex gap-1">
+                  <Button variant="outline" size="xs" disabled={busy} onClick={() => void inspectRemote(item)}>
+                    <CloudDownloadIcon />{working === 'download' && selected === item.fileName ? '下载校验中…' : '恢复'}
+                  </Button>
+                  <Button variant="ghost" size="xs" disabled={busy} onClick={() => setDeleteTarget(item)}><Trash2Icon />删除</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>没有云端快照</EmptyTitle>
+              <EmptyDescription>云端目录中没有本应用的快照。上传后会显示在这里。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ))}
 
-      {deleteTarget && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="webdav-delete-title" className="modal">
-        <h2 id="webdav-delete-title">删除云端快照？</h2>
-        <p>将从 WebDAV 目录删除 <strong>{deleteTarget.fileName}</strong>。此操作不会影响本机账本与本地备份。</p>
-        <div className="toolbar">
-          <button autoFocus disabled={busy} onClick={() => setDeleteTarget(null)}>取消</button>
-          <button className="danger" disabled={busy} onClick={() => void removeRemote(deleteTarget)}>{working === 'delete' ? '删除中…' : '确认删除'}</button>
-        </div>
-      </section></div>}
-    </section>
+        {selectedItem && !download && selectedItem.encrypted && (
+          <div className="restore-validation space-y-3 rounded-xl border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-heading flex items-center gap-2 text-sm font-semibold"><LockIcon className="size-4" /> {selectedItem.fileName}</h3>
+              <Badge variant="outline" size="sm">已加密</Badge>
+            </div>
+            <Field label="备份密码">
+              <Input
+                type="password"
+                aria-label="云端备份密码"
+                autoComplete="current-password"
+                value={restorePassword}
+                disabled={busy}
+                onChange={event => setRestorePassword(event.target.value)}
+              />
+            </Field>
+            <p className="text-xs leading-relaxed text-muted-foreground">下载后先在本机校验完整性与 schema；密码只用于校验和暂存，不会保存。</p>
+            <div className="toolbar flex gap-2">
+              <Button variant="outline" size="sm" disabled={busy || restorePassword.length < 8} onClick={() => void inspectRemote(selectedItem)}>
+                {working === 'download' ? '下载校验中…' : '下载并校验'}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setSelected(null); setRestorePassword(''); }}>取消</Button>
+            </div>
+          </div>
+        )}
+
+        {download && selectedItem && (
+          <div className="restore-validation space-y-3 rounded-xl border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-heading flex items-center gap-2 text-sm font-semibold"><ShieldCheckIcon className="size-4" /> {selectedItem.fileName}</h3>
+              <Badge variant={download.validation.valid ? 'success' : 'destructive'} size="sm">{download.validation.valid ? '校验通过' : '不可恢复'}</Badge>
+            </div>
+            <div className="validation-values grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <span className="grid gap-0.5 text-xs text-muted-foreground">完整性<strong className="num text-sm font-medium text-foreground">{download.validation.integrity || '未知'}</strong></span>
+              <span className="grid gap-0.5 text-xs text-muted-foreground">事件<strong className="num text-sm font-medium text-foreground">{download.validation.events}</strong></span>
+              <span className="grid gap-0.5 text-xs text-muted-foreground">账户<strong className="num text-sm font-medium text-foreground">{download.validation.accounts}</strong></span>
+              <span className="grid gap-0.5 text-xs text-muted-foreground">报价<strong className="num text-sm font-medium text-foreground">{download.validation.prices}</strong></span>
+            </div>
+            {!!download.validation.issues.length && <ul className="negative validation-issues list-disc space-y-1 ps-5 text-xs text-destructive-foreground">{download.validation.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              已下载到本机：{download.localFile}。恢复会在下次启动、打开数据库之前执行：先为当前账本创建 pre-restore 安全快照，再整库替换；
+              暂存期间账本只读。云端快照不是同步协议，恢复会覆盖本机自该快照之后的修改。
+            </p>
+            <div className="toolbar flex flex-wrap gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={!download.validation.valid || busy}
+                onClick={() => setConfirm(selectedItem)}
+              >恢复此快照…</Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setDownload(null); setSelected(null); setRestorePassword(''); }}>关闭</Button>
+            </div>
+          </div>
+        )}
+
+        {confirm && (
+          <div className="modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
+            <section role="dialog" aria-modal="true" aria-labelledby="webdav-restore-title" className="modal w-full max-w-lg space-y-3 rounded-2xl border bg-card p-5 shadow-xl">
+              <h2 id="webdav-restore-title" className="font-heading text-base font-semibold">确认从云端恢复账本？</h2>
+              <p className="text-sm text-muted-foreground">将从 <strong className="text-foreground">{confirm.fileName}</strong> 恢复。系统会先为当前账本创建 pre-restore 安全快照，并归档当前数据库及其 WAL/SHM 文件。</p>
+              <p className="text-sm text-muted-foreground">恢复会在下次启动时生效。请完全退出应用并重新启动；暂存期间所有写入会被拒绝。</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">这是整库替换，不是合并。若另一台设备在此快照之后写入，那些修改不会出现在恢复后的账本中。</p>
+              <div className="toolbar flex justify-end gap-2">
+                <Button variant="outline" size="sm" autoFocus disabled={busy} onClick={() => setConfirm(null)}>取消</Button>
+                <Button variant="destructive" size="sm" disabled={busy} onClick={() => void stageRemote()}>{working === 'stage' ? '正在安排…' : '确认安排恢复'}</Button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {deleteTarget && (
+          <div className="modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
+            <section role="dialog" aria-modal="true" aria-labelledby="webdav-delete-title" className="modal w-full max-w-md space-y-3 rounded-2xl border bg-card p-5 shadow-xl">
+              <h2 id="webdav-delete-title" className="font-heading text-base font-semibold">删除云端快照？</h2>
+              <p className="text-sm text-muted-foreground">将从 WebDAV 目录删除 <strong className="text-foreground">{deleteTarget.fileName}</strong>。此操作不会影响本机账本与本地备份。</p>
+              <div className="toolbar flex justify-end gap-2">
+                <Button variant="outline" size="sm" autoFocus disabled={busy} onClick={() => setDeleteTarget(null)}>取消</Button>
+                <Button variant="destructive" size="sm" disabled={busy} onClick={() => void removeRemote(deleteTarget)}>{working === 'delete' ? '删除中…' : '确认删除'}</Button>
+              </div>
+            </section>
+          </div>
+        )}
+      </CardPanel>
+    </Card>
   );
 }

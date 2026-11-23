@@ -1,5 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, Settings, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { Separator } from '@/components/ui/separator';
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ToastProvider } from '@/components/ui/toast';
+import { AppSidebar, type NavGroup } from '@/components/app-sidebar';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Footnote, Stat, StatGrid } from '@/components/page-kit';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
 import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
 import { api, desktop, labels, money, percent, today } from './lib';
@@ -30,8 +51,6 @@ import { CostReduction } from './CostReduction';
 const ACCOUNT_KEY = 'wheel.account';
 type Page = 'dashboard' | 'positions' | 'cost' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
-type NavItem = { id: Exclude<Page, 'settings' | 'detail'>; label: string; icon: LucideIcon };
-type NavGroup = { id: string; title: string; items: NavItem[] };
 const navigation: NavGroup[] = [
   { id: 'daily', title: '日常', items: [
     { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
@@ -51,7 +70,7 @@ const navigation: NavGroup[] = [
     { id: 'market', label: '行情', icon: Activity },
   ] },
 ];
-const navigationItems: NavItem[] = navigation.flatMap(group => group.items);
+const navigationItems = navigation.flatMap(group => group.items);
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
@@ -221,82 +240,440 @@ export default function App() {
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
   const asOf = data?.asOf ?? today();
   const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : page === 'entry' && editingId ? '修改交易' : navigationItems.find(item => item.id === page)?.label;
-  return <UpdateProvider><div className="app-shell"><aside className="sidebar"><div className="brand"><img className="brand-mark" src="/wheel-icon.png" alt="" width={36} height={36}/><div>Wheel Tracker<small>车轮策略成本账本</small></div></div><nav aria-label="主导航">{navigation.map(group => <div className="nav-group" role="group" aria-labelledby={`nav-${group.id}`} key={group.id}>
-      <p className="nav-group-title" id={`nav-${group.id}`}>{group.title}</p>
-      {group.items.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'selected' : ''} title={item.id === 'expiry' && reminders.length ? `${reminders.length} 个到期提醒` : undefined} onClick={() => navigate(item.id)}><item.icon size={18}/>{item.label}{item.id === 'expiry' && reminders.length > 0 && <span className={`nav-badge ${overdueReminders ? 'danger' : ''}`} aria-hidden="true">{reminders.length}</span>}</button>)}
-    </div>)}</nav><div className="sidebar-bottom"><div className="connection-line"><span className="connection-dot"/>{desktop ? '本地账本' : '浏览器预览'}</div><label className="account-switch"><span>账户</span><select aria-label="切换账户" disabled={!desktop || busy || !accounts.length} value={accountId} onChange={event => switchAccount(event.target.value)}>{activeAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}{!activeAccounts.length && <option value={accountId}>默认账户</option>}</select></label><small>{currentAccount?.currency ?? 'USD'} · {activeAccounts.length ? `共 ${activeAccounts.length} 个可用账户` : '美元 USD'}</small><button className={`sidebar-settings ${page === 'settings' ? 'selected' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Settings size={16}/>设置</button></div></aside>
-    <main><header className="page-heading"><div><p className="muted">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p><h1>{title}</h1></div><div className="toolbar"><button aria-label="刷新账本" disabled={busy || !desktop} onClick={() => void reload()}><RefreshCw size={16} className={busy ? 'spinning' : ''}/></button>{page !== 'entry' && <button className={page === 'cost' || page === 'detail' ? '' : 'primary'} onClick={() => startEntry()}><Plus size={16}/>记一笔</button>}</div></header>
-    {!desktop && <div className="alert">浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</div>}
-    <Updater/>
-    {error && <div className="alert error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
-    {notice && <div className="alert success" role="status">{notice}</div>}
-    {restoreStatus?.pending && <div className="alert error" role="alert">已安排从 {restoreStatus.pending.backupFile} 恢复账本，将在下次启动时替换当前数据库。请完全退出并重新启动应用；在重启前账本只读。安全快照：{restoreStatus.pending.safetyFile}</div>}
-    {restoreStatus?.lastResult && !restoreStatus.lastResult.ok && <div className="alert warning" role="status">上次恢复失败：{restoreStatus.lastResult.message} 当前数据库未被替换。</div>}
-    {busy && !data && <p role="status">正在读取本地账本…</p>}
-    {unavailable && !busy && <div className="alert warning" role="status">账本尚未刷新，财务数据暂不可用。<button onClick={() => void reload()}>重试读取账本</button></div>}
-    {['dashboard', 'positions', 'detail'].includes(page) && !!activeSymbols.length && <p className="market-note">{market.busy ? '正在更新标的参考价…' : market.error ? '行情更新失败，当前显示已保存的报价。' : '标的参考价使用已保存报价，可能延迟。'} <button className="text-button" onClick={() => setPage('market')}>查看行情与报价时间</button></p>}
-    {page === 'overview' && !unavailable && <>
-      {!desktop && <p className="empty">浏览器预览不读取本地账本，请在桌面应用查看账户总览。</p>}
-      {overviewError && <div className="alert error" role="alert">账户总览读取失败：{overviewError}<button onClick={() => void loadOverview()}>重试</button></div>}
-      {!overview && overviewBusy && <p role="status">正在读取账户总览…</p>}
-      {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }}/>}
-    </>}
-    {page === 'holdings' && !unavailable && <>
-      {!desktop && <p className="empty">浏览器预览不读取本地账本，请在桌面应用查看跨账户持仓。</p>}
-      {holdingsError && <div className="alert error" role="alert">跨账户持仓读取失败：{holdingsError}<button onClick={() => void loadHoldings()}>重试</button></div>}
-      {!holdings && holdingsBusy && <p role="status">正在读取跨账户持仓…</p>}
-      {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding}/>}
-    </>}
-    {page === 'dashboard' && !unavailable && <>
-      <div className="summary-strip"><div><span>已落袋净收租</span><strong>{money(data?.summary.premiumRealized ?? 0)}</strong><small>已经了结的期权净收入</small></div><div><span>未平仓净权利金</span><strong>{money(data?.summary.premiumOpen ?? 0)}</strong><small>{data?.summary.openContracts ?? 0} 手合约仍待了结</small></div><div><span>Put 资金义务</span><strong>{money(data?.summary.collateral ?? 0)}</strong><small>按行权价计算</small></div><div><span>进行中的战役</span><strong>{data?.summary.activeCampaigns ?? 0}<em> 个</em></strong><small>持股共 {data?.summary.sharesHeld ?? 0} 股</small></div></div>
-      {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)}/>}
-      <ReminderCard positions={positions} leadDays={leadDays} onOpenExpiry={() => setPage('expiry')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign}/>
-      <div className="section-heading"><h2>我的战役 <span className="count">{campaigns.length}</span></h2><div className="toolbar"><input aria-label="筛选标的" placeholder="搜索标的…" value={symbol} onChange={e => setSymbol(e.target.value)}/><label className="check"><input type="checkbox" checked={archive} onChange={e => setArchive(e.target.checked)}/>显示已结束</label></div></div>
-      <div className="campaign-grid">{campaigns.map(campaign => <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)}/>)}</div>
-      {!campaigns.length && <div className="empty panel"><Layers size={40}/><h2>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</h2><p>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</p><button className="primary" onClick={() => startEntry()}>记录第一笔交易</button></div>}
-      <p className="footnote">A 纯股票成本 · B 扣除已落袋净权利金 · C′ 再扣除未平仓净权利金。{settings?.includeDividendsInCost ? '当前分红计入 B/C′ 成本。' : '当前分红不摊薄成本。'}</p>
-    </>}
-    {page === 'ledger' && !unavailable && <>
-      <div className="settings-tabs" aria-label="台账分类">
-        <button aria-pressed={ledgerTab === 'entries'} onClick={() => setLedgerTab('entries')}>收租明细</button>
-        <button aria-pressed={ledgerTab === 'events'} onClick={() => setLedgerTab('events')}>交易记录</button>
-      </div>
-      {ledgerTab === 'entries' ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign}/> : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent}/>}
-    </>}
-    {page === 'cost' && !unavailable && <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} onEntry={prefill => startEntry(prefill)}/>}
-    {page === 'entry' && <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved}/>}
-    {page === 'import' && <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }}/>}
-    {page === 'expiry' && !unavailable && <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} onEntry={initial => startEntry(initial)} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')}/>}
-    {page === 'calendar' && !unavailable && <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign}/>}
-    {page === 'reports' && !unavailable && <>
-      <div className="settings-tabs" aria-label="报告分类">
-        {([['income', '收租月报'], ['annual', '年度报表'], ['compare', '战役对比']] as const).map(([tab, label]) => <button key={tab} aria-pressed={reportTab === tab} onClick={() => setReportTab(tab)}>{label}</button>)}
-      </div>
-      {reportTab === 'income' && <MonthlyIncomeReport report={income}/>}
-      {reportTab === 'annual' && <AnnualReportPage report={annual}/>}
-      {reportTab === 'compare' && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf}/>}
-    </>}
-    {page === 'positions' && !unavailable && <>
-      <section className="panel"><div className="section-heading"><h2>股票持仓</h2></div><div className="table-wrap"><table><thead><tr><th>标的</th><th className="num">股数</th><th className="num">纯股票成本 / 股</th><th className="num">有效成本 / 股</th><th className="num">标的参考价</th><th>操作</th></tr></thead><tbody>{data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => <tr key={campaign.id}><td><button className="text-button" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</button></td><td className="num">{campaign.shares}</td><td className="num">{money(campaign.costA)}</td><td className="num">{money(campaign.costB)}</td><td className="num">{money(campaign.price)}</td><td><button onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</button></td></tr>)}</tbody></table></div>{!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="empty">暂无股票持仓。</p>}</section>
-      <section className="panel"><div className="section-heading"><h2>未平仓期权</h2><span className="muted">按到期日排序</span></div><div className="table-wrap"><table><thead><tr><th>合约</th><th className="num">手数</th><th className="num">每手股数</th><th className="num">每股净权利金</th><th>到期日</th><th className="num">剩余天数</th><th>了结合约</th></tr></thead><tbody>{positions.map(position => <tr key={position.contract}><td>{position.contract}</td><td className="num">{position.openQty}</td><td className="num">{position.multiplier} 股/手</td><td className="num">{money(position.avgCredit)}</td><td>{position.expiry}</td><td className="num"><span className={position.daysLeft < 0 ? 'negative' : position.daysLeft <= 7 ? 'warning-text' : ''}>{position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}</span></td><td><div className="toolbar">{['option_close', 'option_expire', 'option_assign'].map(kind => <button key={kind} onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier })}>{labels[kind]}</button>)}</div></td></tr>)}</tbody></table></div>{!positions.length && <p className="empty">暂无未平仓期权。</p>}</section>
-    </>}
-    {page === 'detail' && !unavailable && <><div className="toolbar"><button className="back-button" onClick={() => setPage('dashboard')}><ArrowLeft size={16}/>返回仪表盘</button>{detail && <button className="primary" onClick={() => openCostScan(detail.campaign.id)}>查看降本方案</button>}</div>{detail ? <><CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)} variant="panel"/><CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike}/><CallAssignmentScenarios scenarios={detail.callScenarios}/><CampaignTimeline events={detail.events} onUndo={setPendingDelete}/><LedgerTable entries={detail.entries} openCampaign={openCampaign}/><section className="panel"><div className="section-heading"><h2>股票批次</h2></div><div className="table-wrap"><table><thead><tr><th>买入日期</th><th>初始股数</th><th>剩余股数</th><th>原始每股成本</th></tr></thead><tbody>{detail.lots.map(lot => <tr key={lot.id}><td>{lot.openedAt}</td><td>{lot.qty}</td><td>{lot.remainingQty}</td><td>{money(lot.costPerShare)}</td></tr>)}</tbody></table></div></section></> : !error && <p role="status">正在加载战役…</p>}</>}
-    {page === 'market' && <MarketPage prices={prices} symbols={activeSymbols} market={market} onSaved={saved} onEntry={symbol => startEntry({ symbol })}/>}
-    {page === 'settings' && <>
-      <div className="settings-tabs" aria-label="设置分类">{(['accounting', 'accounts', 'reminders', 'vision', 'data', 'about'] as const).map(tab => <button key={tab} aria-pressed={settingsTab === tab} onClick={() => setSettingsTab(tab)}>{{ accounting: '成本口径', accounts: '账户', reminders: '到期提醒', vision: 'AI 识别', data: '备份与维护', about: '关于与更新' }[tab]}</button>)}</div>
-      {settingsTab === 'accounting' && <AccountingPreferences settings={settings} onSaved={settingsSaved}/>}
-      {settingsTab === 'accounts' && <AccountsPanel accounts={accounts} currentId={accountId} onSwitch={switchAccount} onAccounts={setAccounts} onNotice={setNotice} onError={setError}/>}
-      {settingsTab === 'reminders' && <ReminderPreferences settings={settings} onSaved={preferencesSaved}/>}
-      {settingsTab === 'vision' && <VisionSettings/>}
-      {settingsTab === 'data' && <SettingsData accountId={accountId} info={info} events={events} campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} positions={positions} settings={settings} restoreStatus={restoreStatus} onRestoreStatus={setRestoreStatus} onNotice={setNotice} onError={setError} onPreferencesSaved={preferencesSaved}/>}
-      {settingsTab === 'about' && <AboutPanel version={info?.version ?? null}/>}
-    </>}
-    {pendingDelete && <div className="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="delete-title" className="modal"><h2 id="delete-title">确认撤销这笔交易？</h2><p>这会重算持仓、成本和收租。如果后续交易依赖此记录，系统会拒绝撤销。原始记录不会被物理删除；撤销后不再出现在当前界面与导出中，但数据库仍保留审计行。</p><div className="toolbar"><button autoFocus disabled={deleting} onClick={() => setPendingDelete(null)}>取消</button><button className="danger" disabled={deleting} onClick={() => void deleteEvent()}>{deleting ? '正在撤销…' : '确认撤销'}</button></div></section></div>}
-    {reconcileOpen && data && <ReconcileModal accountId={accountId} summary={data.summary} onClose={() => setReconcileOpen(false)}/>}
-    </main></div></UpdateProvider>;
+  return (
+    <UpdateProvider>
+      <ToastProvider position="bottom-right">
+        <SidebarProvider>
+          <AppSidebar
+            navigation={navigation}
+            page={page}
+            onNavigate={id => navigate(id as Page)}
+            reminderCount={reminders.length}
+            overdueReminders={overdueReminders}
+            desktop={desktop}
+            accounts={activeAccounts}
+            accountId={accountId}
+            currentAccount={currentAccount}
+            busy={busy}
+            onSwitchAccount={switchAccount}
+          />
+          <SidebarInset>
+            <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b bg-background/85 px-3 backdrop-blur md:px-6">
+              <SidebarTrigger />
+              <Separator orientation="vertical" className="!h-5" />
+              <div className="min-w-0 flex-1">
+                <p className="num truncate text-xs text-muted-foreground">{asOf} · {currentAccount?.name ?? '默认账户'} · 美东交易日</p>
+                <h1 className="truncate font-heading text-base leading-tight font-semibold">{title}</h1>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button aria-label="刷新账本" variant="outline" size="icon" disabled={busy || !desktop} onClick={() => void reload()}>
+                  <RefreshCw className={busy ? 'animate-spin' : undefined} />
+                </Button>
+                {page !== 'entry' && (
+                  <Button onClick={() => startEntry()}>
+                    <Plus />
+                    记一笔
+                  </Button>
+                )}
+              </div>
+            </header>
+            <nav aria-label="主导航" className="flex gap-1 overflow-x-auto border-b bg-background/85 px-2 py-1.5 md:hidden">
+              {navigation.flatMap(group => group.items).map(item => (
+                <Button
+                  key={item.id}
+                  size="xs"
+                  variant={page === item.id ? 'secondary' : 'ghost'}
+                  className="shrink-0"
+                  onClick={() => navigate(item.id as Page)}
+                >
+                  {item.label}
+                </Button>
+              ))}
+              <Button size="xs" variant={page === 'settings' ? 'secondary' : 'ghost'} className="shrink-0" onClick={() => navigate('settings')}>设置</Button>
+            </nav>
+            <div className="flex flex-1 flex-col gap-6 p-3 md:p-6">
+              {!desktop && (
+                <Alert>
+                  <AlertDescription>浏览器仅预览界面。请启动桌面应用使用本地 SQLite 账本。</AlertDescription>
+                </Alert>
+              )}
+              <Updater />
+              {error && (
+                <Alert variant="error" className="alert error">
+                  <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                    <span>{error}</span>
+                    <Button size="xs" variant="outline" onClick={() => setError('')}>关闭</Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {notice && (
+                <Alert variant="success" role="status" className="alert success">
+                  <AlertDescription>{notice}</AlertDescription>
+                </Alert>
+              )}
+              {restoreStatus?.pending && (
+                <Alert variant="error" className="alert error">
+                  <AlertDescription>
+                    已安排从 {restoreStatus.pending.backupFile} 恢复账本，将在下次启动时替换当前数据库。请完全退出并重新启动应用；在重启前账本只读。安全快照：{restoreStatus.pending.safetyFile}
+                  </AlertDescription>
+                </Alert>
+              )}
+              {restoreStatus?.lastResult && !restoreStatus.lastResult.ok && (
+                <Alert variant="warning" role="status">
+                  <AlertDescription>上次恢复失败：{restoreStatus.lastResult.message} 当前数据库未被替换。</AlertDescription>
+                </Alert>
+              )}
+              {busy && !data && <p role="status" className="text-sm text-muted-foreground">正在读取本地账本…</p>}
+              {unavailable && !busy && (
+                <Alert variant="warning" role="status">
+                  <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                    <span>账本尚未刷新，财务数据暂不可用。</span>
+                    <Button size="xs" variant="outline" onClick={() => void reload()}>重试读取账本</Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {['dashboard', 'positions', 'detail'].includes(page) && !!activeSymbols.length && (
+                <p className="market-note -mt-2 text-xs text-muted-foreground">
+                  {market.busy ? '正在更新标的参考价…' : market.error ? '行情更新失败，当前显示已保存的报价。' : '标的参考价使用已保存报价，可能延迟。'}
+                  {' '}
+                  <Button variant="link" size="xs" className="h-auto p-0 text-xs" onClick={() => setPage('market')}>查看行情与报价时间</Button>
+                </p>
+              )}
+
+              {page === 'overview' && !unavailable && (
+                <>
+                  {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看账户总览。</p>}
+                  {overviewError && (
+                    <Alert variant="error">
+                      <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                        <span>账户总览读取失败：{overviewError}</span>
+                        <Button size="xs" variant="outline" onClick={() => void loadOverview()}>重试</Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {!overview && overviewBusy && <p role="status" className="text-sm text-muted-foreground">正在读取账户总览…</p>}
+                  {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }} />}
+                </>
+              )}
+
+              {page === 'holdings' && !unavailable && (
+                <>
+                  {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看跨账户持仓。</p>}
+                  {holdingsError && (
+                    <Alert variant="error">
+                      <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                        <span>跨账户持仓读取失败：{holdingsError}</span>
+                        <Button size="xs" variant="outline" onClick={() => void loadHoldings()}>重试</Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {!holdings && holdingsBusy && <p role="status" className="text-sm text-muted-foreground">正在读取跨账户持仓…</p>}
+                  {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding} />}
+                </>
+              )}
+
+              {page === 'dashboard' && !unavailable && (
+                <>
+                  <StatGrid>
+                    <Stat label="已落袋净收租" value={money(data?.summary.premiumRealized ?? 0)} hint="已经了结的期权净收入" />
+                    <Stat label="未平仓净权利金" value={money(data?.summary.premiumOpen ?? 0)} hint={`${data?.summary.openContracts ?? 0} 手合约仍待了结`} />
+                    <Stat label="Put 资金义务" value={money(data?.summary.collateral ?? 0)} hint="按行权价计算" />
+                    <Stat
+                      label="进行中的战役"
+                      value={<>{data?.summary.activeCampaigns ?? 0}<span className="ml-1 text-base font-normal text-muted-foreground">个</span></>}
+                      hint={`持股共 ${data?.summary.sharesHeld ?? 0} 股`}
+                    />
+                  </StatGrid>
+                  {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)} />}
+                  <ReminderCard positions={positions} leadDays={leadDays} onOpenExpiry={() => setPage('expiry')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign} />
+                  <section className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h2 className="font-heading text-base font-semibold">
+                        我的战役 <span className="count text-sm font-normal text-muted-foreground">{campaigns.length}</span>
+                      </h2>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Input aria-label="筛选标的" placeholder="搜索标的…" className="w-56" value={symbol} onChange={e => setSymbol(e.target.value)} />
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Checkbox checked={archive} onCheckedChange={value => setArchive(Boolean(value))} />
+                          显示已结束
+                        </label>
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      {campaigns.map(campaign => (
+                        <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)} />
+                      ))}
+                    </div>
+                    {!campaigns.length && (
+                      <Empty className="rounded-2xl border border-dashed">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon"><Layers /></EmptyMedia>
+                          <EmptyTitle>{data?.campaigns.length ? '没有符合条件的战役' : '从第一笔交易开始'}</EmptyTitle>
+                          <EmptyDescription>记录一次卖 Put 或股票买入，自动追踪这一轮的成本和收租。</EmptyDescription>
+                        </EmptyHeader>
+                        <Button onClick={() => startEntry()}>记录第一笔交易</Button>
+                      </Empty>
+                    )}
+                  </section>
+                  <Footnote>
+                    A 纯股票成本 · B 扣除已落袋净权利金 · C′ 再扣除未平仓净权利金。
+                    {settings?.includeDividendsInCost ? '当前分红计入 B/C′ 成本。' : '当前分红不摊薄成本。'}
+                  </Footnote>
+                </>
+              )}
+
+              {page === 'ledger' && !unavailable && (
+                <>
+                  <ViewSwitch
+                    label="台账分类"
+                    value={ledgerTab}
+                    onChange={setLedgerTab}
+                    options={[{ value: 'entries', label: '收租明细' }, { value: 'events', label: '交易记录' }]}
+                  />
+                  {ledgerTab === 'entries'
+                    ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign} />
+                    : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent} />}
+                </>
+              )}
+
+              {page === 'cost' && !unavailable && (
+                <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} onEntry={prefill => startEntry(prefill)} />
+              )}
+              {page === 'entry' && (
+                <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} />
+              )}
+              {page === 'import' && (
+                <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }} />
+              )}
+              {page === 'expiry' && !unavailable && (
+                <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} onEntry={initial => startEntry(initial)} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')} />
+              )}
+              {page === 'calendar' && !unavailable && (
+                <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign} />
+              )}
+
+              {page === 'reports' && !unavailable && (
+                <>
+                  <ViewSwitch
+                    label="报告分类"
+                    value={reportTab}
+                    onChange={setReportTab}
+                    options={[{ value: 'income', label: '收租月报' }, { value: 'annual', label: '年度报表' }, { value: 'compare', label: '战役对比' }]}
+                  />
+                  {reportTab === 'income' && <MonthlyIncomeReport report={income} />}
+                  {reportTab === 'annual' && <AnnualReportPage report={annual} />}
+                  {reportTab === 'compare' && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf} />}
+                </>
+              )}
+
+              {page === 'positions' && !unavailable && (
+                <>
+                  <section className="space-y-2">
+                    <h2 className="font-heading text-base font-semibold">股票持仓</h2>
+                    <div className="overflow-hidden rounded-xl border bg-card">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>标的</TableHead>
+                            <TableHead className="text-right">股数</TableHead>
+                            <TableHead className="text-right">纯股票成本 / 股</TableHead>
+                            <TableHead className="text-right">有效成本 / 股</TableHead>
+                            <TableHead className="text-right">标的参考价</TableHead>
+                            <TableHead>操作</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {data?.campaigns.filter(campaign => campaign.shares > 0).map(campaign => (
+                            <TableRow key={campaign.id}>
+                              <TableCell>
+                                <Button variant="link" size="sm" className="h-auto p-0 font-medium" onClick={() => openCampaign(campaign.id)}>{campaign.symbol}</Button>
+                              </TableCell>
+                              <TableCell className="num text-right">{campaign.shares}</TableCell>
+                              <TableCell className="num text-right">{money(campaign.costA)}</TableCell>
+                              <TableCell className="num text-right">{money(campaign.costB)}</TableCell>
+                              <TableCell className="num text-right">{money(campaign.price)}</TableCell>
+                              <TableCell>
+                                <Button variant="outline" size="xs" onClick={() => startEntry({ symbol: campaign.symbol, kind: 'shares_sell', qty: campaign.shares })}>卖出</Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    {!data?.campaigns.some(campaign => campaign.shares > 0) && <p className="text-sm text-muted-foreground">暂无股票持仓。</p>}
+                  </section>
+                  <section className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="font-heading text-base font-semibold">未平仓期权</h2>
+                      <span className="text-xs text-muted-foreground">按到期日排序</span>
+                    </div>
+                    <div className="overflow-hidden rounded-xl border bg-card">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>合约</TableHead>
+                            <TableHead className="text-right">手数</TableHead>
+                            <TableHead className="text-right">每手股数</TableHead>
+                            <TableHead className="text-right">每股净权利金</TableHead>
+                            <TableHead>到期日</TableHead>
+                            <TableHead className="text-right">剩余天数</TableHead>
+                            <TableHead>了结合约</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {positions.map(position => (
+                            <TableRow key={position.contract}>
+                              <TableCell>{position.contract}</TableCell>
+                              <TableCell className="num text-right">{position.openQty}</TableCell>
+                              <TableCell className="num text-right">{position.multiplier} 股/手</TableCell>
+                              <TableCell className="num text-right">{money(position.avgCredit)}</TableCell>
+                              <TableCell>{position.expiry}</TableCell>
+                              <TableCell className={`num text-right ${position.daysLeft < 0 ? 'text-destructive-foreground' : position.daysLeft <= 7 ? 'text-warning-foreground' : ''}`}>
+                                {position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {['option_close', 'option_expire', 'option_assign'].map(kind => (
+                                    <Button key={kind} variant="outline" size="xs" onClick={() => startEntry({ kind, date: kind === 'option_expire' ? position.expiry : today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier })}>
+                                      {labels[kind]}
+                                    </Button>
+                                  ))}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    {!positions.length && <p className="text-sm text-muted-foreground">暂无未平仓期权。</p>}
+                  </section>
+                </>
+              )}
+
+              {page === 'detail' && !unavailable && (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <Button variant="ghost" size="sm" onClick={() => setPage('dashboard')}><ArrowLeft />返回仪表盘</Button>
+                    {detail && <Button onClick={() => openCostScan(detail.campaign.id)}>查看降本方案</Button>}
+                  </div>
+                  {detail ? (
+                    <>
+                      <CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)} variant="panel" />
+                      <CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike} />
+                      <CallAssignmentScenarios scenarios={detail.callScenarios} />
+                      <CampaignTimeline events={detail.events} onUndo={setPendingDelete} />
+                      <LedgerTable entries={detail.entries} openCampaign={openCampaign} />
+                      <section className="space-y-2">
+                        <h2 className="font-heading text-base font-semibold">股票批次</h2>
+                        <div className="overflow-hidden rounded-xl border bg-card">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>买入日期</TableHead>
+                                <TableHead>初始股数</TableHead>
+                                <TableHead>剩余股数</TableHead>
+                                <TableHead>原始每股成本</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {detail.lots.map(lot => (
+                                <TableRow key={lot.id}>
+                                  <TableCell>{lot.openedAt}</TableCell>
+                                  <TableCell className="num">{lot.qty}</TableCell>
+                                  <TableCell className="num">{lot.remainingQty}</TableCell>
+                                  <TableCell className="num">{money(lot.costPerShare)}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </section>
+                    </>
+                  ) : (
+                    !error && <p role="status" className="text-sm text-muted-foreground">正在加载战役…</p>
+                  )}
+                </>
+              )}
+
+              {page === 'market' && (
+                <MarketPage prices={prices} symbols={activeSymbols} market={market} onSaved={saved} onEntry={symbol => startEntry({ symbol })} />
+              )}
+
+              {page === 'settings' && (
+                <>
+                  <ViewSwitch
+                    label="设置分类"
+                    value={settingsTab}
+                    onChange={setSettingsTab}
+                    options={[
+                      { value: 'accounting', label: '成本口径' },
+                      { value: 'accounts', label: '账户' },
+                      { value: 'reminders', label: '到期提醒' },
+                      { value: 'vision', label: 'AI 识别' },
+                      { value: 'data', label: '备份与维护' },
+                      { value: 'about', label: '关于与更新' },
+                    ]}
+                  />
+                  {settingsTab === 'accounting' && <AccountingPreferences settings={settings} onSaved={settingsSaved} />}
+                  {settingsTab === 'accounts' && <AccountsPanel accounts={accounts} currentId={accountId} onSwitch={switchAccount} onAccounts={setAccounts} onNotice={setNotice} onError={setError} />}
+                  {settingsTab === 'reminders' && <ReminderPreferences settings={settings} onSaved={preferencesSaved} />}
+                  {settingsTab === 'vision' && <VisionSettings />}
+                  {settingsTab === 'data' && <SettingsData accountId={accountId} info={info} events={events} campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} positions={positions} settings={settings} restoreStatus={restoreStatus} onRestoreStatus={setRestoreStatus} onNotice={setNotice} onError={setError} onPreferencesSaved={preferencesSaved} />}
+                  {settingsTab === 'about' && <AboutPanel version={info?.version ?? null} />}
+                </>
+              )}
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
+
+        <AlertDialog open={!!pendingDelete} onOpenChange={open => { if (!open && !deleting) setPendingDelete(null); }}>
+          <AlertDialogPopup>
+            <AlertDialogHeader>
+              <AlertDialogTitle>确认撤销这笔交易？</AlertDialogTitle>
+              <AlertDialogDescription>
+                这会重算持仓、成本和收租。如果后续交易依赖此记录，系统会拒绝撤销。原始记录不会被物理删除；撤销后不再出现在当前界面与导出中，但数据库仍保留审计行。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose render={<Button variant="outline" disabled={deleting}>取消</Button>} />
+              <Button variant="destructive" disabled={deleting} onClick={() => void deleteEvent()}>
+                {deleting ? '正在撤销…' : '确认撤销'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
+        {reconcileOpen && data && <ReconcileModal accountId={accountId} summary={data.summary} onClose={() => setReconcileOpen(false)} />}
+      </ToastProvider>
+    </UpdateProvider>
+  );
 }
 
 function clamp(value: number, low: number, high: number) { return Math.max(low, Math.min(high, value)); }
+
+/** Segmented view switcher. Buttons (not Tabs) so keyboard automation and
+ * `aria-pressed` assertions keep working against the coss styles. */
+function ViewSwitch<T extends string>({ value, options, onChange, label }: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex w-fit flex-wrap gap-0.5 rounded-lg border bg-muted/40 p-0.5">
+      {options.map(option => (
+        <Button
+          key={option.value}
+          size="sm"
+          variant={option.value === value ? 'secondary' : 'ghost'}
+          aria-pressed={option.value === value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
 
 function CostRuler({ campaign: c }: { campaign: Campaign }) {
   if (c.costB == null || c.price == null) return null;
@@ -315,47 +692,71 @@ function CostRuler({ campaign: c }: { campaign: Campaign }) {
   const left = Math.min(cost, price);
   const width = Math.abs(price - cost);
   const labelsFit = width >= 10;
-  return <div className="cost-ruler" role="img" aria-label={`成本线 ${money(c.costB)}，现价 ${money(c.price)}${c.safetyMargin != null ? `，距成本线 ${percent(c.safetyMargin)}` : ''}`}>
-    <span className="ruler-track"/>
-    <span className={gain ? 'ruler-fill gain' : 'ruler-fill loss'} style={{ left: `${left}%`, width: `${width}%` }}/>
-    {plain != null && <span className="ruler-mark a" style={{ left: `${plain}%` }}/>}
-    <span className="ruler-mark b" style={{ left: `${cost}%` }}/>
-    <span className="ruler-mark price" style={{ left: `${price}%` }}/>
-    {labelsFit && <span className="ruler-label cost" style={{ left: `${clamp(cost, 6, 94)}%` }}>成本</span>}
-    <span className="ruler-label price" style={{ left: `${clamp(price, 6, 94)}%` }}>现价</span>
-  </div>;
+  return (
+    <div className="relative mt-3 h-9 max-w-[520px]" role="img" aria-label={`成本线 ${money(c.costB)}，现价 ${money(c.price)}${c.safetyMargin != null ? `，距成本线 ${percent(c.safetyMargin)}` : ''}`}>
+      <span className="absolute inset-x-0 top-2.5 h-0.5 rounded bg-muted" />
+      <span className={`absolute top-2.5 h-0.5 rounded ${gain ? 'bg-success' : 'bg-destructive'}`} style={{ left: `${left}%`, width: `${width}%` }} />
+      {plain != null && <span className="absolute top-1 h-3.5 w-px bg-muted-foreground/60" style={{ left: `${plain}%` }} />}
+      <span className="absolute top-0.5 h-4.5 w-0.5 bg-foreground" style={{ left: `${cost}%` }} />
+      <span className="absolute top-0.5 h-4.5 w-0.5 bg-info" style={{ left: `${price}%` }} />
+      {labelsFit && <span className="absolute top-5 -translate-x-1/2 text-xs text-info-foreground" style={{ left: `${clamp(cost, 6, 94)}%` }}>成本</span>}
+      <span className="absolute top-5 -translate-x-1/2 text-xs text-muted-foreground" style={{ left: `${clamp(price, 6, 94)}%` }}>现价</span>
+    </div>
+  );
 }
 
 function CampaignCard({ campaign: c, quote, onOpen, variant = 'row' }: { campaign: Campaign; quote?: Price; onOpen?: () => void; variant?: 'row' | 'panel' }) {
-  return <article className={`campaign-card${variant === 'panel' ? ' panel-card' : ''}`}>
-    <div className="section-heading campaign-id">
-      <div className="symbol-title"><h2>{c.symbol}</h2><span className={`badge ${c.status}`}>{c.status === 'active' ? '进行中' : '已结束'}</span></div>
-      <p className="campaign-meta">{c.shares ? `持有 ${c.shares} 股` : c.status === 'closed' ? '战役已结算' : '建仓前收租'}</p>
-    </div>
-    <div className="campaign-cost">
-      <div className="cost-focus">
-        <span className="cost-label">{c.status === 'closed' ? '本轮总收益' : c.shares ? '已落袋有效成本 / 股' : '累计已落袋净收租'}</span>
-        <strong>{money(c.status === 'closed' ? c.realizedPnl : c.shares ? c.costB : c.premiumRealized)}</strong>
-        {c.costB != null && c.costB <= 0 && <small className="positive">成本已归零</small>}
+  return (
+    <article className={`campaign-card rounded-2xl border bg-card p-4 shadow-xs/5 transition-colors${variant === 'panel' ? ' panel-card' : ''}`}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="symbol-title flex items-center gap-2">
+            <h2 className="font-heading text-lg font-semibold">{c.symbol}</h2>
+            <Badge variant={c.status === 'active' ? 'warning' : 'secondary'} size="sm">
+              {c.status === 'active' ? '进行中' : '已结束'}
+            </Badge>
+          </div>
+          <p className="campaign-meta mt-1 text-xs text-muted-foreground">
+            {c.shares ? `持有 ${c.shares} 股` : c.status === 'closed' ? '战役已结算' : '建仓前收租'}
+          </p>
+        </div>
+        <div className="campaign-price text-right">
+          <span className="text-xs text-muted-foreground">标的参考价</span>
+          <strong className="num block text-lg font-medium">{money(c.price)}</strong>
+          <small className="block text-xs text-muted-foreground">
+            {c.safetyMargin != null ? `距成本线 ${percent(c.safetyMargin)}` : '在行情页更新'}
+          </small>
+          <small className="block text-xs text-muted-foreground">{quoteTime(quote)}{quote?.quotedAt ? ' · 可能延迟' : ''}</small>
+        </div>
       </div>
-      {c.status !== 'closed' && <CostRuler campaign={c}/>}
-      {variant === 'row' && <div className="cost-breakdown">
-        <span>纯股票成本<strong>{money(c.costA)}</strong></span>
-        <span>含未平仓成本<strong>{money(c.costC)}</strong></span>
-        <span>已落袋权利金<strong>{money(c.premiumRealized)}</strong></span>
-        <span>未平仓权利金<strong>{money(c.premiumOpen)}</strong></span>
-      </div>}
-    </div>
-    <div className="campaign-price">
-      <span>标的参考价</span>
-      <strong>{money(c.price)}</strong>
-      <small>{c.safetyMargin != null ? `距成本线 ${percent(c.safetyMargin)}` : '在行情页更新'}</small>
-      <small>{quoteTime(quote)}{quote?.quotedAt ? ' · 可能延迟' : ''}</small>
-    </div>
-    <div className="card-bottom">
-      <span>{c.nextOption ? `${c.nextOption.openQty} 手 ${c.nextOption.strike}${c.nextOption.right} · ${c.nextOption.expiry} 到期` : `${c.startedAt} 开始 · ${c.cycles} 次了结`}</span>
-      {onOpen && <button className="text-button" onClick={onOpen}>查看战役<ChevronRight size={16}/></button>}
-    </div>
-  </article>;
-}
 
+      <div className="campaign-cost mt-4">
+        <div className="cost-focus">
+          <span className="cost-label text-xs text-muted-foreground">
+            {c.status === 'closed' ? '本轮总收益' : c.shares ? '已落袋有效成本 / 股' : '累计已落袋净收租'}
+          </span>
+          <strong className="num mt-0.5 block text-2xl font-semibold tracking-tight">
+            {money(c.status === 'closed' ? c.realizedPnl : c.shares ? c.costB : c.premiumRealized)}
+          </strong>
+          {c.costB != null && c.costB <= 0 && <small className="text-xs text-success-foreground">成本已归零</small>}
+        </div>
+        {c.status !== 'closed' && <CostRuler campaign={c} />}
+        {variant === 'row' && (
+          <div className="cost-breakdown mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">纯股票成本</span><strong className="num text-sm font-medium">{money(c.costA)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">含未平仓成本</span><strong className="num text-sm font-medium">{money(c.costC)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">已落袋权利金</span><strong className="num text-sm font-medium">{money(c.premiumRealized)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">未平仓权利金</span><strong className="num text-sm font-medium">{money(c.premiumOpen)}</strong></div>
+          </div>
+        )}
+      </div>
+
+      <div className="card-bottom mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+        <span className="text-xs text-muted-foreground">
+          {c.nextOption ? `${c.nextOption.openQty} 手 ${c.nextOption.strike}${c.nextOption.right} · ${c.nextOption.expiry} 到期` : `${c.startedAt} 开始 · ${c.cycles} 次了结`}
+        </span>
+        {onOpen && <Button variant="ghost" size="xs" onClick={onOpen}>查看战役<ChevronRight /></Button>}
+      </div>
+    </article>
+  );
+}

@@ -3,21 +3,25 @@ import * as echarts from 'echarts/core';
 import { LineChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
+import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { NativeSelect } from '@/components/native-select';
 import type { CostPoint, Price } from './types';
 import { money } from './lib';
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
 const TRACKS = [
-  { name: 'A · 纯股票成本', key: 'costA' as const, color: '#a39a88', type: 'dashed' },
-  { name: 'B · 已落袋有效成本', key: 'costB' as const, color: '#0f5fbe', type: 'solid' },
-  { name: 'C′ · 含未平仓权利金', key: 'costC' as const, color: '#c9c0ad', type: 'dotted' },
+  { name: 'A · 纯股票成本', key: 'costA' as const, color: '#a1a1aa', type: 'dashed' },
+  { name: 'B · 已落袋有效成本', key: 'costB' as const, color: '#18181b', type: 'solid' },
+  { name: 'C′ · 含未平仓权利金', key: 'costC' as const, color: '#d4d4d8', type: 'dotted' },
 ];
-const INK = '#1e1c17';
-const INK_2 = '#575249';
-const INK_3 = '#8b8477';
-const LINE = 'rgba(30, 28, 23, .17)';
-const GRID = 'rgba(30, 28, 23, .07)';
-const FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
+const INK = '#18181b';
+const INK_2 = '#52525b';
+const INK_3 = '#71717a';
+const LINE = 'rgba(24, 24, 27, .18)';
+const GRID = 'rgba(24, 24, 27, .07)';
+const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 export function CostChart({ points, prices = [], symbol, callStrike }: { points: CostPoint[]; prices?: Price[]; symbol?: string; callStrike?: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -57,7 +61,7 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
         symbolSize: 8,
         data: axis.map(date => costAt(date)?.[item.key] ?? null),
         connectNulls: true,
-        itemStyle: { color: item.color, borderColor: '#fffefa', borderWidth: 2 },
+        itemStyle: { color: item.color, borderColor: '#ffffff', borderWidth: 2 },
         lineStyle: { width: item.key === 'costB' ? 2.5 : 1.5, type: item.type, opacity: item.key === 'costB' ? 1 : .9 },
         markLine: item.key !== 'costB' || (!lastPrice && callStrike == null) ? undefined : {
           symbol: 'none',
@@ -65,7 +69,7 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
           label: { color: INK_3, fontSize: 11, formatter: (parameter: { name?: string }) => parameter.name ?? '' },
           data: [
             lastPrice != null ? { name: `现价 ${money(lastPrice)}`, yAxis: lastPrice, lineStyle: { color: INK, type: 'dashed', width: 1 } } : null,
-            callStrike != null ? { name: `Call 行权价 ${money(callStrike)}`, yAxis: callStrike, lineStyle: { color: '#8a5a12', type: 'dashed', width: 1 } } : null,
+            callStrike != null ? { name: `Call 行权价 ${money(callStrike)}`, yAxis: callStrike, lineStyle: { color: '#a16207', type: 'dashed', width: 1 } } : null,
           ].filter(Boolean),
         },
       }));
@@ -84,11 +88,11 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
       legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: INK_2, fontSize: 12 } },
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#fffefa',
+        backgroundColor: '#ffffff',
         borderColor: LINE,
         borderWidth: 1,
         textStyle: { color: INK, fontSize: 12 },
-        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
+        extraCssText: 'box-shadow: 0 8px 24px rgba(24,24,27,.10); border-radius: 8px;',
         axisPointer: { type: 'cross' },
         formatter: (parameters: unknown) => {
           const list = parameters as { axisValue?: string }[];
@@ -126,10 +130,63 @@ export function CostChart({ points, prices = [], symbol, callStrike }: { points:
     return () => { observer.disconnect(); chart.dispose(); };
   }, [points, prices, quotes, quoteByDate, axis, lastPrice, callStrike, table, track]);
 
-  return <section className="panel"><div className="section-heading"><h2>每股成本轨迹</h2><div className="toolbar"><label className="sr-only" htmlFor="cost-track">成本口径</label><select id="cost-track" value={track} onChange={event => setTrack(event.target.value)}><option value="all">三轨对比</option><option value="costA">纯股票成本</option><option value="costB">已落袋有效成本</option><option value="costC">含未平仓权利金</option></select><button onClick={() => setTable(!table)}>{table ? '查看图表' : '查看数据'}</button></div></div>
-    {!points.length ? <p className="empty">持有股票后，这里会显示每笔事件对应的每股成本。</p> : table ? <div key="cost-data" className="table-wrap"><table><thead><tr><th>日期</th><th>持股</th><th>A 纯股票</th><th>B 已落袋</th><th>C′ 含未平仓</th><th>参考价</th><th>成本变化 B</th></tr></thead><tbody>{points.map((point, i) => {
-      const previous = i > 0 ? points[i - 1].costB : null;
-      return <tr key={i}><td>{point.at}</td><td>{point.shares}</td><td>{money(point.costA)}</td><td>{money(point.costB)}</td><td>{money(point.costC)}</td><td>{money(priceAt(point.at))}</td><td>{previous == null ? '—' : money(point.costB - previous)}</td></tr>;
-    })}</tbody></table></div> : <><div key="cost-plot" ref={element} className="cost-chart" role="img" aria-label="三轨每股成本阶梯图，叠加已保存参考价与 Call 行权价，可切换数据表读取全部数值"/><p className="muted chart-call-note">{quotes.length ? `参考价来自行情页已保存报价${symbol ? `（${symbol}）` : ''}${lastPrice != null ? `，最新 ${money(lastPrice)}` : ''}。` : '暂无可用的已保存报价；在行情页更新后可对照现货成本线。'}{callStrike != null ? ` 虚线为当前 Call 行权价 ${money(callStrike)}。` : ''}</p></>}
-  </section>;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">每股成本轨迹</CardTitle>
+      </CardHeader>
+      <CardPanel className="space-y-3">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="sr-only" htmlFor="cost-track">成本口径</label>
+          <NativeSelect id="cost-track" className="w-44" value={track} onChange={event => setTrack(event.target.value)}>
+            <option value="all">三轨对比</option>
+            <option value="costA">纯股票成本</option>
+            <option value="costB">已落袋有效成本</option>
+            <option value="costC">含未平仓权利金</option>
+          </NativeSelect>
+          <Button variant="outline" size="sm" onClick={() => setTable(!table)}>{table ? '查看图表' : '查看数据'}</Button>
+        </div>
+        {!points.length ? (
+          <p className="text-sm text-muted-foreground">持有股票后，这里会显示每笔事件对应的每股成本。</p>
+        ) : table ? (
+          <div key="cost-data" className="overflow-hidden rounded-xl border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>日期</TableHead>
+                  <TableHead className="text-right">持股</TableHead>
+                  <TableHead className="text-right">A 纯股票</TableHead>
+                  <TableHead className="text-right">B 已落袋</TableHead>
+                  <TableHead className="text-right">C′ 含未平仓</TableHead>
+                  <TableHead className="text-right">参考价</TableHead>
+                  <TableHead className="text-right">成本变化 B</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {points.map((point, i) => {
+                  const previous = i > 0 ? points[i - 1].costB : null;
+                  return (
+                    <TableRow key={i}>
+                      <TableCell className="num">{point.at}</TableCell>
+                      <TableCell className="num text-right">{point.shares}</TableCell>
+                      <TableCell className="num text-right">{money(point.costA)}</TableCell>
+                      <TableCell className="num text-right">{money(point.costB)}</TableCell>
+                      <TableCell className="num text-right">{money(point.costC)}</TableCell>
+                      <TableCell className="num text-right">{money(priceAt(point.at))}</TableCell>
+                      <TableCell className="num text-right">{previous == null ? '—' : money(point.costB - previous)}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <>
+            <div key="cost-plot" ref={element} className="cost-chart chart-surface" role="img" aria-label="三轨每股成本阶梯图，叠加已保存参考价与 Call 行权价，可切换数据表读取全部数值" />
+            <p className="chart-call-note text-xs leading-relaxed text-muted-foreground">{quotes.length ? `参考价来自行情页已保存报价${symbol ? `（${symbol}）` : ''}${lastPrice != null ? `，最新 ${money(lastPrice)}` : ''}。` : '暂无可用的已保存报价；在行情页更新后可对照现货成本线。'}{callStrike != null ? ` 虚线为当前 Call 行权价 ${money(callStrike)}。` : ''}</p>
+          </>
+        )}
+      </CardPanel>
+    </Card>
+  );
 }

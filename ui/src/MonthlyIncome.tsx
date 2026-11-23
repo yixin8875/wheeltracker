@@ -3,11 +3,22 @@ import * as echarts from 'echarts/core';
 import { BarChart, LineChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import { TrendingUp } from 'lucide-react';
+import { TrendingUpIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { NativeSelect } from '@/components/native-select';
 import { downloadCsv, money } from './lib';
 import type { MonthlyIncome } from './types';
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
+
+const INK = '#18181b';
+const INK_2 = '#52525b';
+const INK_3 = '#71717a';
+const LINE = 'rgba(24, 24, 27, .18)';
+const GRID = 'rgba(24, 24, 27, .07)';
+const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }) {
   const element = useRef<HTMLDivElement>(null);
@@ -38,16 +49,16 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
     const chart = echarts.init(element.current);
     chart.setOption({
       backgroundColor: 'transparent',
-      textStyle: { color: '#575249', fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif', fontSize: 12 },
+      textStyle: { color: INK_2, fontFamily: FONT, fontSize: 12 },
       grid: { left: 16, right: 16, top: 44, bottom: 16, containLabel: true },
-      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: '#575249', fontSize: 12 } },
+      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: INK_2, fontSize: 12 } },
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#fffefa',
-        borderColor: 'rgba(30, 28, 23, .17)',
+        backgroundColor: '#ffffff',
+        borderColor: LINE,
         borderWidth: 1,
-        textStyle: { color: '#1e1c17', fontSize: 12 },
-        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
+        textStyle: { color: INK, fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(24,24,27,.10); border-radius: 8px;',
         formatter: (parameter: unknown) => {
           const items = parameter as { axisValue?: string; seriesName: string; value: number }[];
           if (!items.length) return '';
@@ -57,17 +68,17 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
       xAxis: {
         type: 'category',
         data: chartRows.map(row => row.month),
-        axisLine: { lineStyle: { color: 'rgba(30, 28, 23, .17)' } },
-        axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: string) => value.slice(2) },
+        axisLine: { lineStyle: { color: LINE } },
+        axisLabel: { color: INK_3, fontSize: 11, formatter: (value: string) => value.slice(2) },
         axisTick: { show: false },
       },
       yAxis: [
-        { type: 'value', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: number) => `$${value.toLocaleString()}` }, splitLine: { lineStyle: { color: 'rgba(30, 28, 23, .07)' } } },
+        { type: 'value', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: INK_3, fontSize: 11, formatter: (value: number) => `$${value.toLocaleString()}` }, splitLine: { lineStyle: { color: GRID } } },
         { type: 'value', show: false },
       ],
       series: [
-        { name: '月度合计', type: 'bar', barMaxWidth: 28, itemStyle: { color: '#ddd6c8', borderRadius: [2, 2, 0, 0] }, emphasis: { itemStyle: { color: '#cfc6b4' } }, data: chartRows.map(row => Number(row.total.toFixed(2))) },
-        { name: '区间累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 5, showSymbol: false, lineStyle: { color: '#0f5fbe', width: 2 }, itemStyle: { color: '#0f5fbe', borderColor: '#fffefa', borderWidth: 2 }, data: chartRows.map(row => Number(row.cumulative.toFixed(2))) },
+        { name: '月度合计', type: 'bar', barMaxWidth: 28, itemStyle: { color: '#e4e4e7', borderRadius: [3, 3, 0, 0] }, emphasis: { itemStyle: { color: '#d4d4d8' } }, data: chartRows.map(row => Number(row.total.toFixed(2))) },
+        { name: '区间累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 5, showSymbol: false, lineStyle: { color: INK, width: 2 }, itemStyle: { color: INK, borderColor: '#ffffff', borderWidth: 2 }, data: chartRows.map(row => Number(row.cumulative.toFixed(2))) },
       ],
     });
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(element.current);
@@ -85,40 +96,83 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
     ]);
   }
 
-  return <section className="panel">
-    <div className="section-heading">
-      <div><h2><TrendingUp size={18}/> 收租月报</h2><span className="muted">已落袋口径 · 美东交易日按月</span></div>
-      <div className="toolbar">
-        <label className="inline-select">年份<select aria-label="选择年份" value={year} onChange={event => setYear(event.target.value)}><option value="all">全部年份</option>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
-        <button onClick={exportRows} disabled={!rows.length}>导出 CSV</button>
-      </div>
-    </div>
-    {!months.length ? <p className="empty">了结第一笔卖出开仓后，这里会按月份累计净收租、分红与现金调整。</p> : <>
-      <div className="summary-strip income-summary">
-        <div><span>区间合计</span><strong className={totals.total < 0 ? 'negative' : ''}>{money(totals.total)}</strong><small>{rows.length} 个月 · 净收租减费用加调整</small></div>
-        <div><span>已落袋净收租</span><strong>{money(totals.premium)}</strong><small>已扣开仓与平仓费用</small></div>
-        <div><span>分红</span><strong>{money(totals.dividends)}</strong><small>按派发日计入</small></div>
-        <div><span>了结合约</span><strong>{totals.closedEntries}<em> 笔</em></strong><small>未平仓权利金不计入</small></div>
-      </div>
-      <div ref={element} className="income-chart" role="img" aria-label="收租月报图：柱形为月度合计，折线为所选区间累计"/>
-      <div className="table-wrap"><table>
-        <thead><tr><th>月份</th><th>净收租</th><th>分红</th><th>独立费用</th><th>现金调整</th><th>合计</th><th>区间累计</th><th>了结合约</th></tr></thead>
-        <tbody>{[...chartRows].reverse().map(row => {
-          const month = rows.find(item => item.month === row.month)!;
-          return <tr key={row.month}>
-            <td>{row.month}</td>
-            <td>{money(month.premium)}</td>
-            <td>{money(month.dividends)}</td>
-            <td>{money(month.fees)}</td>
-            <td>{money(month.adjustments)}</td>
-            <td className={month.total < 0 ? 'negative' : 'positive'}>{money(month.total)}</td>
-            <td>{money(row.cumulative)}</td>
-            <td>{month.closedEntries}</td>
-          </tr>;
-        })}</tbody>
-        <tfoot><tr><th>合计</th><th>{money(totals.premium)}</th><th>{money(totals.dividends)}</th><th>{money(totals.fees)}</th><th>{money(totals.adjustments)}</th><th>{money(totals.total)}</th><th></th><th>{totals.closedEntries}</th></tr></tfoot>
-      </table></div>
-    </>}
-    <p className="footnote">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账。累计为所选年份区间内的累计。入金 / 出金是账户资金划转，不属于收益，不计入本表。</p>
-  </section>;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base"><TrendingUpIcon className="size-4 text-muted-foreground" />收租月报</CardTitle>
+        <CardDescription>已落袋口径 · 美东交易日按月</CardDescription>
+      </CardHeader>
+      <CardPanel className="space-y-4">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            年份
+            <NativeSelect aria-label="选择年份" className="w-32" value={year} onChange={event => setYear(event.target.value)}>
+              <option value="all">全部年份</option>
+              {years.map(item => <option key={item} value={item}>{item}</option>)}
+            </NativeSelect>
+          </label>
+          <Button variant="outline" size="sm" onClick={exportRows} disabled={!rows.length}>导出 CSV</Button>
+        </div>
+        {!months.length ? (
+          <p className="text-sm text-muted-foreground">了结第一笔卖出开仓后，这里会按月份累计净收租、分红与现金调整。</p>
+        ) : (
+          <>
+            <div className="income-summary grid gap-4 rounded-xl border bg-muted/40 p-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">区间合计</span><strong className={`num text-xl font-semibold ${totals.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(totals.total)}</strong><small className="text-xs text-muted-foreground">{rows.length} 个月 · 净收租减费用加调整</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">已落袋净收租</span><strong className="num text-xl font-semibold">{money(totals.premium)}</strong><small className="text-xs text-muted-foreground">已扣开仓与平仓费用</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">分红</span><strong className="num text-xl font-semibold">{money(totals.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">了结合约</span><strong className="num text-xl font-semibold">{totals.closedEntries}<em className="text-xs font-normal not-italic text-muted-foreground"> 笔</em></strong><small className="text-xs text-muted-foreground">未平仓权利金不计入</small></div>
+            </div>
+            <div ref={element} className="income-chart chart-surface" role="img" aria-label="收租月报图：柱形为月度合计，折线为所选区间累计" />
+            <div className="overflow-hidden rounded-xl border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>月份</TableHead>
+                    <TableHead className="text-right">净收租</TableHead>
+                    <TableHead className="text-right">分红</TableHead>
+                    <TableHead className="text-right">独立费用</TableHead>
+                    <TableHead className="text-right">现金调整</TableHead>
+                    <TableHead className="text-right">合计</TableHead>
+                    <TableHead className="text-right">区间累计</TableHead>
+                    <TableHead className="text-right">了结合约</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[...chartRows].reverse().map(row => {
+                    const month = rows.find(item => item.month === row.month)!;
+                    return (
+                      <TableRow key={row.month}>
+                        <TableCell className="num">{row.month}</TableCell>
+                        <TableCell className="num text-right">{money(month.premium)}</TableCell>
+                        <TableCell className="num text-right">{money(month.dividends)}</TableCell>
+                        <TableCell className="num text-right">{money(month.fees)}</TableCell>
+                        <TableCell className="num text-right">{money(month.adjustments)}</TableCell>
+                        <TableCell className={`num text-right ${month.total < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(month.total)}</TableCell>
+                        <TableCell className="num text-right">{money(row.cumulative)}</TableCell>
+                        <TableCell className="num text-right">{month.closedEntries}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+                <TableFooter>
+                  <TableRow>
+                    <TableCell>合计</TableCell>
+                    <TableCell className="num text-right">{money(totals.premium)}</TableCell>
+                    <TableCell className="num text-right">{money(totals.dividends)}</TableCell>
+                    <TableCell className="num text-right">{money(totals.fees)}</TableCell>
+                    <TableCell className="num text-right">{money(totals.adjustments)}</TableCell>
+                    <TableCell className="num text-right">{money(totals.total)}</TableCell>
+                    <TableCell />
+                    <TableCell className="num text-right">{totals.closedEntries}</TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </div>
+          </>
+        )}
+        <p className="footnote text-xs leading-relaxed text-muted-foreground">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账。累计为所选年份区间内的累计。入金 / 出金是账户资金划转，不属于收益，不计入本表。</p>
+      </CardPanel>
+    </Card>
+  );
 }

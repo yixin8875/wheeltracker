@@ -3,12 +3,23 @@ import * as echarts from 'echarts/core';
 import { BarChart, LineChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import { ChartColumn } from 'lucide-react';
+import { ChartColumnIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { NativeSelect } from '@/components/native-select';
 import { downloadCsv, money } from './lib';
 import { exportAnnualReport } from './export';
 import type { AnnualReport, AnnualYear } from './types';
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
+
+const INK = '#18181b';
+const INK_2 = '#52525b';
+const INK_3 = '#71717a';
+const LINE = 'rgba(24, 24, 27, .18)';
+const GRID = 'rgba(24, 24, 27, .07)';
+const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
   const years = useMemo(() => [...(report?.availableYears ?? [])].sort((left, right) => right - left), [report]);
@@ -24,16 +35,16 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
     const chart = echarts.init(element.current);
     chart.setOption({
       backgroundColor: 'transparent',
-      textStyle: { color: '#575249', fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif', fontSize: 12 },
+      textStyle: { color: INK_2, fontFamily: FONT, fontSize: 12 },
       grid: { left: 16, right: 16, top: 44, bottom: 16, containLabel: true },
-      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: '#575249', fontSize: 12 } },
+      legend: { top: 4, itemWidth: 14, itemHeight: 8, itemGap: 20, textStyle: { color: INK_2, fontSize: 12 } },
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#fffefa',
-        borderColor: 'rgba(30, 28, 23, .17)',
+        backgroundColor: '#ffffff',
+        borderColor: LINE,
         borderWidth: 1,
-        textStyle: { color: '#1e1c17', fontSize: 12 },
-        extraCssText: 'box-shadow: 0 8px 24px rgba(30,28,23,.10);',
+        textStyle: { color: INK, fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(24,24,27,.10); border-radius: 8px;',
         formatter: (parameter: unknown) => {
           const items = parameter as { axisValue?: string; seriesName: string; value: number }[];
           if (!items.length) return '';
@@ -43,17 +54,17 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
       xAxis: {
         type: 'category',
         data: current.months.map(month => month.month),
-        axisLine: { lineStyle: { color: 'rgba(30, 28, 23, .17)' } },
-        axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: string) => value.slice(2) },
+        axisLine: { lineStyle: { color: LINE } },
+        axisLabel: { color: INK_3, fontSize: 11, formatter: (value: string) => value.slice(2) },
         axisTick: { show: false },
       },
       yAxis: [
-        { type: 'value', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#8b8477', fontSize: 11, formatter: (value: number) => `$${value.toLocaleString()}` }, splitLine: { lineStyle: { color: 'rgba(30, 28, 23, .07)' } } },
+        { type: 'value', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: INK_3, fontSize: 11, formatter: (value: number) => `$${value.toLocaleString()}` }, splitLine: { lineStyle: { color: GRID } } },
         { type: 'value', show: false },
       ],
       series: [
-        { name: '月度合计', type: 'bar', barMaxWidth: 28, itemStyle: { color: '#ddd6c8', borderRadius: [2, 2, 0, 0] }, emphasis: { itemStyle: { color: '#cfc6b4' } }, data: current.months.map(month => Number(month.total.toFixed(2))) },
-        { name: '年度累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 5, showSymbol: false, lineStyle: { color: '#0f5fbe', width: 2 }, itemStyle: { color: '#0f5fbe', borderColor: '#fffefa', borderWidth: 2 }, data: current.months.map(month => Number(month.cumulative.toFixed(2))) },
+        { name: '月度合计', type: 'bar', barMaxWidth: 28, itemStyle: { color: '#e4e4e7', borderRadius: [3, 3, 0, 0] }, emphasis: { itemStyle: { color: '#d4d4d8' } }, data: current.months.map(month => Number(month.total.toFixed(2))) },
+        { name: '年度累计', type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 5, showSymbol: false, lineStyle: { color: INK, width: 2 }, itemStyle: { color: INK, borderColor: '#ffffff', borderWidth: 2 }, data: current.months.map(month => Number(month.cumulative.toFixed(2))) },
       ],
     });
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(element.current);
@@ -77,56 +88,122 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
     ]);
   }
 
-  return <section className="panel">
-    <div className="section-heading">
-      <div><h2><ChartColumn size={18}/> 年度报表</h2><span className="muted">已实现口径 · 美东交易日按年</span></div>
-      <div className="toolbar">
-        <label className="inline-select">年份<select aria-label="选择年份" value={year ?? ''} disabled={!years.length} onChange={event => setYear(Number(event.target.value))}>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
-        <button onClick={exportRows} disabled={!current}>导出 CSV</button>
-        <button onClick={() => current && exportAnnualReport(current)} disabled={!current}>导出 Excel</button>
-      </div>
-    </div>
-    {!report?.years.length ? <p className="empty">有了结的期权、股票卖出、分红或拆股零股补偿后，这里会按年度汇总已实现收益。</p> : current && <>
-      <div className="summary-strip annual-summary">
-        <div><span>年度合计</span><strong className={current.total.total < 0 ? 'negative' : ''}>{money(current.total.total)}</strong><small>{current.months.length} 个月 · 已实现口径</small></div>
-        <div><span>净收租</span><strong>{money(current.total.premium)}</strong><small>按平仓日计入</small></div>
-        <div><span>股票已实现盈亏</span><strong>{money(current.total.sharePnl)}</strong><small>卖出、Call 指派、零股补偿</small></div>
-        <div><span>分红</span><strong>{money(current.total.dividends)}</strong><small>按派发日计入</small></div>
-        <div><span>独立费用</span><strong>{money(current.total.fees)}</strong><small>已从合计扣除</small></div>
-        <div><span>现金调整</span><strong>{money(current.total.adjustments)}</strong><small>计入合计</small></div>
-      </div>
-      <div ref={element} className="income-chart" role="img" aria-label="年度已实现收益图：柱形为月度合计，折线为年度累计"/>
-      <h3>月度明细</h3>
-      <div className="table-wrap monthly-breakdown"><table>
-        <thead><tr><th>月份</th><th>净收租</th><th>股票已实现盈亏</th><th>分红</th><th>独立费用</th><th>现金调整</th><th>合计</th><th>年度累计</th><th>了结合约</th><th>股票事件</th></tr></thead>
-        <tbody>{[...current.months].reverse().map(month => <tr key={month.month}>
-          <td>{month.month}</td>
-          <td>{money(month.premium)}</td>
-          <td>{money(month.sharePnl)}</td>
-          <td>{money(month.dividends)}</td>
-          <td>{money(month.fees)}</td>
-          <td>{money(month.adjustments)}</td>
-          <td className={month.total < 0 ? 'negative' : 'positive'}>{money(month.total)}</td>
-          <td>{money(month.cumulative)}</td>
-          <td>{month.closedEntries}</td>
-          <td>{month.shareEvents}</td>
-        </tr>)}</tbody>
-        <tfoot><tr><th>年度合计</th><th>{money(current.total.premium)}</th><th>{money(current.total.sharePnl)}</th><th>{money(current.total.dividends)}</th><th>{money(current.total.fees)}</th><th>{money(current.total.adjustments)}</th><th>{money(current.total.total)}</th><th></th><th>{current.total.closedEntries}</th><th>{current.total.shareEvents}</th></tr></tfoot>
-      </table></div>
-      <h3>按标的归因</h3>
-      <div className="table-wrap symbol-breakdown"><table>
-        <thead><tr><th>标的</th><th>净收租</th><th>股票已实现盈亏</th><th>分红</th><th>独立费用</th><th>现金调整</th><th>合计</th></tr></thead>
-        <tbody>{current.symbols.map(symbol => <tr key={symbol.symbol}>
-          <td>{symbol.symbol}</td>
-          <td>{money(symbol.premium)}</td>
-          <td>{money(symbol.sharePnl)}</td>
-          <td>{money(symbol.dividends)}</td>
-          <td>{money(symbol.fees)}</td>
-          <td>{money(symbol.adjustments)}</td>
-          <td className={symbol.total < 0 ? 'negative' : 'positive'}>{money(symbol.total)}</td>
-        </tr>)}</tbody>
-      </table></div>
-    </>}
-    <p className="footnote">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入。不含未平仓权利金与股票浮盈亏；入金 / 出金是账户资金划转，不属于收益，不计入本表；本表也不是税务申报表。</p>
-  </section>;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base"><ChartColumnIcon className="size-4 text-muted-foreground" />年度报表</CardTitle>
+        <CardDescription>已实现口径 · 美东交易日按年</CardDescription>
+      </CardHeader>
+      <CardPanel className="space-y-4">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            年份
+            <NativeSelect aria-label="选择年份" className="w-28" value={year ?? ''} disabled={!years.length} onChange={event => setYear(Number(event.target.value))}>
+              {years.map(item => <option key={item} value={item}>{item}</option>)}
+            </NativeSelect>
+          </label>
+          <Button variant="outline" size="sm" onClick={exportRows} disabled={!current}>导出 CSV</Button>
+          <Button variant="outline" size="sm" onClick={() => current && exportAnnualReport(current)} disabled={!current}>导出 Excel</Button>
+        </div>
+        {!report?.years.length ? (
+          <p className="text-sm text-muted-foreground">有了结的期权、股票卖出、分红或拆股零股补偿后，这里会按年度汇总已实现收益。</p>
+        ) : current && (
+          <>
+            <div className="annual-summary grid gap-4 rounded-xl border bg-muted/40 p-4 sm:grid-cols-3 xl:grid-cols-6">
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">年度合计</span><strong className={`num text-xl font-semibold ${current.total.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(current.total.total)}</strong><small className="text-xs text-muted-foreground">{current.months.length} 个月 · 已实现口径</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">净收租</span><strong className="num text-xl font-semibold">{money(current.total.premium)}</strong><small className="text-xs text-muted-foreground">按平仓日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">股票已实现盈亏</span><strong className="num text-xl font-semibold">{money(current.total.sharePnl)}</strong><small className="text-xs text-muted-foreground">卖出、Call 指派、零股补偿</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">分红</span><strong className="num text-xl font-semibold">{money(current.total.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">独立费用</span><strong className="num text-xl font-semibold">{money(current.total.fees)}</strong><small className="text-xs text-muted-foreground">已从合计扣除</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">现金调整</span><strong className="num text-xl font-semibold">{money(current.total.adjustments)}</strong><small className="text-xs text-muted-foreground">计入合计</small></div>
+            </div>
+            <div ref={element} className="income-chart chart-surface" role="img" aria-label="年度已实现收益图：柱形为月度合计，折线为年度累计" />
+            <div className="space-y-2">
+              <h3 className="font-heading text-sm font-semibold">月度明细</h3>
+              <div className="monthly-breakdown overflow-hidden rounded-xl border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>月份</TableHead>
+                      <TableHead className="text-right">净收租</TableHead>
+                      <TableHead className="text-right">股票已实现盈亏</TableHead>
+                      <TableHead className="text-right">分红</TableHead>
+                      <TableHead className="text-right">独立费用</TableHead>
+                      <TableHead className="text-right">现金调整</TableHead>
+                      <TableHead className="text-right">合计</TableHead>
+                      <TableHead className="text-right">年度累计</TableHead>
+                      <TableHead className="text-right">了结合约</TableHead>
+                      <TableHead className="text-right">股票事件</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {[...current.months].reverse().map(month => (
+                      <TableRow key={month.month}>
+                        <TableCell className="num">{month.month}</TableCell>
+                        <TableCell className="num text-right">{money(month.premium)}</TableCell>
+                        <TableCell className="num text-right">{money(month.sharePnl)}</TableCell>
+                        <TableCell className="num text-right">{money(month.dividends)}</TableCell>
+                        <TableCell className="num text-right">{money(month.fees)}</TableCell>
+                        <TableCell className="num text-right">{money(month.adjustments)}</TableCell>
+                        <TableCell className={`num text-right ${month.total < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(month.total)}</TableCell>
+                        <TableCell className="num text-right">{money(month.cumulative)}</TableCell>
+                        <TableCell className="num text-right">{month.closedEntries}</TableCell>
+                        <TableCell className="num text-right">{month.shareEvents}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell>年度合计</TableCell>
+                      <TableCell className="num text-right">{money(current.total.premium)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.sharePnl)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.dividends)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.fees)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.adjustments)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.total)}</TableCell>
+                      <TableCell />
+                      <TableCell className="num text-right">{current.total.closedEntries}</TableCell>
+                      <TableCell className="num text-right">{current.total.shareEvents}</TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-heading text-sm font-semibold">按标的归因</h3>
+              <div className="symbol-breakdown overflow-hidden rounded-xl border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>标的</TableHead>
+                      <TableHead className="text-right">净收租</TableHead>
+                      <TableHead className="text-right">股票已实现盈亏</TableHead>
+                      <TableHead className="text-right">分红</TableHead>
+                      <TableHead className="text-right">独立费用</TableHead>
+                      <TableHead className="text-right">现金调整</TableHead>
+                      <TableHead className="text-right">合计</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {current.symbols.map(symbol => (
+                      <TableRow key={symbol.symbol}>
+                        <TableCell className="font-medium">{symbol.symbol}</TableCell>
+                        <TableCell className="num text-right">{money(symbol.premium)}</TableCell>
+                        <TableCell className="num text-right">{money(symbol.sharePnl)}</TableCell>
+                        <TableCell className="num text-right">{money(symbol.dividends)}</TableCell>
+                        <TableCell className="num text-right">{money(symbol.fees)}</TableCell>
+                        <TableCell className="num text-right">{money(symbol.adjustments)}</TableCell>
+                        <TableCell className={`num text-right ${symbol.total < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(symbol.total)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </>
+        )}
+        <p className="footnote text-xs leading-relaxed text-muted-foreground">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入。不含未平仓权利金与股票浮盈亏；入金 / 出金是账户资金划转，不属于收益，不计入本表；本表也不是税务申报表。</p>
+      </CardPanel>
+    </Card>
+  );
 }
