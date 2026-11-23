@@ -186,6 +186,9 @@ pub struct DerivedState {
     /// Signed cash effect of every event (trading cash flows plus deposits and
     /// withdrawals). Expired options contribute zero and are still recorded.
     pub event_cash: HashMap<EventId, f64>,
+    /// Signed cash effect of account-level fees and interest, which belong to
+    /// no campaign and therefore are not part of `Campaign::cash_flow`.
+    pub account_cash_adjustments: f64,
     /// Account cash derived from the full event stream. Only meaningful once
     /// the user has recorded at least one deposit or withdrawal; otherwise it
     /// is just the net cash flow of the trading events.
@@ -248,7 +251,8 @@ impl DerivedState {
             issues.push("cash transfer totals cannot be negative".to_string());
         }
         let campaign_cash: f64 = self.campaigns.iter().map(|c| c.cash_flow).sum();
-        let expected_cash = campaign_cash + self.cash_deposits - self.cash_withdrawals;
+        let expected_cash = campaign_cash + self.account_cash_adjustments + self.cash_deposits
+            - self.cash_withdrawals;
         if (self.account_cash - expected_cash).abs() > eps {
             // Kept separate from the event sum above so a mismatch points at
             // either the per-event map or the campaign cash roll-up.
@@ -412,6 +416,7 @@ struct Builder {
     event_share_pnl: HashMap<EventId, f64>,
     event_cash: HashMap<EventId, f64>,
     account_cash: f64,
+    account_cash_adjustments: f64,
     cash_deposits: f64,
     cash_withdrawals: f64,
     /// Pre-split contract id -> current adjusted contract. Used so a later
@@ -437,6 +442,7 @@ impl Builder {
             event_share_pnl: HashMap::new(),
             event_cash: HashMap::new(),
             account_cash: 0.0,
+            account_cash_adjustments: 0.0,
             cash_deposits: 0.0,
             cash_withdrawals: 0.0,
             split_aliases: HashMap::new(),
@@ -464,6 +470,7 @@ impl Builder {
             EventKind::Dividend => self.dividend(event)?,
             EventKind::Fee => self.adjust_cash(event, -event.amount)?,
             EventKind::Adjustment => self.adjust_cash(event, event.amount)?,
+            EventKind::Interest => self.adjust_cash(event, event.amount)?,
             EventKind::Split => self.split(event)?,
             EventKind::CashDeposit | EventKind::CashWithdrawal => self.cash_transfer(event)?,
         };
@@ -782,7 +789,9 @@ impl Builder {
         } else {
             self.campaigns[campaign_idx].shares
         };
-        let amount = event.price * shares as f64;
+        // `fees` on a dividend event is withholding tax (or a broker fee). The
+        // ledger records the net amount the account actually received.
+        let amount = event.price * shares as f64 - event.fees;
         self.campaigns[campaign_idx].dividends += amount;
         self.campaigns[campaign_idx].cash_flow += amount;
         self.event_dividends.insert(event.id.clone(), amount);
@@ -957,6 +966,12 @@ impl Builder {
     }
 
     fn adjust_cash(&mut self, event: &Event, delta: f64) -> Result<f64, EngineError> {
+        // An event without a symbol is account-level (fee or interest) and
+        // deliberately does not touch any campaign.
+        if event.symbol.trim().is_empty() {
+            self.account_cash_adjustments += delta;
+            return Ok(delta);
+        }
         let campaign_idx = self.active_campaign_idx(&event.symbol).ok_or_else(|| {
             EngineError::NoActiveCampaign {
                 event: event.id.clone(),
@@ -1273,6 +1288,7 @@ impl Builder {
             event_share_pnl: self.event_share_pnl,
             event_cash: self.event_cash,
             account_cash: self.account_cash,
+            account_cash_adjustments: self.account_cash_adjustments,
             cash_deposits: self.cash_deposits,
             cash_withdrawals: self.cash_withdrawals,
         }
@@ -1360,5 +1376,27 @@ mod tests {
         let state = replay("main", &events, Settings::default()).unwrap();
         assert_eq!(state.event_dividends["div-known"], 100.0);
         assert_eq!(state.event_dividends["div-fallback"], 50.0);
+    }
+
+    #[test]
+    fn account_level_fee_interest_and_withholding_keep_cash_reconciled() {
+        let at = date!(2026 - 01 - 02);
+        let events = vec![
+            Event::cash_deposit("main", "deposit", 1, at, 1000.0),
+            Event::fee("main", "account-fee", 2, at, "", 5.0),
+            Event::interest("main", "interest", 3, at, 12.5),
+            Event::interest("main", "margin", 4, at, -3.25),
+            Event::buy_shares("main", "buy", 5, at, "AAPL", 10, 100.0, 0.0),
+            Event::dividend("main", "div", 6, at, "AAPL", 1.0, 10).fees(1.5),
+        ];
+        let state = replay("main", &events, Settings::default()).unwrap();
+        // -5 account fee, +12.5 interest income, -3.25 financing cost.
+        assert!((state.account_cash_adjustments - 4.25).abs() < 1e-9);
+        // The dividend is recorded net of withholding tax.
+        assert!((state.event_dividends["div"] - 8.5).abs() < 1e-9);
+        assert!((state.account_cash - 12.75).abs() < 1e-9);
+        assert!(state.check_invariants().is_empty());
+        // Account-level rows stay out of every campaign.
+        assert_eq!(state.campaigns[0].cash_flow, -1000.0 + 8.5);
     }
 }

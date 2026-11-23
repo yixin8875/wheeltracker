@@ -101,12 +101,17 @@ pub fn build_event(
 ) -> Result<Event, String> {
     let at = store::parse_date(&req.date).map_err(|error| error.to_string())?;
     let cash_transfer = matches!(req.kind.as_str(), "cash_deposit" | "cash_withdrawal");
-    let symbol = if cash_transfer {
+    // Interest is always account-level. A fee without a symbol is an
+    // account-level fee (subscription, wire, margin interest, ...).
+    let account_only = cash_transfer
+        || req.kind == "interest"
+        || (req.kind == "fee" && req.symbol.trim().is_empty());
+    let symbol = if account_only {
         String::new()
     } else {
         req.symbol.trim().to_ascii_uppercase()
     };
-    if !cash_transfer && symbol.is_empty() {
+    if !account_only && symbol.is_empty() {
         return Err("标的代码不能为空。".to_string());
     }
     if !req.price.is_finite()
@@ -187,9 +192,12 @@ pub fn build_event(
         "shares_sell" => Event::sell_shares(
             account_id, id, seq, at, &symbol, req.qty, req.price, req.fees,
         ),
-        "dividend" => Event::dividend(account_id, id, seq, at, &symbol, req.price, req.qty),
+        "dividend" => {
+            Event::dividend(account_id, id, seq, at, &symbol, req.price, req.qty).fees(req.fees)
+        }
         "fee" => Event::fee(account_id, id, seq, at, &symbol, req.amount),
         "adjustment" => Event::adjustment(account_id, id, seq, at, &symbol, req.amount),
+        "interest" => Event::interest(account_id, id, seq, at, req.amount),
         "cash_deposit" => Event::cash_deposit(account_id, id, seq, at, req.amount),
         "cash_withdrawal" => Event::cash_withdrawal(account_id, id, seq, at, req.amount),
         "stock_split" => {

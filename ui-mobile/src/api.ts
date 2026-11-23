@@ -120,6 +120,7 @@ export type EntryKind =
   | 'shares_sell'
   | 'dividend'
   | 'fee'
+  | 'interest'
   | 'adjustment'
   | 'cash_deposit'
   | 'cash_withdrawal'

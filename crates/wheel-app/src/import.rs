@@ -837,35 +837,37 @@ pub fn kind_from_action(text: &str, _has_contract: bool) -> ActionResult {
     if normalized.is_empty() {
         return ActionResult::Unknown(text.trim().to_string());
     }
-    let kind = match normalized.as_str() {
-        "option_open_short" | "sto" | "sell to open" | "selltoopen" | "卖出开仓" | "卖开" => {
-            Some("option_open_short")
-        }
-        "option_close" | "btc" | "buy to close" | "buytoclose" | "买入平仓" | "买平" => {
-            Some("option_close")
-        }
-        "option_expire" | "expired" | "expire" | "expiration" | "到期" | "作废" | "到期作废" => {
-            Some("option_expire")
-        }
-        "option_assign" | "assigned" | "assignment" | "exercise" | "指派" | "行权" | "被指派" => {
-            Some("option_assign")
-        }
-        "shares_buy" | "buy" | "bought" | "买入" | "买" => Some("shares_buy"),
-        "shares_sell" | "sell" | "sold" | "卖出" | "卖" => Some("shares_sell"),
-        "dividend" | "dividends" | "cash dividend" | "分红" | "股息" | "红利" => {
-            Some("dividend")
-        }
-        "fee" | "fees" | "commission" | "费用" | "手续费" | "佣金" | "利息" => Some("fee"),
-        "adjustment" | "adjust" | "调整" | "现金调整" => Some("adjustment"),
-        "cash_deposit" | "deposit" | "cash deposit" | "transfer in" | "入金" | "存入" | "存款"
-        | "转入" => Some("cash_deposit"),
-        "cash_withdrawal" | "withdrawal" | "withdraw" | "cash withdrawal" | "transfer out"
-        | "出金" | "取出" | "取款" | "转出" => Some("cash_withdrawal"),
-        "buy to open" | "bto" | "买入开仓" | "sell to close" | "stc" | "卖出平仓" => {
-            return ActionResult::Unsupported(format!("暂不支持做多期权操作 `{}`", text.trim()))
-        }
-        _ => None,
-    };
+    let kind =
+        match normalized.as_str() {
+            "option_open_short" | "sto" | "sell to open" | "selltoopen" | "卖出开仓" | "卖开" => {
+                Some("option_open_short")
+            }
+            "option_close" | "btc" | "buy to close" | "buytoclose" | "买入平仓" | "买平" => {
+                Some("option_close")
+            }
+            "option_expire" | "expired" | "expire" | "expiration" | "到期" | "作废"
+            | "到期作废" => Some("option_expire"),
+            "option_assign" | "assigned" | "assignment" | "exercise" | "指派" | "行权"
+            | "被指派" => Some("option_assign"),
+            "shares_buy" | "buy" | "bought" | "买入" | "买" => Some("shares_buy"),
+            "shares_sell" | "sell" | "sold" | "卖出" | "卖" => Some("shares_sell"),
+            "dividend" | "dividends" | "cash dividend" | "分红" | "股息" | "红利" => {
+                Some("dividend")
+            }
+            "fee" | "fees" | "commission" | "费用" | "手续费" | "佣金" => Some("fee"),
+            "interest" | "利息" | "利息收入" | "融资利息" | "margin interest" => {
+                Some("interest")
+            }
+            "adjustment" | "adjust" | "调整" | "现金调整" => Some("adjustment"),
+            "cash_deposit" | "deposit" | "cash deposit" | "transfer in" | "入金" | "存入"
+            | "存款" | "转入" => Some("cash_deposit"),
+            "cash_withdrawal" | "withdrawal" | "withdraw" | "cash withdrawal" | "transfer out"
+            | "出金" | "取出" | "取款" | "转出" => Some("cash_withdrawal"),
+            "buy to open" | "bto" | "买入开仓" | "sell to close" | "stc" | "卖出平仓" => {
+                return ActionResult::Unsupported(format!("暂不支持做多期权操作 `{}`", text.trim()))
+            }
+            _ => None,
+        };
     match kind {
         Some(kind) => ActionResult::Kind(kind),
         None => ActionResult::Unknown(text.trim().to_string()),
@@ -889,6 +891,10 @@ fn is_option_kind(kind: &str) -> bool {
 
 fn is_cash_kind(kind: &str) -> bool {
     matches!(kind, "cash_deposit" | "cash_withdrawal")
+}
+
+fn is_account_kind(kind: &str) -> bool {
+    is_cash_kind(kind) || kind == "interest"
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,22 +1080,24 @@ pub fn normalize_row(
         }
     };
 
-    let cash_kind = kind.is_some_and(is_cash_kind);
+    let account_kind = kind.is_some_and(is_account_kind);
     if let Some(kind) = kind {
         if is_option_kind(kind) && !has_contract {
             errors.push("期权类型缺少到期日、行权价或看涨/看跌".to_string());
         }
-        if cash_kind && has_contract {
-            errors.push("入金 / 出金行不应带期权合约，请检查列映射".to_string());
-        } else if !is_option_kind(kind) && !cash_kind && has_contract {
+        if account_kind && has_contract {
+            errors.push("入金 / 出金 / 利息行不应带期权合约，请检查列映射".to_string());
+        } else if !is_option_kind(kind) && !account_kind && has_contract {
             errors.push("股票、分红或费用行不应带期权合约，请检查列映射".to_string());
         }
     }
-    if cash_kind {
+    if account_kind {
         if !symbol.is_empty() {
-            warnings.push("入金 / 出金是账户级交易，标的代码列已忽略。".to_string());
+            warnings.push("入金 / 出金 / 利息是账户级交易，标的代码列已忽略。".to_string());
             symbol.clear();
         }
+    } else if kind == Some("fee") && symbol.is_empty() {
+        // A fee without a symbol is an account-level fee.
     } else if symbol.is_empty() {
         errors.push("缺少标的代码".to_string());
     }
@@ -1124,7 +1132,7 @@ pub fn normalize_row(
             Some(kind)
                 if !matches!(
                     kind,
-                    "fee" | "adjustment" | "cash_deposit" | "cash_withdrawal"
+                    "fee" | "adjustment" | "interest" | "cash_deposit" | "cash_withdrawal"
                 )
         )
     {
@@ -1255,6 +1263,19 @@ pub fn normalize_row(
                     }
                 }
             }
+            "interest" => {
+                match amount {
+                    Some(value) if value != 0.0 => {}
+                    Some(_) => errors.push("利息金额不能为 0".to_string()),
+                    None => errors.push("利息行需要金额列".to_string()),
+                }
+                if qty != 0 || price.unwrap_or(0.0) != 0.0 || fees != 0.0 {
+                    warnings.push("利息是账户级交易，数量、价格与费用已清零。".to_string());
+                }
+                qty = 0;
+                price = Some(0.0);
+                fees = 0.0;
+            }
             "dividend" if qty == 0 => {
                 errors.push("分红需要持股数量列".to_string());
             }
@@ -1278,9 +1299,9 @@ pub fn normalize_row(
             price: price.unwrap_or(0.0),
             fees,
             amount: amount.unwrap_or(0.0),
-            expiry: if cash_kind { None } else { expiry },
-            strike: if cash_kind { None } else { strike },
-            right: if cash_kind { None } else { right },
+            expiry: if account_kind { None } else { expiry },
+            strike: if account_kind { None } else { strike },
+            right: if account_kind { None } else { right },
             multiplier,
             note,
         })
@@ -1470,7 +1491,7 @@ fn fingerprint(
     // otherwise identical option/share row from being detected as a duplicate.
     if matches!(
         kind,
-        "fee" | "adjustment" | "cash_deposit" | "cash_withdrawal"
+        "fee" | "adjustment" | "interest" | "cash_deposit" | "cash_withdrawal"
     ) && amount != 0.0
     {
         parts.push(format!("a{}", canonical_number(amount)));

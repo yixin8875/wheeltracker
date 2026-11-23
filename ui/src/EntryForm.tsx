@@ -1,5 +1,5 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { Alert } from '@/components/ui/alert';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,18 @@ import { api, labels, money, percent, today } from './lib';
 import type { Campaign, NewEvent, Position } from './types';
 import { SymbolPicker } from './SymbolPicker';
 import { QuoteReference } from './MarketData';
+
+type EntryMode = 'option' | 'stock' | 'cash';
+const MODES: { id: EntryMode; label: string; kinds: string[] }[] = [
+  { id: 'option', label: '期权', kinds: ['option_open_short', 'option_close', 'option_expire', 'option_assign'] },
+  { id: 'stock', label: '股票', kinds: ['shares_buy', 'shares_sell', 'stock_split'] },
+  { id: 'cash', label: '现金', kinds: ['dividend', 'fee', 'interest', 'adjustment', 'cash_deposit', 'cash_withdrawal'] },
+];
+function modeOf(kind: string): EntryMode {
+  return MODES.find(mode => mode.kinds.includes(kind))?.id ?? 'option';
+}
+
+export type NextLeg = { expiry: string; strike: number; price: number; fees: number; qty: number };
 
 function Field({ label, hint, className, children }: { label: ReactNode; hint?: ReactNode; className?: string; children: ReactNode }) {
   return (
@@ -30,22 +42,84 @@ function Value({ label, children, tone }: { label: ReactNode; children: ReactNod
   );
 }
 
-export function EntryForm({ initial, eventId, onCancel, positions, campaigns, includeDividendsInCost = false, accountId, onSaved }: { initial?: Partial<NewEvent>; eventId?: string; onCancel?: () => void; positions: Position[]; campaigns: Campaign[]; includeDividendsInCost?: boolean; accountId: string; onSaved: (message: string) => void }) {
+export function EntryForm({ initial, initialRoll, initialNext, eventId, onCancel, positions, campaigns, includeDividendsInCost = false, accountId, onSaved, onDone }: {
+  initial?: Partial<NewEvent>; initialRoll?: boolean; initialNext?: Partial<NextLeg>; eventId?: string; onCancel?: () => void;
+  positions: Position[]; campaigns: Campaign[]; includeDividendsInCost?: boolean; accountId: string;
+  onSaved: (message: string) => void; onDone?: (target: 'dashboard' | 'positions' | 'ledger') => void;
+}) {
   const defaults: NewEvent = { date: today(), kind: 'option_open_short', symbol: '', qty: 1, price: 0, fees: 0, amount: 0, expiry: '', strike: 0, right: 'P', multiplier: 100, splitNumerator: 2, splitDenominator: 1, note: '' };
+  const defaultsNext: NextLeg = { expiry: '', strike: 0, price: 0, fees: 0, qty: 1 };
+  const initialForm: NewEvent = { ...defaults, ...initial };
+  const initialNextLeg: NextLeg = { ...defaultsNext, ...initialNext, qty: initialNext?.qty ?? initial?.qty ?? defaults.qty };
   const editing = Boolean(eventId);
-  const [form, setForm] = useState<NewEvent>({ ...defaults, ...initial }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [keep, setKeep] = useState(false);
+  const draftKey = `wheel.entryDraft.${accountId}`;
+  const [form, setForm] = useState<NewEvent>(initialForm); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [keep, setKeep] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [roll, setRoll] = useState(false);
-  const [next, setNext] = useState({ expiry: '', strike: 0, price: 0, fees: 0 });
+  const [roll, setRoll] = useState(Boolean(initialRoll) && initialForm.kind === 'option_close');
+  const [next, setNext] = useState<NextLeg>(initialNextLeg);
+  const [draftNotice, setDraftNotice] = useState('');
+  const mode = modeOf(form.kind);
   const rolling = roll && form.kind === 'option_close';
-  const option = form.kind.startsWith('option_'); const amountOnly = ['fee', 'adjustment'].includes(form.kind);
+  const rollQty = Number.isFinite(next.qty) && next.qty > 0 ? Math.floor(next.qty) : form.qty;
+  const option = form.kind.startsWith('option_'); const amountOnly = ['fee', 'adjustment', 'interest'].includes(form.kind);
   const cashKind = ['cash_deposit', 'cash_withdrawal'].includes(form.kind);
   const split = form.kind === 'stock_split';
   const multiplier = form.multiplier && form.multiplier > 0 ? form.multiplier : 100;
   const hasPrice = !['option_expire', 'option_assign'].includes(form.kind) && !amountOnly && !split && !cashKind;
-  const hasFees = !['option_expire', 'dividend', 'fee', 'adjustment'].includes(form.kind) && !split && !cashKind;
+  const hasFees = !['option_expire', 'fee', 'adjustment', 'interest'].includes(form.kind) && !split && !cashKind;
+  const pristine = JSON.stringify(form) === JSON.stringify(initialForm) && JSON.stringify(next) === JSON.stringify(initialNextLeg) && !roll;
   const update = <K extends keyof NewEvent>(key: K, value: NewEvent[K]) => setForm(previous => ({ ...previous, [key]: value }));
-  const cash = form.kind === 'option_open_short' ? form.price * multiplier * form.qty - form.fees : form.kind === 'option_close' ? -form.price * multiplier * form.qty - form.fees : form.kind === 'option_assign' ? (form.right === 'P' ? -((form.strike ?? 0) * multiplier * form.qty + form.fees) : (form.strike ?? 0) * multiplier * form.qty - form.fees) : form.kind === 'shares_buy' ? -form.price * form.qty - form.fees : form.kind === 'shares_sell' ? form.price * form.qty - form.fees : form.kind === 'dividend' ? form.price * form.qty : form.kind === 'fee' ? -form.amount : form.kind === 'adjustment' ? form.amount : cashKind ? (form.kind === 'cash_deposit' ? form.amount : -form.amount) : split ? (form.splitCashInLieu ?? 0) : null;
+  const cash = form.kind === 'option_open_short' ? form.price * multiplier * form.qty - form.fees : form.kind === 'option_close' ? -form.price * multiplier * form.qty - form.fees : form.kind === 'option_assign' ? (form.right === 'P' ? -((form.strike ?? 0) * multiplier * form.qty + form.fees) : (form.strike ?? 0) * multiplier * form.qty - form.fees) : form.kind === 'shares_buy' ? -form.price * form.qty - form.fees : form.kind === 'shares_sell' ? form.price * form.qty - form.fees : form.kind === 'dividend' ? form.price * form.qty - form.fees : form.kind === 'fee' ? -form.amount : form.kind === 'interest' ? form.amount : form.kind === 'adjustment' ? form.amount : cashKind ? (form.kind === 'cash_deposit' ? form.amount : -form.amount) : split ? (form.splitCashInLieu ?? 0) : null;
+  useEffect(() => {
+    if (editing) return;
+    // A quick-action prefill (平仓 / 指派 / 拆股 / 降本方案) always wins over an
+    // older draft, otherwise the user would record the wrong contract.
+    if (initial && Object.keys(initial).length > 0) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as { form?: NewEvent; roll?: boolean; next?: Partial<NextLeg>; savedAt?: string };
+      if (!draft.form || typeof draft.form.kind !== 'string') return;
+      setForm({ ...defaults, ...draft.form });
+      setRoll(Boolean(draft.roll));
+      setNext({ ...defaultsNext, ...draft.next, qty: draft.next?.qty ?? draft.form.qty ?? defaultsNext.qty });
+      setDraftNotice(draft.savedAt ? `已恢复 ${draft.savedAt.slice(0, 16).replace('T', ' ')} 的草稿。` : '已恢复上次未保存的草稿。');
+    } catch {
+      // A corrupt draft must never block recording a trade.
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (editing || submitted) return;
+    if (pristine) {
+      try { localStorage.removeItem(draftKey); } catch { /* storage unavailable in preview */ }
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(draftKey, JSON.stringify({ form, roll, next, savedAt: new Date().toISOString() }));
+      } catch { /* storage unavailable in preview */ }
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [form, roll, next, pristine, editing, submitted, draftKey]);
+
+  function resetForNext() {
+    try { localStorage.removeItem(draftKey); } catch { /* storage unavailable in preview */ }
+    setForm({ ...defaults, date: form.date, symbol: form.symbol, kind: form.kind, right: form.right });
+    setNext({ ...defaultsNext, qty: form.qty });
+    setRoll(false);
+    setSubmitted(false);
+    setDraftNotice('');
+  }
+
+  function discardDraft() {
+    try { localStorage.removeItem(draftKey); } catch { /* storage unavailable in preview */ }
+    setForm(initialForm);
+    setNext(initialNextLeg);
+    setRoll(Boolean(initialRoll) && initialForm.kind === 'option_close');
+    setDraftNotice('');
+  }
+
   const collateral = option && form.strike ? form.strike * multiplier * form.qty : 0;
   const days = form.expiry ? Math.round((Date.parse(form.expiry) - Date.parse(form.date)) / 86400000) : 0;
   const upperSymbol = form.symbol.trim().toUpperCase();
@@ -103,21 +177,21 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
     if (busy || submitted) return;
     setError(''); setBusy(true);
     try {
-      const req = { ...form, accountId, symbol: cashKind ? '' : form.symbol.trim().toUpperCase(), ...(!option ? { expiry: undefined, strike: undefined, right: undefined, multiplier: undefined } : {}), ...(!hasPrice ? { price: 0 } : {}), ...(!hasFees ? { fees: 0 } : {}), ...(split ? { qty: 0, amount: 0 } : { splitNumerator: undefined, splitDenominator: undefined, splitCashInLieu: undefined }), ...(cashKind ? { qty: 0, amount: Math.abs(form.amount) } : {}) };
+      const req = { ...form, accountId, symbol: cashKind || form.kind === 'interest' ? '' : form.symbol.trim().toUpperCase(), ...(!option ? { expiry: undefined, strike: undefined, right: undefined, multiplier: undefined } : {}), ...(!hasPrice ? { price: 0 } : {}), ...(!hasFees ? { fees: 0 } : {}), ...(split ? { qty: 0, amount: 0 } : { splitNumerator: undefined, splitDenominator: undefined, splitCashInLieu: undefined }), ...(amountOnly || cashKind ? { qty: 0 } : {}), ...(cashKind ? { amount: Math.abs(form.amount) } : {}) };
       if (rolling) {
-        await api<string[]>('add_events', { reqs: [req, { ...req, kind: 'option_open_short', ...next }] });
+        await api<string[]>('add_events', { reqs: [req, { ...req, kind: 'option_open_short', ...next, qty: rollQty }] });
       } else if (eventId) {
         await api<string>('update_event', { eventId, req });
       } else {
         await api<string>('add_event', { req });
       }
+      try { localStorage.removeItem(draftKey); } catch { /* storage unavailable in preview */ }
       if (editing) {
         setSubmitted(true);
         onSaved('交易已修改，持仓与成本已重算。');
       } else {
         if (keep) {
-          setForm({ ...defaults, date: form.date, symbol: form.symbol, kind: form.kind, right: form.right });
-          setNext({ expiry: '', strike: 0, price: 0, fees: 0 });
+          resetForNext();
         } else {
           setSubmitted(true);
         }
@@ -137,8 +211,30 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
           </CardDescription>
         </CardHeader>
         <CardPanel>
+          {submitted && !editing ? (
+            <div className="entry-success space-y-4 rounded-xl border bg-muted/30 p-5" role="status">
+              <div>
+                <h3 className="font-heading text-base font-semibold">交易已保存</h3>
+                <p className="mt-1 text-sm text-muted-foreground">持仓、成本与现金已按美东交易日重算。接下来去哪里？</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => onDone?.('dashboard')}>回仪表盘</Button>
+                <Button variant="outline" onClick={() => onDone?.('positions')}>查看当前持仓</Button>
+                <Button variant="outline" onClick={() => onDone?.('ledger')}>查看交易记录</Button>
+                <Button variant="ghost" onClick={resetForNext}>再记一笔</Button>
+              </div>
+            </div>
+          ) : (
           <form onSubmit={save} className="space-y-5">
             {error && <Alert variant="error" className="alert error">保存失败：{error}</Alert>}
+            {draftNotice && (
+              <Alert variant="warning" role="status" className="alert warning">
+                <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                  <span>{draftNotice}</span>
+                  <Button type="button" size="xs" variant="outline" onClick={discardDraft}>放弃草稿</Button>
+                </AlertDescription>
+              </Alert>
+            )}
 
             {!editing && form.kind === 'option_close' && (
               <label className="check flex items-center gap-2 text-sm">
@@ -147,10 +243,25 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
               </label>
             )}
 
+            <div className="segmented inline-flex w-fit flex-wrap items-center gap-0.5 rounded-lg border bg-muted/40 p-0.5" role="group" aria-label="交易类别">
+              {MODES.map(item => (
+                <Button
+                  key={item.id}
+                  type="button"
+                  size="sm"
+                  variant={mode === item.id ? 'secondary' : 'ghost'}
+                  aria-pressed={mode === item.id}
+                  onClick={() => { if (mode !== item.id) update('kind', item.kinds[0]); }}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="交易类型">
                 <NativeSelect value={form.kind} onChange={e => update('kind', e.target.value)}>
-                  {Object.keys(labels).filter(key => key.startsWith('option_') || ['stock_split', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment', 'cash_deposit', 'cash_withdrawal'].includes(key)).map(kind => <option key={kind} value={kind}>{labels[kind]}</option>)}
+                  {(MODES.find(item => item.id === mode)?.kinds ?? []).map(kind => <option key={kind} value={kind}>{labels[kind]}</option>)}
                 </NativeSelect>
               </Field>
               <Field label="交易日（美东）">
@@ -165,11 +276,17 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
                 </Field>
               )}
 
-              {!cashKind && (
+              {!cashKind && form.kind !== 'interest' && (
                 <div className="grid gap-4 sm:col-span-2 lg:col-span-3 lg:grid-cols-2">
-                  <SymbolPicker autoFocus value={form.symbol} onChange={symbol => update('symbol', symbol)} />
+                  <div className="space-y-1">
+                    <SymbolPicker autoFocus={form.kind !== 'fee'} required={form.kind !== 'fee'} value={form.symbol} onChange={symbol => update('symbol', symbol)} />
+                    {form.kind === 'fee' && <p className="text-xs font-normal leading-relaxed text-muted-foreground">留空表示账户级费用（订阅费、电汇费、融资利息等），不计入任何战役。</p>}
+                  </div>
                   <QuoteReference symbol={form.symbol} />
                 </div>
+              )}
+              {(cashKind || form.kind === 'interest') && (
+                <p className="text-xs leading-relaxed text-muted-foreground sm:col-span-2 lg:col-span-3">账户级交易：不选择标的，不计入任何战役的收益或成本；会影响账户现金与对账。</p>
               )}
 
               {!amountOnly && !split && !cashKind && (
@@ -218,12 +335,12 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
                 </Field>
               )}
               {hasFees && (
-                <Field label="费用总额">
+                <Field label={form.kind === 'dividend' ? '预扣税 / 费用（从分红中扣除）' : '费用总额'}>
                   <Input type="number" required min="0" step="any" value={form.fees} onChange={e => update('fees', e.target.valueAsNumber)} />
                 </Field>
               )}
               {(amountOnly || cashKind) && (
-                <Field label={cashKind ? '金额（USD）' : '美元金额'}>
+                <Field label={cashKind ? '金额（USD）' : form.kind === 'interest' ? '金额（正数 = 利息收入，负数 = 融资利息）' : form.kind === 'fee' ? '费用金额（USD）' : '美元金额'}>
                   <Input type="number" required min={form.kind === 'fee' || cashKind ? '0.0001' : undefined} step="any" value={form.amount} onChange={e => update('amount', e.target.valueAsNumber)} />
                 </Field>
               )}
@@ -234,8 +351,8 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
 
             {rolling && (
               <fieldset className="space-y-4 rounded-xl border p-4">
-                <legend className="px-1 text-sm font-medium">新合约 · 同标的、方向与手数</legend>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <legend className="px-1 text-sm font-medium">新合约 · 同标的与方向</legend>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                   <Field label="新到期日">
                     <Input type="date" required min={form.date} value={next.expiry} onChange={e => setNext({ ...next, expiry: e.target.value })} />
                   </Field>
@@ -248,15 +365,18 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
                   <Field label="新开仓费用">
                     <Input type="number" required min="0" step="any" value={next.fees} onChange={e => setNext({ ...next, fees: e.target.valueAsNumber })} />
                   </Field>
+                  <Field label="新手数" hint={rollQty < form.qty ? `部分滚动：平仓 ${form.qty} 手，开仓 ${rollQty} 手` : rollQty > form.qty ? `开仓 ${rollQty} 手，多于平仓 ${form.qty} 手` : '与平仓手数相同'}>
+                    <Input type="number" required min="1" step="1" value={next.qty} onChange={e => setNext({ ...next, qty: e.target.valueAsNumber })} />
+                  </Field>
                 </div>
-                <p className="text-xs text-muted-foreground">两条交易一起保存；任一条无效时整笔滚动均不入账。</p>
+                <p className="text-xs text-muted-foreground">两条交易一起保存；任一条无效时整笔滚动均不入账。手数可少于平仓手数，用于部分滚动。</p>
               </fieldset>
             )}
 
             <div className="entry-preview flex flex-wrap gap-x-10 gap-y-3 rounded-xl border bg-muted/40 px-4 py-3">
               <div className="grid gap-0.5">
                 <span className="text-xs text-muted-foreground">{rolling ? '滚动现金净变化' : split ? '零股现金补偿' : '现金净变化'}</span>
-                <strong className="num text-sm font-semibold">{money(rolling ? (cash ?? 0) + next.price * multiplier * form.qty - next.fees : cash)}</strong>
+                <strong className="num text-sm font-semibold">{money(rolling ? (cash ?? 0) + next.price * multiplier * rollQty - next.fees : cash)}</strong>
               </div>
               {form.kind === 'option_open_short' && (
                 <>
@@ -368,6 +488,7 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
 
             {split && <p className="text-xs leading-relaxed text-muted-foreground">例：2 : 1 表示 1 股拆为 2 股，反向拆股用 1 : 10。未平仓期权的行权价与每手股数会自动调整；出现零股时须填写现金补偿（可填 0），系统不保留小数股。</p>}
             {form.kind === 'adjustment' && <p className="text-xs leading-relaxed text-muted-foreground">现金调整计入战役收支，不覆盖持股数或股票成本。账户级入金 / 出金请使用「入金」「出金」类型。</p>}
+            {form.kind === 'interest' && <p className="text-xs leading-relaxed text-muted-foreground">利息是账户级收支：正数为利息收入（如闲置现金利息），负数为融资 / 借券利息；只影响账户现金，不计入任何战役。</p>}
             {cashKind && <p className="text-xs leading-relaxed text-muted-foreground">入金 / 出金是账户级资金流，不计入任何战役收益。补录历史账本时，先记录一笔期初入金，金额为开始记账时的账户现金。</p>}
             {form.kind === 'option_expire' && <p className="text-xs leading-relaxed text-muted-foreground">确认合约已到期作废后录入；被指派的合约请使用“指派 / 行权”。</p>}
 
@@ -384,6 +505,7 @@ export function EntryForm({ initial, eventId, onCancel, positions, campaigns, in
               </div>
             </div>
           </form>
+          )}
         </CardPanel>
       </Card>
     </section>

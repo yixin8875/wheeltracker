@@ -270,9 +270,15 @@ async function setup(page: Page) {
   });
   await page.goto('/'); await expect(page.getByRole('heading', { name: 'TEST', exact: true })).toBeVisible();
 }
+async function pickKind(page: Page, kind: string) {
+  const mode = ['shares_buy', 'shares_sell', 'stock_split'].includes(kind) ? '股票'
+    : ['dividend', 'fee', 'interest', 'adjustment', 'cash_deposit', 'cash_withdrawal'].includes(kind) ? '现金' : '期权';
+  await page.getByRole('group', { name: '交易类别' }).getByRole('button', { name: mode, exact: true }).click();
+  await page.getByLabel('交易类型').selectOption(kind);
+}
 async function fillBuy(page: Page) {
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
-  await page.getByLabel('交易类型').selectOption('shares_buy'); await page.getByLabel('标的代码').fill('TEST');
+  await pickKind(page, 'shares_buy'); await page.getByLabel('标的代码').fill('TEST');
   await page.getByLabel('股数', { exact: true }).fill('100'); await page.getByLabel('每股成交价', { exact: true }).fill('150');
 }
 test('portfolio quotes refresh on startup and after five minutes', async ({ page }) => {
@@ -329,7 +335,7 @@ test('offline symbol search preserves common choices and quote failure permits t
   await page.getByRole('option').filter({ hasText: 'AAPL' }).click();
   await expect(page.locator('.quote-reference')).toContainText('quote offline');
   await page.getByRole('button', { name: '保存交易', exact: true }).click();
-  await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
+  await expect(page.locator('.entry-success')).toContainText('交易已保存');
 });
 
 test('market refresh persists quote metadata and partial failure retains successful prices', async ({ page }) => {
@@ -380,7 +386,7 @@ test('market layout fits mobile and quote can prefill only the ticker in entry',
 
 test('successful save cannot submit the same transaction twice', async ({ page }) => {
   await setup(page); await fillBuy(page); await page.getByRole('button', { name: '保存交易', exact: true }).click();
-  await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
+  await expect(page.locator('.entry-success')).toContainText('交易已保存');
   const calls = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'add_event'));
   expect(calls).toHaveLength(1); expect(calls[0].args.req).toMatchObject({ symbol: 'TEST', qty: 100, price: 150, kind: 'shares_buy' });
 });
@@ -415,7 +421,7 @@ test('put and call assignment previews show cash and post-assignment holdings', 
 test('stock split preview shows new shares, costs and adjusted contracts', async ({ page }) => {
   await setup(page);
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
-  await page.getByLabel('交易类型').selectOption('stock_split');
+  await pickKind(page, 'stock_split');
   await page.getByLabel('标的代码').fill('TEST');
   const preview = page.locator('.assignment-preview');
   await expect(preview.getByRole('heading', { name: '拆股预览' })).toBeVisible();
@@ -432,7 +438,7 @@ test('overdue expiry prefills its date and rolling submits two legs', async ({ p
   await expect(page.getByLabel('交易日（美东）')).toHaveValue('2026-02-20'); await page.getByLabel('交易类型').selectOption('option_close');
   await page.getByLabel('每股权利金 / 平仓价').fill('1'); await page.getByLabel('滚动：平仓后同时开出新合约').check();
   await page.getByLabel('新到期日').fill('2026-12-18'); await page.getByLabel('新行权价').fill('145'); await page.getByLabel('新每股权利金').fill('3'); await page.getByLabel('新开仓费用').fill('1.5');
-  await page.getByRole('button', { name: '保存交易', exact: true }).click(); await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '保存交易', exact: true }).click(); await expect(page.locator('.entry-success')).toContainText('交易已保存');
   const calls = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'add_events'));
   expect(calls).toHaveLength(1); expect(calls[0].args.reqs).toMatchObject([{ kind: 'option_close', symbol: 'TEST', price: 1 }, { kind: 'option_open_short', symbol: 'TEST', price: 3, strike: 145, expiry: '2026-12-18', fees: 1.5 }]);
 });
@@ -892,7 +898,7 @@ test('creating and switching an account scopes reads and new entries', async ({ 
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'dashboard').at(-1).args.accountId)).toBe('acct-2');
   expect(await page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
-  await page.getByLabel('交易类型').selectOption('shares_buy');
+  await pickKind(page, 'shares_buy');
   await page.getByLabel('标的代码').fill('OTHER');
   await page.getByLabel('股数', { exact: true }).fill('100');
   await page.getByLabel('每股成交价', { exact: true }).fill('20');
@@ -982,7 +988,7 @@ test('deleting an empty account requires confirmation and keeps accounts with hi
 test('stock split entry submits ratio and cash in lieu without trade fields', async ({ page }) => {
   await setup(page);
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
-  await page.getByLabel('交易类型').selectOption('stock_split');
+  await pickKind(page, 'stock_split');
   await expect(page.getByLabel('比例 · 分子')).toHaveValue('2');
   await expect(page.getByLabel('比例 · 分母')).toHaveValue('1');
   await expect(page.getByLabel('股数', { exact: true })).toHaveCount(0);
@@ -992,7 +998,7 @@ test('stock split entry submits ratio and cash in lieu without trade fields', as
   await page.getByLabel('零股现金补偿（USD，选填）').fill('3.25');
   await expect(page.locator('.entry-preview')).toContainText('2 : 1');
   await page.getByRole('button', { name: '保存交易', exact: true }).click();
-  await expect(page.getByRole('button', { name: '已保存', exact: true })).toBeDisabled();
+  await expect(page.locator('.entry-success')).toContainText('交易已保存');
   const req = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req);
   expect(req).toMatchObject({ kind: 'stock_split', symbol: 'TEST', qty: 0, amount: 0, splitNumerator: 2, splitDenominator: 1, splitCashInLieu: 3.25 });
 });
@@ -1000,7 +1006,7 @@ test('stock split entry submits ratio and cash in lieu without trade fields', as
 test('non-integral split ratio surfaces a readable error and keeps the form', async ({ page }) => {
   await setup(page);
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
-  await page.getByLabel('交易类型').selectOption('stock_split');
+  await pickKind(page, 'stock_split');
   await page.getByLabel('标的代码').fill('TEST');
   await page.getByLabel('比例 · 分子').fill('4');
   await page.getByLabel('比例 · 分母').fill('3');
@@ -1042,12 +1048,12 @@ test('event log can edit an existing record and cancel back to the list', async 
 
   await row.getByRole('button', { name: '修改', exact: true }).click();
   await expect(page.locator('h1')).toHaveText('修改交易');
-  await expect(page.getByLabel('美元金额')).toHaveValue('12.5');
+  await expect(page.getByLabel('费用金额（USD）')).toHaveValue('12.5');
   await page.getByRole('button', { name: '取消修改', exact: true }).click();
   await expect(page.getByRole('heading', { name: '交易事件日志' })).toBeVisible();
 
   await row.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('美元金额').fill('15.75');
+  await page.getByLabel('费用金额（USD）').fill('15.75');
   await page.getByLabel('备注').fill('已修正费用');
   await page.getByRole('button', { name: '保存修改', exact: true }).click();
   await expect(page.locator('.alert.success')).toContainText('交易已修改');
@@ -1193,6 +1199,27 @@ test('account cash panel explains coverage and reconciles against broker cash', 
   expect(req).toMatchObject({ kind: 'cash_deposit', symbol: '', amount: 1500 });
 });
 
+test('interest and account-level fee enter without a symbol', async ({ page }) => {
+  await setup(page);
+  await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
+  await pickKind(page, 'interest');
+  await expect(page.getByLabel('标的代码')).toHaveCount(0);
+  await page.getByLabel('金额（正数 = 利息收入，负数 = 融资利息）').fill('-12.5');
+  await expect(page.locator('.entry-preview')).toContainText('-$12.50');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  await expect(page.locator('.entry-success')).toContainText('交易已保存');
+  const interest = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event').args.req);
+  expect(interest).toMatchObject({ kind: 'interest', symbol: '', amount: -12.5 });
+
+  await page.getByRole('button', { name: '再记一笔' }).click();
+  await pickKind(page, 'fee');
+  await page.getByLabel('费用金额（USD）').fill('7.5');
+  await page.getByRole('button', { name: '保存交易', exact: true }).click();
+  await expect(page.locator('.entry-success')).toContainText('交易已保存');
+  const fees = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'add_event').at(-1).args.req);
+  expect(fees).toMatchObject({ kind: 'fee', symbol: '', amount: 7.5 });
+});
+
 test('expiry centre groups overdue contracts and sends a check notification', async ({ page }) => {
   await setup(page);
   await page.locator('nav').getByRole('button', { name: '到期处理', exact: true }).click();
@@ -1211,6 +1238,21 @@ test('expiry centre groups overdue contracts and sends a check notification', as
   await expect(page.getByLabel('交易类型')).toHaveValue('option_expire');
   await expect(page.getByLabel('到期日')).toHaveValue('2026-02-20');
   await expect(page.getByLabel('手数')).toHaveValue('1');
+});
+
+test('expiry centre batch-settles selected contracts after confirmation', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '到期处理', exact: true }).click();
+  const group = page.locator('.expiry-group').filter({ hasText: '已过期' });
+  await group.getByRole('checkbox', { name: '全选 已过期' }).check();
+  await page.getByRole('button', { name: '批量作废', exact: true }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog.getByRole('heading', { name: '批量标记到期作废？' })).toBeVisible();
+  await expect(dialog).toContainText('TEST 2026-02-20 150P');
+  await dialog.getByRole('button', { name: '确认作废', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'add_events').length)).toBe(1);
+  const reqs = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_events').args.reqs);
+  expect(reqs).toMatchObject([{ kind: 'option_expire', symbol: 'TEST', qty: 1, expiry: '2026-02-20', strike: 150, right: 'P' }]);
 });
 
 test('notification preferences and a test toast can be saved', async ({ page }) => {

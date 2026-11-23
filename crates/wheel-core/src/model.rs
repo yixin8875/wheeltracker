@@ -119,8 +119,12 @@ pub enum EventKind {
     SharesBuy,
     SharesSell,
     Dividend,
+    /// Campaign fee, or account-level fee when the event has no symbol.
     Fee,
     Adjustment,
+    /// Account-level interest income (positive) or margin / financing cost
+    /// (negative). Never attributed to a campaign.
+    Interest,
     Split,
     /// Cash moved into the account from outside the trading ledger.
     CashDeposit,
@@ -357,8 +361,15 @@ impl Event {
             .qty(shares)
     }
 
+    /// A campaign fee (symbol set) or an account-level fee (symbol empty).
     pub fn fee(account_id: &str, id: &str, seq: u64, at: Date, symbol: &str, amount: f64) -> Self {
         Self::new(account_id, id, seq, at, EventKind::Fee, symbol).amount(amount)
+    }
+
+    /// Account-level interest income (`amount > 0`) or financing cost
+    /// (`amount < 0`). It never belongs to a campaign.
+    pub fn interest(account_id: &str, id: &str, seq: u64, at: Date, amount: f64) -> Self {
+        Self::new(account_id, id, seq, at, EventKind::Interest, "").amount(amount)
     }
 
     pub fn adjustment(
@@ -439,6 +450,9 @@ impl fmt::Display for Event {
             }
             EventKind::CashWithdrawal => {
                 write!(f, "{} 出金 {:.2}", self.occurred_at, self.amount)
+            }
+            EventKind::Interest => {
+                write!(f, "{} 利息 {:.2}", self.occurred_at, self.amount)
             }
             other => write!(
                 f,

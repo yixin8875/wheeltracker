@@ -1071,7 +1071,7 @@ fn monthly_income_for(
                     .or_default()
                     .fees += event.amount;
             }
-            EventKind::Adjustment => {
+            EventKind::Adjustment | EventKind::Interest => {
                 buckets
                     .entry(month_key(event.occurred_at))
                     .or_default()
@@ -1246,23 +1246,31 @@ fn annual_report_for(
                 .unwrap_or(event.price * f64::from(event.qty))
         });
         let fee = (event.kind == EventKind::Fee).then_some(event.amount);
-        let adjustment = (event.kind == EventKind::Adjustment).then_some(event.amount);
+        let adjustment = matches!(event.kind, EventKind::Adjustment | EventKind::Interest)
+            .then_some(event.amount);
         if share_pnl.is_none() && dividend.is_none() && fee.is_none() && adjustment.is_none() {
             continue;
         }
         let year = by_year.entry(event.occurred_at.year()).or_default();
         let month = event.occurred_at.month() as u32;
+        // Account-level fees and interest have no symbol; keep them visible
+        // instead of producing an empty attribution row.
+        let symbol = if event.symbol.trim().is_empty() {
+            "账户级"
+        } else {
+            event.symbol.as_str()
+        };
         if let Some(amount) = share_pnl {
-            annual_add(year, month, &event.symbol, AnnualLine::SharePnl, amount);
+            annual_add(year, month, symbol, AnnualLine::SharePnl, amount);
         }
         if let Some(amount) = dividend {
-            annual_add(year, month, &event.symbol, AnnualLine::Dividends, amount);
+            annual_add(year, month, symbol, AnnualLine::Dividends, amount);
         }
         if let Some(amount) = fee {
-            annual_add(year, month, &event.symbol, AnnualLine::Fees, amount);
+            annual_add(year, month, symbol, AnnualLine::Fees, amount);
         }
         if let Some(amount) = adjustment {
-            annual_add(year, month, &event.symbol, AnnualLine::Adjustments, amount);
+            annual_add(year, month, symbol, AnnualLine::Adjustments, amount);
         }
     }
 

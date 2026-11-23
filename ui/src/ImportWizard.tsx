@@ -79,7 +79,7 @@ const FIELDS: { id: ImportField; label: string }[] = [
   { id: 'note', label: '备注' }
 ];
 
-const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'adjustment', 'cash_deposit', 'cash_withdrawal'];
+const KINDS = ['option_open_short', 'option_close', 'option_expire', 'option_assign', 'shares_buy', 'shares_sell', 'dividend', 'fee', 'interest', 'adjustment', 'cash_deposit', 'cash_withdrawal'];
 const OPTION_KINDS = new Set(['option_open_short', 'option_close', 'option_expire', 'option_assign']);
 const CASH_KINDS = new Set(['cash_deposit', 'cash_withdrawal']);
 
@@ -331,11 +331,11 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
       patch.right = null;
       patch.multiplier = 100;
     }
-    if (kind === 'fee' || kind === 'adjustment') {
+    if (kind === 'fee' || kind === 'adjustment' || kind === 'interest') {
       patch.qty = 0;
       patch.price = 0;
     }
-    if (CASH_KINDS.has(kind)) {
+    if (CASH_KINDS.has(kind) || kind === 'interest') {
       patch.symbol = '';
       patch.qty = 0;
       patch.price = 0;

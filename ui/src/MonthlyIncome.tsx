@@ -87,7 +87,7 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
 
   function exportRows() {
     downloadCsv(`wheel-income-${year === 'all' ? 'all' : year}.csv`, [
-      ['月份', '净收租', '分红', '独立费用', '现金调整', '合计', '区间累计', '了结合约'],
+      ['月份', '净收租', '分红', '费用（含账户级）', '调整 / 利息', '合计', '区间累计', '了结合约'],
       ...[...chartRows].reverse().map(row => {
         const month = rows.find(item => item.month === row.month)!;
         return [row.month, month.premium, month.dividends, month.fees, month.adjustments, month.total, row.cumulative, month.closedEntries];
@@ -131,8 +131,8 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
                     <TableHead>月份</TableHead>
                     <TableHead className="text-right">净收租</TableHead>
                     <TableHead className="text-right">分红</TableHead>
-                    <TableHead className="text-right">独立费用</TableHead>
-                    <TableHead className="text-right">现金调整</TableHead>
+                    <TableHead className="text-right">费用（含账户级）</TableHead>
+                    <TableHead className="text-right">调整 / 利息</TableHead>
                     <TableHead className="text-right">合计</TableHead>
                     <TableHead className="text-right">区间累计</TableHead>
                     <TableHead className="text-right">了结合约</TableHead>
@@ -171,7 +171,7 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
             </div>
           </>
         )}
-        <p className="footnote text-xs leading-relaxed text-muted-foreground">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账。累计为所选年份区间内的累计。入金 / 出金是账户资金划转，不属于收益，不计入本表。</p>
+        <p className="footnote text-xs leading-relaxed text-muted-foreground">净收租只统计已了结的期权行，已扣开仓与平仓费用；未平仓权利金与股票浮盈亏不计入。分红按派发日、费用与现金调整按事件日记账，分红已扣预扣税。账户级费用与利息不计入战役，只影响账户现金；“调整 / 利息”含现金调整、利息收入与融资利息。累计为所选年份区间内的累计。入金 / 出金是账户资金划转，不属于收益，不计入本表。</p>
       </CardPanel>
     </Card>
   );

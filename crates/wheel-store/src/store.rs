@@ -16,7 +16,7 @@ use wheel_core::{
 
 /// Bumped when the persisted event schema changes. A database written by a
 /// newer build is refused rather than silently read with missing columns.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
@@ -891,10 +891,12 @@ pub fn replay_checked(
 
 pub fn validate_event(event: &Event) -> Result<()> {
     let cash_transfer = event.kind.is_cash_transfer();
+    let account_fee = matches!(event.kind, EventKind::Fee) && event.symbol.trim().is_empty();
+    let account_level = cash_transfer || account_fee || matches!(event.kind, EventKind::Interest);
     if event.id.trim().is_empty() || event.account_id.trim().is_empty() {
         bail!("事件编号和账户不能为空");
     }
-    if !cash_transfer && event.symbol.trim().is_empty() {
+    if !account_level && event.symbol.trim().is_empty() {
         bail!("标的代码不能为空");
     }
     if event.seq == 0 || event.seq > i64::MAX as u64 {
@@ -922,6 +924,37 @@ pub fn validate_event(event: &Event) -> Result<()> {
         }
         if event.amount <= 0.0 {
             bail!("入金 / 出金金额必须大于 0");
+        }
+        return Ok(());
+    }
+    if matches!(event.kind, EventKind::Interest) {
+        if !event.symbol.trim().is_empty() {
+            bail!("利息是账户级交易，不能填写标的");
+        }
+        if event.contract.is_some()
+            || event.qty != 0
+            || event.price != 0.0
+            || event.fees != 0.0
+            || event.split.is_some()
+        {
+            bail!("利息不能携带合约、数量、价格、费用或拆股信息");
+        }
+        if event.amount == 0.0 {
+            bail!("利息金额不能为 0");
+        }
+        return Ok(());
+    }
+    if matches!(event.kind, EventKind::Fee) {
+        if event.contract.is_some()
+            || event.qty != 0
+            || event.price != 0.0
+            || event.fees != 0.0
+            || event.split.is_some()
+        {
+            bail!("费用不能携带合约、数量、价格或拆股信息");
+        }
+        if event.amount < 0.0 {
+            bail!("费用金额不能为负数");
         }
         return Ok(());
     }
@@ -954,11 +987,8 @@ pub fn validate_event(event: &Event) -> Result<()> {
     if event.split.is_some() {
         bail!("只有拆股事件可以携带拆股比例");
     }
-    if !matches!(event.kind, EventKind::Fee | EventKind::Adjustment) && event.qty == 0 {
+    if !matches!(event.kind, EventKind::Adjustment) && event.qty == 0 {
         bail!("交易数量必须大于 0");
-    }
-    if matches!(event.kind, EventKind::Fee) && event.amount < 0.0 {
-        bail!("费用金额不能为负数");
     }
     if matches!(event.kind, EventKind::SharesBuy | EventKind::SharesSell) && event.price <= 0.0 {
         bail!("股票成交价必须大于 0");
@@ -1121,6 +1151,7 @@ pub fn kind_to_str(kind: EventKind) -> &'static str {
         EventKind::Dividend => "dividend",
         EventKind::Fee => "fee",
         EventKind::Adjustment => "adjustment",
+        EventKind::Interest => "interest",
         EventKind::Split => "stock_split",
         EventKind::CashDeposit => "cash_deposit",
         EventKind::CashWithdrawal => "cash_withdrawal",
@@ -1138,6 +1169,7 @@ fn parse_kind(value: &str) -> Result<EventKind> {
         "dividend" => Ok(EventKind::Dividend),
         "fee" => Ok(EventKind::Fee),
         "adjustment" => Ok(EventKind::Adjustment),
+        "interest" => Ok(EventKind::Interest),
         "stock_split" => Ok(EventKind::Split),
         "cash_deposit" => Ok(EventKind::CashDeposit),
         "cash_withdrawal" => Ok(EventKind::CashWithdrawal),
@@ -1900,5 +1932,48 @@ mod tests {
         assert_eq!(state.cash_deposits, 5_000.0);
         assert_eq!(state.cash_withdrawals, 1_250.5);
         assert!(state.campaigns.is_empty());
+    }
+
+    #[test]
+    fn interest_and_account_level_fees_round_trip_as_account_rows() {
+        let conn = db();
+        insert_events(
+            &conn,
+            &[
+                Event::buy_shares("main", "buy", 1, at(), "AAPL", 10, 100.0, 0.0),
+                Event::fee("main", "af", 2, at(), "", 9.99),
+                Event::interest("main", "int", 3, at(), 12.5),
+                Event::interest("main", "margin", 4, at(), -3.25),
+                Event::dividend("main", "div", 5, at(), "AAPL", 1.0, 10).fees(1.5),
+            ],
+        )
+        .unwrap();
+        let events = list_events(&conn, "main").unwrap();
+        assert_eq!(kind_to_str(events[1].kind), "fee");
+        assert_eq!(events[1].symbol, "");
+        assert_eq!(kind_to_str(events[2].kind), "interest");
+        assert_eq!(events[2].amount, 12.5);
+        assert_eq!(events[4].fees, 1.5);
+        assert_eq!(parse_kind("interest").unwrap(), EventKind::Interest);
+
+        let mut bad = events[2].clone();
+        bad.symbol = "AAPL".into();
+        assert!(validate_event(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("标的"));
+        bad = events[2].clone();
+        bad.amount = 0.0;
+        assert!(validate_event(&bad).is_err());
+        bad = events[2].clone();
+        bad.qty = 1;
+        assert!(validate_event(&bad).is_err());
+        let mut bad_fee = events[1].clone();
+        bad_fee.amount = -1.0;
+        assert!(validate_event(&bad_fee).is_err());
+
+        let state = wheel_core::replay("main", &events, Settings::default()).unwrap();
+        assert!((state.account_cash_adjustments - (12.5 - 3.25 - 9.99)).abs() < 1e-9);
+        assert!(state.check_invariants().is_empty());
     }
 }

@@ -39,6 +39,7 @@ const SHARE_ACTIONS: { kind: EntryKind; label: string }[] = [
 const OTHER_ACTIONS: { kind: EntryKind; label: string }[] = [
   { kind: 'dividend', label: '分红' },
   { kind: 'fee', label: '费用' },
+  { kind: 'interest', label: '利息' },
   { kind: 'adjustment', label: '调整' },
   { kind: 'cash_deposit', label: '入金' },
   { kind: 'cash_withdrawal', label: '出金' },
@@ -145,7 +146,7 @@ export default function EntrySheet({
 
   const option = isOption(kind)
   const cash = isCash(kind)
-  const amountOnly = kind === 'fee' || kind === 'adjustment'
+  const amountOnly = kind === 'fee' || kind === 'interest' || kind === 'adjustment'
   const shares = kind === 'shares_buy' || kind === 'shares_sell'
 
   const preview = useMemo(() => {

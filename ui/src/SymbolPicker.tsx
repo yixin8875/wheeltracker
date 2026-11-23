@@ -14,8 +14,8 @@ const common: SymbolMatch[] = [
   ['COST', 'Costco 好市多'], ['AVGO', 'Broadcom 博通'], ['PLTR', 'Palantir'],
 ].map(([symbol, name]) => ({ symbol, name, exchange: '美股' }));
 
-export function SymbolPicker({ value, onChange, label = '标的代码', autoFocus = false }: {
-  value: string; onChange: (symbol: string) => void; label?: string; autoFocus?: boolean;
+export function SymbolPicker({ value, onChange, label = '标的代码', autoFocus = false, required = true }: {
+  value: string; onChange: (symbol: string) => void; label?: string; autoFocus?: boolean; required?: boolean;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -58,7 +58,7 @@ export function SymbolPicker({ value, onChange, label = '标的代码', autoFocu
           aria-controls={`${id}-list`}
           aria-activedescendant={open && active >= 0 && results[active] ? `${id}-${active}` : undefined}
           autoFocus={autoFocus}
-          required
+          required={required}
           maxLength={80}
           pattern="[A-Za-z][A-Za-z0-9.\-]{0,19}"
           title="请选择搜索结果，或填写完整美股代码"

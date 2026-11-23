@@ -27,7 +27,7 @@ import { api, chainStatusLabel, chainTime, desktop, labels, money, percent, pnlL
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
 import { EventLog } from './EventLog';
-import { EntryForm } from './EntryForm';
+import { EntryForm, type NextLeg } from './EntryForm';
 import { AccountingPreferences, CampaignTimeline, CallAssignmentScenarios } from './CampaignInsights';
 import type { AccountingSettings } from './types';
 import { ImportWizard } from './ImportWizard';
@@ -99,6 +99,8 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [scanCampaign, setScanCampaign] = useState<string | null>(null);
   const [initial, setInitial] = useState<Partial<NewEvent>>();
+  const [initialRoll, setInitialRoll] = useState(false);
+  const [initialNext, setInitialNext] = useState<Partial<NextLeg>>();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [entryKey, setEntryKey] = useState(0);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
@@ -179,7 +181,9 @@ export default function App() {
     api<Detail>('campaign_detail', { campaignId: selected, accountId }).then(result => { if (current === detailGeneration.current) setDetail(result); }).catch(failure => { if (current === detailGeneration.current) setError(String(failure)); });
     return () => { detailGeneration.current++; };
   }, [selected, data, accountId]);
-  const startEntry = useCallback((prefill?: Partial<NewEvent>) => { setEditingId(null); setInitial(prefill); setEntryKey(key => key + 1); setPage('entry'); }, []);
+  const startEntry = useCallback((prefill?: Partial<NewEvent>, options?: { roll?: boolean; next?: Partial<NextLeg> }) => {
+    setEditingId(null); setInitial(prefill); setInitialRoll(Boolean(options?.roll)); setInitialNext(options?.next); setEntryKey(key => key + 1); setPage('entry');
+  }, []);
   function editEvent(event: EventRow) {
     setEditingId(event.id);
     setInitial({
@@ -454,13 +458,13 @@ export default function App() {
                 <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
               )}
               {page === 'entry' && (
-                <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} />
+                <EntryForm key={entryKey} initial={initial} initialRoll={initialRoll} initialNext={initialNext} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} onDone={target => { setPage(target); if (target === 'ledger') setLedgerTab('events'); }} />
               )}
               {page === 'import' && (
                 <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }} />
               )}
               {page === 'expiry' && !unavailable && (
-                <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} onEntry={initial => startEntry(initial)} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')} />
+                <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} accountId={accountId} onEntry={initial => startEntry(initial)} onSettled={saved} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')} />
               )}
               {page === 'calendar' && !unavailable && (
                 <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign} />
@@ -594,6 +598,9 @@ export default function App() {
                                       {labels[kind]}
                                     </Button>
                                   ))}
+                                  <Button variant="outline" size="xs" onClick={() => startEntry({ kind: 'option_close', date: today(), symbol: position.symbol, qty: position.openQty, expiry: position.expiry, strike: position.strike, right: position.right, multiplier: position.multiplier }, { roll: true })}>
+                                    滚动
+                                  </Button>
                                 </div>
                               </TableCell>
                             </TableRow>

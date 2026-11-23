@@ -75,7 +75,7 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
     if (!current) return;
     downloadCsv(`wheel-annual-${current.year}.csv`, [
       ['年度报表', current.year, '已实现口径'],
-      ['月份', '净收租', '股票已实现盈亏', '分红', '独立费用', '现金调整', '合计', '年度累计', '了结合约', '股票事件'],
+      ['月份', '净收租', '股票已实现盈亏', '分红', '费用（含账户级）', '调整 / 利息', '合计', '年度累计', '了结合约', '股票事件'],
       ...[...current.months].reverse().map(month => [
         month.month, month.premium, month.sharePnl, month.dividends, month.fees,
         month.adjustments, month.total, month.cumulative, month.closedEntries, month.shareEvents,
@@ -83,7 +83,7 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
       ['年度合计', current.total.premium, current.total.sharePnl, current.total.dividends, current.total.fees,
         current.total.adjustments, current.total.total, '', current.total.closedEntries, current.total.shareEvents],
       ['标的归因'],
-      ['标的', '净收租', '股票已实现盈亏', '分红', '独立费用', '现金调整', '合计'],
+      ['标的', '净收租', '股票已实现盈亏', '分红', '费用（含账户级）', '调整 / 利息', '合计'],
       ...current.symbols.map(symbol => [symbol.symbol, symbol.premium, symbol.sharePnl, symbol.dividends, symbol.fees, symbol.adjustments, symbol.total]),
     ]);
   }
@@ -114,8 +114,8 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
               <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">净收租</span><strong className="num text-xl font-semibold">{money(current.total.premium)}</strong><small className="text-xs text-muted-foreground">按平仓日计入</small></div>
               <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">股票已实现盈亏</span><strong className="num text-xl font-semibold">{money(current.total.sharePnl)}</strong><small className="text-xs text-muted-foreground">卖出、Call 指派、零股补偿</small></div>
               <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">分红</span><strong className="num text-xl font-semibold">{money(current.total.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">独立费用</span><strong className="num text-xl font-semibold">{money(current.total.fees)}</strong><small className="text-xs text-muted-foreground">已从合计扣除</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">现金调整</span><strong className="num text-xl font-semibold">{money(current.total.adjustments)}</strong><small className="text-xs text-muted-foreground">计入合计</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">费用（含账户级）</span><strong className="num text-xl font-semibold">{money(current.total.fees)}</strong><small className="text-xs text-muted-foreground">已从合计扣除</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">调整 / 利息</span><strong className="num text-xl font-semibold">{money(current.total.adjustments)}</strong><small className="text-xs text-muted-foreground">计入合计</small></div>
             </div>
             <div ref={element} className="income-chart chart-surface" role="img" aria-label="年度已实现收益图：柱形为月度合计，折线为年度累计" />
             <div className="space-y-2">
@@ -128,8 +128,8 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
                       <TableHead className="text-right">净收租</TableHead>
                       <TableHead className="text-right">股票已实现盈亏</TableHead>
                       <TableHead className="text-right">分红</TableHead>
-                      <TableHead className="text-right">独立费用</TableHead>
-                      <TableHead className="text-right">现金调整</TableHead>
+                      <TableHead className="text-right">费用（含账户级）</TableHead>
+                      <TableHead className="text-right">调整 / 利息</TableHead>
                       <TableHead className="text-right">合计</TableHead>
                       <TableHead className="text-right">年度累计</TableHead>
                       <TableHead className="text-right">了结合约</TableHead>
@@ -179,8 +179,8 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
                       <TableHead className="text-right">净收租</TableHead>
                       <TableHead className="text-right">股票已实现盈亏</TableHead>
                       <TableHead className="text-right">分红</TableHead>
-                      <TableHead className="text-right">独立费用</TableHead>
-                      <TableHead className="text-right">现金调整</TableHead>
+                      <TableHead className="text-right">费用（含账户级）</TableHead>
+                      <TableHead className="text-right">调整 / 利息</TableHead>
                       <TableHead className="text-right">合计</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -202,7 +202,7 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
             </div>
           </>
         )}
-        <p className="footnote text-xs leading-relaxed text-muted-foreground">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入。不含未平仓权利金与股票浮盈亏；入金 / 出金是账户资金划转，不属于收益，不计入本表；本表也不是税务申报表。</p>
+        <p className="footnote text-xs leading-relaxed text-muted-foreground">已实现口径：期权净收租按平仓日计入，股票已实现盈亏按卖出 / Call 指派 / 拆股零股补偿日计入，分红、费用与现金调整按事件日计入，分红已扣预扣税。账户级费用与利息不计入战役，只影响账户现金；“调整 / 利息”含现金调整、利息收入与融资利息。不含未平仓权利金与股票浮盈亏；入金 / 出金是账户资金划转，不属于收益，不计入本表；本表也不是税务申报表。</p>
       </CardPanel>
     </Card>
   );
