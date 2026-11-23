@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect } from '@/components/native-select';
 import type {
   Campaign, ChainImportPreview, ChainStatus, ChainSync, NewEvent, Position, ScanCandidate,
-  ScanFlag, ScanOutcome, ScanPreset, ScanSettings,
+  ScanFilters, ScanFlag, ScanOutcome, ScanPreset, ScanSettings,
 } from './types';
 import { api, money, percent, today } from './lib';
 
@@ -21,6 +21,7 @@ type Props = {
   campaigns: Campaign[];
   positions: Position[];
   initialCampaignId: string | null;
+  cashTracked: boolean;
   onEntry: (prefill: Partial<NewEvent>) => void;
 };
 
@@ -37,6 +38,12 @@ const defaultSettings: ScanSettings = {
   feePerContract: 0.65, priceSource: 'bid', liquidityFilter: true, minOpenInterest: 100,
   maxSpreadPct: 0.10, riskFreeRate: 0.04, dividendYield: 0, putMaxStrikeRatio: 0.98,
   preset: 'balanced', projectionLimit: 40,
+};
+
+const emptyFilters: ScanFilters = {
+  totalQuotes: 0, invalidQuotes: 0, outsideDte: 0, callsDisabled: 0, putsDisabled: 0,
+  missingPrice: 0, illiquid: 0, outsideDelta: 0, belowCost: 0, putStrikeTooHigh: 0,
+  noQuantity: 0, noPremium: 0,
 };
 
 const kindLabels: Record<string, string> = { covered_call: '备兑 Call', cash_secured_put: '卖出 Put' };
@@ -66,7 +73,7 @@ function Field({ label, className, children }: { label: string; className?: stri
   );
 }
 
-export function CostReduction({ accountId, campaigns, positions, initialCampaignId, onEntry }: Props) {
+export function CostReduction({ accountId, campaigns, positions, initialCampaignId, cashTracked, onEntry }: Props) {
   const holdings = useMemo(
     () => campaigns.filter(campaign => campaign.shares > 0),
     [campaigns],
@@ -266,6 +273,11 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
             </div>
           )}
           {campaign && <p className="text-xs text-muted-foreground">链：{chainMissing ? '尚无快照' : `${chain.source || 'manual'} · ${chain.quoteCount} 条 · ${freshnessLabel[chain.status]} · ${chain.fetchedAt}`}</p>}
+          {campaign && freeShares === 0 && (
+            <Alert variant="warning" role="status" className="alert warning">
+              {campaign.shares} 股已全部被未平仓 Call 覆盖，可用股数为 0，无法再卖出备兑 Call。先了结现有 Call，或换一个持股战役。
+            </Alert>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" disabled={!campaign || chainBusy} onClick={() => void fetchChain()}>
               {chainBusy ? <Spinner className="size-4" /> : <RefreshCwIcon />}
@@ -326,6 +338,8 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
             <Field label="Δ 最小"><Input type="number" step={0.05} min={0} max={1} value={settings.deltaMin} onChange={event => setSettings(current => ({ ...current, deltaMin: Number(event.target.value) || 0 }))} /></Field>
             <Field label="Δ 最大"><Input type="number" step={0.05} min={0} max={1} value={settings.deltaMax} onChange={event => setSettings(current => ({ ...current, deltaMax: Number(event.target.value) || 0 }))} /></Field>
             <Field label="每手手续费"><Input type="number" step={0.01} min={0} value={settings.feePerContract} onChange={event => setSettings(current => ({ ...current, feePerContract: Number(event.target.value) || 0 }))} /></Field>
+            <Field label="最小未平仓量"><Input type="number" min={0} step={50} value={settings.minOpenInterest} onChange={event => setSettings(current => ({ ...current, minOpenInterest: Math.max(0, Number(event.target.value) || 0) }))} /></Field>
+            <Field label="最大价差（%）"><Input type="number" min={0} max={100} step={1} value={Math.round(settings.maxSpreadPct * 1000) / 10} onChange={event => setSettings(current => ({ ...current, maxSpreadPct: Math.max(0, Number(event.target.value) || 0) / 100 }))} /></Field>
             <Field label="权利金口径">
               <NativeSelect value={settings.priceSource} onChange={event => setSettings(current => ({ ...current, priceSource: event.target.value === 'mark' ? 'mark' : 'bid' }))}>
                 <option value="bid">买价（保守）</option>
@@ -338,10 +352,11 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
               <input type="checkbox" className="mt-0.5 size-3.5 rounded border-input accent-primary" checked={settings.allowLockedLoss} onChange={event => setSettings(current => ({ ...current, allowLockedLoss: event.target.checked }))} />
               接受行权价低于成本的 Call（锁定亏损）
             </label>
-            <label className="check flex items-start gap-2 text-sm">
-              <input type="checkbox" className="mt-0.5 size-3.5 rounded border-input accent-primary" checked={settings.allowPuts} onChange={event => setSettings(current => ({ ...current, allowPuts: event.target.checked }))} />
+            <label className={`check flex items-start gap-2 text-sm ${cashTracked ? '' : 'opacity-60'}`}>
+              <input type="checkbox" className="mt-0.5 size-3.5 rounded border-input accent-primary" disabled={!cashTracked} checked={settings.allowPuts} onChange={event => setSettings(current => ({ ...current, allowPuts: event.target.checked }))} />
               允许卖出 Put
             </label>
+            {!cashTracked && <p className="pl-5 text-xs leading-relaxed text-muted-foreground">该账户没有记录入金 / 出金，卖出 Put 无法计算资金与手数；先在仪表盘记录现金流水。</p>}
             <label className="check flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-0.5 size-3.5 rounded border-input accent-primary" checked={settings.liquidityFilter} onChange={event => setSettings(current => ({ ...current, liquidityFilter: event.target.checked }))} />
               流动性过滤（OI ≥ {settings.minOpenInterest}，价差 ≤ {percent(settings.maxSpreadPct)}）
@@ -361,11 +376,11 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">方案 <Badge variant="secondary" size="sm">{outcome.candidates.length}</Badge></CardTitle>
-            <CardDescription>窗口内 {outcome.scannedQuotes} 条报价 · 投影失败 {outcome.dropped} 个</CardDescription>
+            <CardDescription>链上 {outcome.filters?.totalQuotes ?? 0} 条 · 窗口内 {outcome.scannedQuotes} 条 · 投影失败 {outcome.dropped} 个</CardDescription>
           </CardHeader>
           <CardPanel className="space-y-3">
             {outcome.chainStale && <p className="text-xs text-muted-foreground">每行均带「链已过期」标签。</p>}
-            {!outcome.candidates.length && <p className="text-sm text-muted-foreground">当前筛选下没有候选。可放宽容差、接受锁定亏损，或导入更完整的期权链。</p>}
+            {!outcome.candidates.length && <ScanEmptyState outcome={outcome} settings={settings} />}
             {!!outcome.candidates.length && (
               <div className="overflow-hidden rounded-xl border">
                 <Table>
@@ -434,6 +449,45 @@ export function CostReduction({ accountId, campaigns, positions, initialCampaign
           </CardPanel>
         </Card>
       )}
+    </div>
+  );
+}
+
+function ScanEmptyState({ outcome, settings }: { outcome: ScanOutcome; settings: ScanSettings }) {
+  const filters = outcome.filters ?? emptyFilters;
+  const reasons: string[] = [];
+  if (outcome.campaign.freeShares === 0 && settings.preset !== 'add_position') {
+    reasons.push(`可用股数 0：${outcome.campaign.coveredShares} 股已被未平仓 Call 覆盖，无法再卖出备兑 Call。先了结现有 Call，或换一个持股战役。`);
+  }
+  if (filters.outsideDte) reasons.push(`${filters.outsideDte} 条报价不在 ${settings.dteMin}–${settings.dteMax} 天到期窗口内，可放宽到期范围。`);
+  if (filters.callsDisabled) reasons.push(`${filters.callsDisabled} 条 Call 因当前预设只卖 Put 而跳过。`);
+  if (filters.putsDisabled) {
+    reasons.push(outcome.campaign.cashTracked
+      ? `${filters.putsDisabled} 条 Put 因未开启「允许卖出 Put」而跳过。`
+      : `${filters.putsDisabled} 条 Put 被跳过：该账户没有记录入金 / 出金，卖出 Put 无法计算资金与手数。`);
+  } else if (!outcome.campaign.cashTracked && settings.allowPuts) {
+    reasons.push('该账户没有记录入金 / 出金，卖出 Put 无法计算资金与手数。');
+  }
+  if (filters.missingPrice) reasons.push(`${filters.missingPrice} 条报价缺少可用的买价 / 中间价。`);
+  if (filters.illiquid) reasons.push(`${filters.illiquid} 条报价未通过流动性过滤（OI ≥ ${settings.minOpenInterest}，价差 ≤ ${percent(settings.maxSpreadPct)}）；可取消勾选或放宽阈值。`);
+  if (filters.outsideDelta) reasons.push(`${filters.outsideDelta} 条报价的 |Δ| 不在 ${settings.deltaMin}–${settings.deltaMax}。`);
+  if (filters.belowCost) reasons.push(`${filters.belowCost} 条 Call 行权价低于成本 B；勾选「接受行权价低于成本的 Call」可查看这些方案。`);
+  if (filters.putStrikeTooHigh) reasons.push(`${filters.putStrikeTooHigh} 条 Put 行权价高于现价的 ${percent(settings.putMaxStrikeRatio)}。`);
+  if (filters.noQuantity) reasons.push(`${filters.noQuantity} 条报价可交易但手数为 0：可用股数或现金不足。`);
+  if (filters.noPremium) reasons.push(`${filters.noPremium} 条报价扣除手续费后没有正的净权利金。`);
+  if (filters.invalidQuotes) reasons.push(`${filters.invalidQuotes} 条报价缺少有效的行权价或乘数。`);
+
+  return (
+    <div className="scan-empty-reasons space-y-2">
+      <p className="text-sm text-muted-foreground">当前筛选下没有候选。主要原因：</p>
+      {reasons.length ? (
+        <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted-foreground">
+          {reasons.map(reason => <li key={reason}>{reason}</li>)}
+        </ul>
+      ) : (
+        <p className="text-xs leading-relaxed text-muted-foreground">可放宽容差、接受锁定亏损，或导入更完整的期权链。</p>
+      )}
+      {outcome.dropped > 0 && <p className="text-xs leading-relaxed text-muted-foreground">另有 {outcome.dropped} 个候选在账本投影时失败，已从结果中移除。</p>}
     </div>
   );
 }

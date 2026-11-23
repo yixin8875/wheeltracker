@@ -299,6 +299,26 @@ pub struct Candidate {
     pub flags: Vec<Flag>,
 }
 
+/// Why quotes were skipped, in the order the scanner applies its filters. The
+/// desktop UI shows these counts when a scan returns nothing, so an empty
+/// result is explainable instead of looking like a broken chain.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanFilters {
+    pub total_quotes: usize,
+    pub invalid_quotes: usize,
+    pub outside_dte: usize,
+    pub calls_disabled: usize,
+    pub puts_disabled: usize,
+    pub missing_price: usize,
+    pub illiquid: usize,
+    pub outside_delta: usize,
+    pub below_cost: usize,
+    pub put_strike_too_high: usize,
+    pub no_quantity: usize,
+    pub no_premium: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanOutcome {
@@ -308,6 +328,7 @@ pub struct ScanOutcome {
     pub scanned_quotes: usize,
     /// Candidates dropped because a hypothetical replay failed.
     pub dropped: usize,
+    pub filters: ScanFilters,
     pub candidates: Vec<Candidate>,
 }
 
@@ -342,7 +363,13 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
 
     let context = Context {
         symbol: &campaign.symbol,
-        base_seq: input.events.iter().map(|event| event.seq).max().unwrap_or(0) + 1,
+        base_seq: input
+            .events
+            .iter()
+            .map(|event| event.seq)
+            .max()
+            .unwrap_or(0)
+            + 1,
         shares: campaign.shares,
         cost_total: campaign.cost_total,
         cost_b,
@@ -353,28 +380,38 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
 
     let mut provisional = Vec::new();
     let mut scanned_quotes = 0usize;
+    let mut filters = ScanFilters {
+        total_quotes: input.quotes.len(),
+        ..ScanFilters::default()
+    };
     for quote in &input.quotes {
         if !quote.strike.is_finite() || quote.strike <= 0.0 || quote.multiplier == 0 {
+            filters.invalid_quotes += 1;
             continue;
         }
         let dte = (quote.expiry - input.today).whole_days();
         if dte < settings.dte_min || dte > settings.dte_max {
+            filters.outside_dte += 1;
             continue;
         }
         let is_call = quote.right == Right::Call;
         if is_call && !allow_calls {
+            filters.calls_disabled += 1;
             continue;
         }
         if !is_call && !allow_puts {
+            filters.puts_disabled += 1;
             continue;
         }
         scanned_quotes += 1;
 
         let Some(per_share) = pick_price(quote, settings.price_source) else {
+            filters.missing_price += 1;
             continue;
         };
         let liquid_quote = liquid(quote, &settings);
         if settings.liquidity_filter && !liquid_quote {
+            filters.illiquid += 1;
             continue;
         }
 
@@ -407,6 +444,7 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
             .map(f64::abs)
             .unwrap_or_else(|| otm_distance(input.price, quote.strike, quote.right));
         if filter_delta < settings.delta_min || filter_delta > settings.delta_max {
+            filters.outside_delta += 1;
             continue;
         }
         let prob_itm = vol.and_then(|vol| {
@@ -424,25 +462,35 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
         if is_call {
             if let (Some(basis), false) = (cost_b, allow_locked) {
                 if quote.strike + 1e-9 < basis {
+                    filters.below_cost += 1;
                     continue;
                 }
             }
         } else if quote.strike > input.price * settings.put_max_strike_ratio + 1e-9 {
+            filters.put_strike_too_high += 1;
             continue;
         }
 
         let qty = if is_call {
             free_shares / quote.multiplier
         } else {
-            put_quantity(input, &settings, campaign.shares, quote.strike, quote.multiplier)
+            put_quantity(
+                input,
+                &settings,
+                campaign.shares,
+                quote.strike,
+                quote.multiplier,
+            )
         };
         if qty == 0 {
+            filters.no_quantity += 1;
             continue;
         }
 
         let fees = settings.fee_per_contract * f64::from(qty);
         let premium_total = per_share * f64::from(quote.multiplier) * f64::from(qty) - fees;
         if !(premium_total.is_finite() && premium_total > 0.0) {
+            filters.no_premium += 1;
             continue;
         }
 
@@ -453,11 +501,9 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
             0.0
         };
 
-        let cost_after_expire = (campaign.cost_total
-            - campaign.premium_realized
-            - premium_total
-            - dividends_in_cost)
-            / f64::from(campaign.shares);
+        let cost_after_expire =
+            (campaign.cost_total - campaign.premium_realized - premium_total - dividends_in_cost)
+                / f64::from(campaign.shares);
         let cost_immediate = (campaign.cost_total
             - campaign.premium_realized
             - campaign.premium_open
@@ -564,6 +610,7 @@ pub fn scan(input: &ScanInput) -> Result<ScanOutcome, ScanError> {
         chain_stale: input.chain_stale,
         scanned_quotes,
         dropped,
+        filters,
         candidates,
     })
 }
@@ -844,7 +891,13 @@ mod tests {
         }
     }
 
-    fn input(events: Vec<Event>, cash: f64, cash_tracked: bool, quotes: Vec<ChainQuote>, settings: ScanSettings) -> ScanInput {
+    fn input(
+        events: Vec<Event>,
+        cash: f64,
+        cash_tracked: bool,
+        quotes: Vec<ChainQuote>,
+        settings: ScanSettings,
+    ) -> ScanInput {
         ScanInput {
             account_id: "main".to_string(),
             campaign_id: "main#c0".to_string(),
@@ -962,6 +1015,60 @@ mod tests {
         );
         let outcome = scan(&strict).unwrap();
         assert!(outcome.candidates.is_empty());
+        assert_eq!(outcome.filters.below_cost, 1);
+    }
+
+    #[test]
+    fn scan_reports_filter_counts_for_an_empty_result() {
+        let events = long_events(1000, 200.0, 0.0);
+        let quotes = vec![
+            quote(date!(2027 - 06 - 18), 160.0, Right::Call, 3.20, 3.30, 5_000),
+            quote(EXPIRY, 140.0, Right::Put, 4.00, 4.10, 4_000),
+            quote(EXPIRY, 160.0, Right::Call, 1.00, 2.00, 5_000),
+            quote(EXPIRY, 160.0, Right::Call, 3.20, 3.30, 5_000),
+        ];
+        let outcome = scan(&input(
+            events,
+            0.0,
+            false,
+            quotes,
+            ScanSettings {
+                delta_min: 0.10,
+                delta_max: 0.45,
+                ..ScanSettings::default()
+            },
+        ))
+        .unwrap();
+
+        assert!(outcome.candidates.is_empty());
+        assert_eq!(outcome.filters.total_quotes, 4);
+        assert_eq!(outcome.filters.outside_dte, 1);
+        assert_eq!(outcome.filters.puts_disabled, 1);
+        assert_eq!(outcome.filters.illiquid, 1);
+        assert_eq!(outcome.filters.below_cost, 1);
+    }
+
+    #[test]
+    fn scan_counts_quotes_that_cannot_fill_a_contract() {
+        let events = long_events(1000, 200.0, 0.0);
+        let mut scan_input = input(
+            events,
+            0.0,
+            false,
+            vec![quote(EXPIRY, 160.0, Right::Call, 3.20, 3.30, 5_000)],
+            ScanSettings {
+                allow_locked_loss: true,
+                delta_min: 0.10,
+                delta_max: 0.45,
+                ..ScanSettings::default()
+            },
+        );
+        // Every share is already committed to an open call.
+        scan_input.covered_shares = 1000;
+
+        let outcome = scan(&scan_input).unwrap();
+        assert!(outcome.candidates.is_empty());
+        assert_eq!(outcome.filters.no_quantity, 1);
     }
 
     #[test]

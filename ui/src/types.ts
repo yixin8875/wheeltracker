@@ -36,16 +36,26 @@ export interface HoldingOption {
   accountId: string; accountName: string; campaignId: string; symbol: string; contract: string;
   right: string; strike: number; expiry: string; daysLeft: number; openQty: number;
   multiplier: number; avgCredit: number; collateral: number;
+  mark: number | null; chainStatus: string; chainFetchedAt: string | null;
+  closeCost: number | null; unrealizedPnl: number | null; unrealizedPct: number | null;
+  collateralReturnPct: number | null;
 }
 export interface HoldingsTotals {
   accountCount: number; holdingCount: number; pricedHoldings: number; unpricedHoldings: number;
   totalShares: number; marketValue: number; costBasis: number; unrealizedPnl: number;
   unrealizedPct: number | null; premiumRealized: number; premiumOpen: number;
   optionCount: number; openContracts: number; optionCollateral: number;
+  optionPricedCount: number; optionUnpricedCount: number; optionCloseCost: number;
+  optionUnrealizedPnl: number; optionUnrealizedPct: number | null;
 }
 export interface AllHoldings { asOf: string; holdings: Holding[]; options: HoldingOption[]; totals: HoldingsTotals }
 export interface Entry { id: string; campaignId: string; symbol: string; contract: string; right: string; multiplier: number; qty: number; openQty: number; openedAt: string; closedAt: string | null; status: string; premiumGross: number; fees: number; closeCost: number; netPremium: number; collateral: number; daysHeld: number | null; annualizedReturn: number | null }
-export interface Position extends OptionSummary { campaignId: string; symbol: string; openedAt: string }
+export interface Position extends OptionSummary {
+  campaignId: string; symbol: string; openedAt: string;
+  mark: number | null; chainStatus: string; chainFetchedAt: string | null;
+  closeCost: number | null; unrealizedPnl: number | null; unrealizedPct: number | null;
+  collateralReturnPct: number | null;
+}
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
 export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number; systemNotificationsEnabled: boolean; closeToTray: boolean }
 export interface ExpiryCheckSummary { overdue: number; today: number; critical: number; soon: number; total: number; notified: number }
@@ -89,8 +99,15 @@ export interface ScanCampaign {
   costC: number | null; price: number; unrealizedPnl: number | null; unrealizedPct: number | null;
   premiumRealized: number; coveredShares: number; freeShares: number; cash: number; cashTracked: boolean;
 }
+export interface ScanFilters {
+  totalQuotes: number; invalidQuotes: number; outsideDte: number;
+  callsDisabled: number; putsDisabled: number; missingPrice: number;
+  illiquid: number; outsideDelta: number; belowCost: number;
+  putStrikeTooHigh: number; noQuantity: number; noPremium: number;
+}
 export interface ScanOutcome {
   campaign: ScanCampaign; chainStale: boolean; scannedQuotes: number; dropped: number;
+  filters: ScanFilters;
   candidates: ScanCandidate[];
 }
 export type ChainFreshness = 'fresh' | 'delayed' | 'stale' | 'missing';

@@ -14,7 +14,11 @@ fn date_str(date: Date) -> String {
 }
 
 pub fn summary(derived: &DerivedState) -> SummaryView {
-    let open_contracts = derived.positions.iter().map(|position| position.open_qty).sum();
+    let open_contracts = derived
+        .positions
+        .iter()
+        .map(|position| position.open_qty)
+        .sum();
     // `Sum` for floats folds from -0.0, which would render as "-0" in the UI
     // when no Put is open; normalize the empty/zero total to positive zero.
     let mut collateral: f64 = derived
@@ -37,7 +41,8 @@ pub fn summary(derived: &DerivedState) -> SummaryView {
         .map(|campaign| campaign.shares)
         .sum();
     let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
-    let cash_coverage = (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
+    let cash_coverage =
+        (cash_tracked && collateral > 0.0).then(|| derived.account_cash / collateral);
     let cash_shortfall: f64 = if cash_tracked {
         (collateral - derived.account_cash).max(0.0)
     } else {
@@ -178,6 +183,76 @@ pub struct PositionView {
     pub multiplier: u32,
     pub avg_credit: f64,
     pub opened_at: String,
+    /// Latest stored chain mark per share; `None` when the contract has no
+    /// usable quote. Never recomputed from bid/ask at read time.
+    pub mark: Option<f64>,
+    /// `fresh` / `delayed` / `stale` / `missing`, from the chain snapshot.
+    pub chain_status: String,
+    pub chain_fetched_at: Option<String>,
+    /// Cost to buy the short back at `mark`; not a market value like stocks.
+    pub close_cost: Option<f64>,
+    pub unrealized_pnl: Option<f64>,
+    /// P&L divided by the net credit received, so 100% means the whole
+    /// premium would be kept.
+    pub unrealized_pct: Option<f64>,
+    /// P&L divided by the strike collateral; Put positions only.
+    pub collateral_return_pct: Option<f64>,
+}
+
+/// Valuation of one open short option against its stored chain quote.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OptionValuation {
+    pub mark: Option<f64>,
+    pub close_cost: Option<f64>,
+    pub unrealized_pnl: Option<f64>,
+    pub unrealized_pct: Option<f64>,
+    pub collateral_return_pct: Option<f64>,
+}
+
+/// Only contracts that have not reached expiry are valued. An expired but
+/// unsettled position keeps its last pre-expiry quote in the table, which must
+/// not be mistaken for a live price.
+pub fn option_valuation(
+    position: &OptionPosition,
+    quote: Option<&OptionQuote>,
+    today: Date,
+) -> OptionValuation {
+    if position.contract.expiry < today {
+        return OptionValuation::default();
+    }
+    let Some(mark) = quote.and_then(|quote| quote.mark) else {
+        return OptionValuation::default();
+    };
+    let shares = f64::from(position.contract.multiplier) * f64::from(position.open_qty);
+    let credit = position.avg_credit_per_share * shares;
+    let close_cost = mark * shares;
+    let unrealized_pnl = credit - close_cost;
+    let unrealized_pct = (credit > 0.0).then(|| unrealized_pnl / credit);
+    let collateral = position.contract.strike * shares;
+    let collateral_return_pct = (position.contract.right == Right::Put && collateral > 0.0)
+        .then(|| unrealized_pnl / collateral);
+    OptionValuation {
+        mark: Some(mark),
+        close_cost: Some(close_cost),
+        unrealized_pnl: Some(unrealized_pnl),
+        unrealized_pct,
+        collateral_return_pct,
+    }
+}
+
+pub fn apply_valuation(
+    view: &mut PositionView,
+    valuation: &OptionValuation,
+    chain_status: String,
+    chain_fetched_at: Option<String>,
+) {
+    view.mark = valuation.mark;
+    view.close_cost = valuation.close_cost;
+    view.unrealized_pnl = valuation.unrealized_pnl;
+    view.unrealized_pct = valuation.unrealized_pct;
+    view.collateral_return_pct = valuation.collateral_return_pct;
+    view.chain_status = chain_status;
+    view.chain_fetched_at = chain_fetched_at;
 }
 
 #[derive(Serialize)]
@@ -482,6 +557,13 @@ pub fn position(position: &OptionPosition, today: Date) -> PositionView {
         multiplier: position.contract.multiplier,
         avg_credit: position.avg_credit_per_share,
         opened_at: date_str(position.opened_at),
+        mark: None,
+        chain_status: "missing".to_string(),
+        chain_fetched_at: None,
+        close_cost: None,
+        unrealized_pnl: None,
+        unrealized_pct: None,
+        collateral_return_pct: None,
     }
 }
 
@@ -693,5 +775,136 @@ pub fn chain_import_preview(outcome: ParseOutcome) -> ChainImportPreviewView {
             .collect(),
         valid,
         invalid,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::date;
+    use wheel_core::OptionContract;
+
+    fn position(
+        strike: f64,
+        right: Right,
+        multiplier: u32,
+        qty: u32,
+        credit: f64,
+        expiry: Date,
+    ) -> OptionPosition {
+        let mut contract = OptionContract::new("AAPL", expiry, strike, right);
+        contract.multiplier = multiplier;
+        OptionPosition {
+            campaign_id: "campaign".to_string(),
+            contract,
+            open_qty: qty,
+            avg_credit_per_share: credit,
+            opened_at: date!(2026 - 01 - 02),
+            open_event: "open".to_string(),
+        }
+    }
+
+    fn quote(expiry: Date, strike: f64, right: Right, mark: Option<f64>) -> OptionQuote {
+        OptionQuote {
+            symbol: "AAPL".to_string(),
+            expiry,
+            strike,
+            right,
+            bid: None,
+            ask: None,
+            last: None,
+            mark,
+            iv: None,
+            delta: None,
+            gamma: None,
+            theta: None,
+            vega: None,
+            open_interest: None,
+            volume: None,
+            multiplier: 100,
+        }
+    }
+
+    #[test]
+    fn short_option_profit_and_loss_follow_the_mark() {
+        let today = date!(2026 - 11 - 23);
+        let expiry = date!(2026 - 12 - 18);
+        let put = position(50.0, Right::Put, 100, 2, 2.0, expiry);
+
+        let profit = option_valuation(
+            &put,
+            Some(&quote(expiry, 50.0, Right::Put, Some(0.5))),
+            today,
+        );
+        assert_eq!(profit.mark, Some(0.5));
+        assert_eq!(profit.close_cost, Some(100.0));
+        assert_eq!(profit.unrealized_pnl, Some(300.0));
+        assert!((profit.unrealized_pct.unwrap() - 0.75).abs() < 1e-9);
+        assert!((profit.collateral_return_pct.unwrap() - 0.03).abs() < 1e-9);
+
+        let loss = option_valuation(
+            &put,
+            Some(&quote(expiry, 50.0, Right::Put, Some(3.0))),
+            today,
+        );
+        assert_eq!(loss.unrealized_pnl, Some(-200.0));
+        assert!((loss.unrealized_pct.unwrap() + 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn missing_or_expired_quotes_are_unpriced() {
+        let today = date!(2026 - 11 - 23);
+        let expiry = date!(2026 - 12 - 18);
+        let call = position(160.0, Right::Call, 100, 1, 3.0, expiry);
+
+        assert_eq!(
+            option_valuation(&call, None, today),
+            OptionValuation::default()
+        );
+        assert_eq!(
+            option_valuation(&call, Some(&quote(expiry, 160.0, Right::Call, None)), today),
+            OptionValuation::default()
+        );
+
+        let expired = date!(2026 - 10 - 17);
+        let stale = position(160.0, Right::Call, 100, 1, 3.0, expired);
+        assert_eq!(
+            option_valuation(
+                &stale,
+                Some(&quote(expired, 160.0, Right::Call, Some(1.0))),
+                today
+            ),
+            OptionValuation::default()
+        );
+    }
+
+    #[test]
+    fn split_adjusted_contract_uses_position_multiplier() {
+        let today = date!(2026 - 11 - 23);
+        let expiry = date!(2026 - 12 - 18);
+        // A 2:1 split halves the credit and strike but doubles the multiplier.
+        let put = position(75.0, Right::Put, 200, 1, 1.0, expiry);
+        let valuation = option_valuation(
+            &put,
+            Some(&quote(expiry, 75.0, Right::Put, Some(0.25))),
+            today,
+        );
+        assert_eq!(valuation.close_cost, Some(50.0));
+        assert_eq!(valuation.unrealized_pnl, Some(150.0));
+        assert!((valuation.unrealized_pct.unwrap() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn calls_do_not_report_collateral_return() {
+        let today = date!(2026 - 11 - 23);
+        let expiry = date!(2026 - 12 - 18);
+        let call = position(160.0, Right::Call, 100, 1, 3.0, expiry);
+        let valuation = option_valuation(
+            &call,
+            Some(&quote(expiry, 160.0, Right::Call, Some(1.0))),
+            today,
+        );
+        assert!(valuation.collateral_return_pct.is_none());
+        assert_eq!(valuation.unrealized_pnl, Some(200.0));
     }
 }

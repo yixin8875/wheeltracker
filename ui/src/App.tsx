@@ -23,7 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Footnote, Stat, StatGrid } from '@/components/page-kit';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
 import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
-import { api, desktop, labels, money, percent, today } from './lib';
+import { api, chainStatusLabel, chainTime, desktop, labels, money, percent, pnlLabel, pnlTone, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
 import { EventLog } from './EventLog';
@@ -47,6 +47,7 @@ import { Updater } from './Updater';
 import { UpdateProvider } from './update';
 import { AboutPanel } from './AboutPanel';
 import { CostReduction } from './CostReduction';
+import { useOptionQuotes } from './hooks/useOptionQuotes';
 
 const ACCOUNT_KEY = 'wheel.account';
 type Page = 'dashboard' | 'positions' | 'cost' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
@@ -146,6 +147,11 @@ export default function App() {
   }, [accountId]);
   const activeSymbols = [...new Set((data?.campaigns ?? []).filter(campaign => campaign.status === 'active').map(campaign => campaign.symbol))];
   const market = usePortfolioQuotes(activeSymbols, reload);
+  const optionQuotes = useOptionQuotes(
+    positions.map(position => ({ symbol: position.symbol, expiry: position.expiry })),
+    reload,
+    page === 'positions' && !restoreStatus?.pending,
+  );
   const [settingsTab, setSettingsTab] = useState<'accounting' | 'accounts' | 'reminders' | 'vision' | 'data' | 'about'>('accounting');
   const [ledgerTab, setLedgerTab] = useState<'entries' | 'events'>('entries');
   const [reportTab, setReportTab] = useState<ReportTab>('income');
@@ -238,6 +244,14 @@ export default function App() {
   const leadDays = settings?.reminderLeadDays ?? 7;
   const reminders = reminderPositions(positions, leadDays);
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
+  const pricedOptions = positions.filter(position => position.unrealizedPnl != null);
+  const optionPnl = pricedOptions.reduce((total, position) => total + (position.unrealizedPnl ?? 0), 0);
+  const optionCredit = pricedOptions.reduce((total, position) => total + position.avgCredit * position.multiplier * position.openQty, 0);
+  const optionPnlPct = optionCredit > 0 ? optionPnl / optionCredit : null;
+  const optionChainAt = positions.reduce<string | null>((latest, position) => {
+    if (!position.chainFetchedAt) return latest;
+    return !latest || position.chainFetchedAt > latest ? position.chainFetchedAt : latest;
+  }, null);
   const asOf = data?.asOf ?? today();
   const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : page === 'entry' && editingId ? '修改交易' : navigationItems.find(item => item.id === page)?.label;
   return (
@@ -368,7 +382,7 @@ export default function App() {
                     </Alert>
                   )}
                   {!holdings && holdingsBusy && <p role="status" className="text-sm text-muted-foreground">正在读取跨账户持仓…</p>}
-                  {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding} />}
+                  {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding} onRefresh={loadHoldings} />}
                 </>
               )}
 
@@ -437,7 +451,7 @@ export default function App() {
               )}
 
               {page === 'cost' && !unavailable && (
-                <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} onEntry={prefill => startEntry(prefill)} />
+                <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
               )}
               {page === 'entry' && (
                 <EntryForm key={entryKey} initial={initial} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} />
@@ -507,29 +521,71 @@ export default function App() {
                       <h2 className="font-heading text-base font-semibold">未平仓期权</h2>
                       <span className="text-xs text-muted-foreground">按到期日排序</span>
                     </div>
+                    <div className="option-pnl-summary flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-muted/30 px-4 py-3">
+                      <div className="grid gap-0.5">
+                        <span className="text-xs text-muted-foreground">期权浮动盈亏</span>
+                        <strong className={`num text-lg font-semibold ${pnlTone(pricedOptions.length ? optionPnl : null)}`}>
+                          {pricedOptions.length ? pnlLabel(optionPnl) : '—'}
+                        </strong>
+                      </div>
+                      <div className="grid gap-0.5">
+                        <span className="text-xs text-muted-foreground">收益率</span>
+                        <strong className="num text-lg font-semibold">{percent(optionPnlPct)}</strong>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {pricedOptions.length}/{positions.length} 个合约有报价
+                        {optionChainAt ? ` · 行情 ${chainTime(optionChainAt)}` : ' · 尚无期权链行情'}
+                      </span>
+                      <Button className="ms-auto" variant="outline" size="sm" disabled={optionQuotes.busy} onClick={() => void optionQuotes.refresh()}>
+                        <RefreshCw className={optionQuotes.busy ? 'animate-spin' : ''} />
+                        {optionQuotes.busy ? `更新中 ${optionQuotes.progress.done}/${optionQuotes.progress.total}` : '更新期权行情'}
+                      </Button>
+                    </div>
+                    {optionQuotes.errors.length > 0 && (
+                      <Alert variant="warning" role="status">
+                        <AlertDescription>期权行情更新失败：{optionQuotes.errors.join('；')}</AlertDescription>
+                      </Alert>
+                    )}
                     <div className="overflow-hidden rounded-xl border bg-card">
                       <Table>
                         <TableHeader>
                           <TableRow>
                             <TableHead>合约</TableHead>
                             <TableHead className="text-right">手数</TableHead>
-                            <TableHead className="text-right">每手股数</TableHead>
                             <TableHead className="text-right">每股净权利金</TableHead>
-                            <TableHead>到期日</TableHead>
-                            <TableHead className="text-right">剩余天数</TableHead>
+                            <TableHead className="text-right">现价</TableHead>
+                            <TableHead className="text-right">浮动盈亏</TableHead>
+                            <TableHead className="text-right">盈亏率</TableHead>
+                            <TableHead>到期 / 剩余</TableHead>
                             <TableHead>了结合约</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {positions.map(position => (
                             <TableRow key={position.contract}>
-                              <TableCell>{position.contract}</TableCell>
+                              <TableCell>
+                                <strong className="block font-medium">{position.contract}</strong>
+                                <small className="block text-xs text-muted-foreground">{position.multiplier} 股/手</small>
+                              </TableCell>
                               <TableCell className="num text-right">{position.openQty}</TableCell>
-                              <TableCell className="num text-right">{position.multiplier} 股/手</TableCell>
                               <TableCell className="num text-right">{money(position.avgCredit)}</TableCell>
-                              <TableCell>{position.expiry}</TableCell>
-                              <TableCell className={`num text-right ${position.daysLeft < 0 ? 'text-destructive-foreground' : position.daysLeft <= 7 ? 'text-warning-foreground' : ''}`}>
-                                {position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}
+                              <TableCell className="num text-right">
+                                {money(position.mark)}
+                                <small className="block text-xs text-muted-foreground">{chainStatusLabel[position.chainStatus] ?? position.chainStatus}</small>
+                              </TableCell>
+                              <TableCell className={`num text-right ${pnlTone(position.unrealizedPnl)}`}>
+                                {pnlLabel(position.unrealizedPnl)}
+                                {position.closeCost != null && <small className="block text-xs text-muted-foreground">平仓 {money(position.closeCost)}</small>}
+                              </TableCell>
+                              <TableCell className={`num text-right ${pnlTone(position.unrealizedPnl)}`}>
+                                {percent(position.unrealizedPct)}
+                                {position.collateralReturnPct != null && <small className="block text-xs text-muted-foreground">保证金 {percent(position.collateralReturnPct)}</small>}
+                              </TableCell>
+                              <TableCell>
+                                <span className="block">{position.expiry}</span>
+                                <small className={position.daysLeft < 0 ? 'text-destructive-foreground' : position.daysLeft <= 7 ? 'text-warning-foreground' : 'text-muted-foreground'}>
+                                  {position.daysLeft < 0 ? `已过期 ${-position.daysLeft} 天` : `${position.daysLeft} 天`}
+                                </small>
                               </TableCell>
                               <TableCell>
                                 <div className="flex flex-wrap gap-1.5">

@@ -1,7 +1,7 @@
 //! IPC commands. Each command replays the event log and returns read models;
 //! writes append events only, never derived rows.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use time::macros::format_description;
 use time::OffsetDateTime;
-use wheel_core::{DerivedState, Event, EventKind, Right};
+use wheel_core::{DerivedState, Event, EventKind, OptionPosition, Right};
 
 use crate::events::{append_requests, build_event, NewEventReq};
 use crate::views::{event_view, EventView};
@@ -44,6 +44,59 @@ fn derive(conn: &rusqlite::Connection, account_id: &str) -> Result<DerivedState,
     let events = store::list_events(conn, account_id).map_err(|error| error.to_string())?;
     let settings = store::get_settings(conn).map_err(|error| error.to_string())?;
     store::replay_checked(account_id, &events, settings).map_err(|error| format!("{error:#}"))
+}
+
+/// Per-command chain cache. Never shared across commands: a refresh, manual
+/// import or restore can replace the quotes underneath it.
+struct QuoteBook<'a> {
+    conn: &'a rusqlite::Connection,
+    now: OffsetDateTime,
+    chains: HashMap<String, option_chain::SymbolChain>,
+}
+
+struct QuoteInfo {
+    valuation: views::OptionValuation,
+    chain_status: String,
+    chain_fetched_at: Option<String>,
+}
+
+impl<'a> QuoteBook<'a> {
+    fn new(conn: &'a rusqlite::Connection, now: OffsetDateTime) -> Self {
+        Self {
+            conn,
+            now,
+            chains: HashMap::new(),
+        }
+    }
+
+    fn info(&mut self, position: &OptionPosition, today: time::Date) -> QuoteInfo {
+        let symbol = position.contract.underlying.clone();
+        if !self.chains.contains_key(&symbol) {
+            // A broken chain row must not take the whole holdings page down;
+            // treat it as simply unpriced.
+            let chain = option_chain::load_symbol(self.conn, &symbol).unwrap_or_else(|_| {
+                option_chain::SymbolChain {
+                    snapshot: None,
+                    quotes: HashMap::new(),
+                }
+            });
+            self.chains.insert(symbol.clone(), chain);
+        }
+        let now = self.now;
+        let chain = self.chains.get(&symbol).expect("inserted above");
+        let (chain_status, chain_fetched_at) = match &chain.snapshot {
+            Some(snapshot) => (
+                views::chain_freshness(&snapshot.fetched_at, now),
+                Some(snapshot.fetched_at.clone()),
+            ),
+            None => ("missing".to_string(), None),
+        };
+        QuoteInfo {
+            valuation: views::option_valuation(position, chain.quote(&position.contract), today),
+            chain_status,
+            chain_fetched_at,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,8 +139,8 @@ pub fn set_settings(
 ) -> Result<SettingsView, String> {
     ensure_no_pending_restore(&state)?;
     let conn = state.conn();
-    let settings = store::set_settings(&conn, include_dividends_in_cost)
-        .map_err(|error| error.to_string())?;
+    let settings =
+        store::set_settings(&conn, include_dividends_in_cost).map_err(|error| error.to_string())?;
     settings_view(&conn, settings)
 }
 
@@ -213,9 +266,7 @@ fn vision_config(conn: &rusqlite::Connection) -> Result<crate::vision::VisionCon
 }
 
 #[tauri::command]
-pub fn get_vision_settings(
-    state: State<'_, AppState>,
-) -> Result<VisionSettingsView, String> {
+pub fn get_vision_settings(state: State<'_, AppState>) -> Result<VisionSettingsView, String> {
     let conn = state.conn();
     Ok(vision_settings_state(&conn)?.view)
 }
@@ -246,15 +297,11 @@ fn set_vision_for(
         return Err("启用前请先阅读并同意隐私说明。".to_string());
     }
 
-    let tx = rusqlite::Transaction::new_unchecked(
-        conn,
-        rusqlite::TransactionBehavior::Immediate,
-    )
-    .map_err(|error| error.to_string())?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
     store::set_setting_value(&tx, VISION_BASE_URL_KEY, &base_url)
         .map_err(|error| error.to_string())?;
-    store::set_setting_value(&tx, VISION_MODEL_KEY, &model)
-        .map_err(|error| error.to_string())?;
+    store::set_setting_value(&tx, VISION_MODEL_KEY, &model).map_err(|error| error.to_string())?;
     store::set_setting_value(
         &tx,
         VISION_ENABLED_KEY,
@@ -461,8 +508,8 @@ fn overview_for(conn: &rusqlite::Connection) -> Result<AllAccountsView, String> 
             }
         }
     }
-    totals.cash_coverage = (totals.tracked_collateral > 0.0)
-        .then(|| totals.account_cash / totals.tracked_collateral);
+    totals.cash_coverage =
+        (totals.tracked_collateral > 0.0).then(|| totals.account_cash / totals.tracked_collateral);
 
     Ok(AllAccountsView {
         as_of: store::today().to_string(),
@@ -516,6 +563,13 @@ pub struct HoldingOptionView {
     pub avg_credit: f64,
     /// Share obligation for a short put; zero for calls.
     pub collateral: f64,
+    pub mark: Option<f64>,
+    pub chain_status: String,
+    pub chain_fetched_at: Option<String>,
+    pub close_cost: Option<f64>,
+    pub unrealized_pnl: Option<f64>,
+    pub unrealized_pct: Option<f64>,
+    pub collateral_return_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -537,6 +591,11 @@ pub struct HoldingsTotalsView {
     pub option_count: usize,
     pub open_contracts: u32,
     pub option_collateral: f64,
+    pub option_priced_count: usize,
+    pub option_unpriced_count: usize,
+    pub option_close_cost: f64,
+    pub option_unrealized_pnl: f64,
+    pub option_unrealized_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -556,6 +615,7 @@ pub fn all_holdings_overview(state: State<'_, AppState>) -> Result<AllHoldingsVi
 fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> {
     let prices = store::latest_prices(conn).map_err(|error| error.to_string())?;
     let today = store::today();
+    let mut book = QuoteBook::new(conn, OffsetDateTime::now_utc());
     let mut holdings = Vec::new();
     let mut options = Vec::new();
     let mut accounts_with_holdings = BTreeSet::new();
@@ -618,6 +678,7 @@ fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> 
             } else {
                 0.0
             };
+            let info = book.info(position, today);
             accounts_with_holdings.insert(account.id.clone());
             options.push(HoldingOptionView {
                 account_id: account.id.clone(),
@@ -633,6 +694,13 @@ fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> 
                 multiplier: position.contract.multiplier,
                 avg_credit: position.avg_credit_per_share,
                 collateral,
+                mark: info.valuation.mark,
+                chain_status: info.chain_status,
+                chain_fetched_at: info.chain_fetched_at,
+                close_cost: info.valuation.close_cost,
+                unrealized_pnl: info.valuation.unrealized_pnl,
+                unrealized_pct: info.valuation.unrealized_pct,
+                collateral_return_pct: info.valuation.collateral_return_pct,
             });
         }
     }
@@ -657,11 +725,20 @@ fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> 
         .iter()
         .filter_map(|holding| holding.market_value)
         .sum();
-    let cost_basis: f64 = priced
-        .iter()
-        .filter_map(|holding| holding.cost_basis)
-        .sum();
+    let cost_basis: f64 = priced.iter().filter_map(|holding| holding.cost_basis).sum();
     let unrealized_pnl = market_value - cost_basis;
+    let priced_options: Vec<&HoldingOptionView> = options
+        .iter()
+        .filter(|option| option.unrealized_pnl.is_some())
+        .collect();
+    let option_unrealized_pnl: f64 = priced_options
+        .iter()
+        .filter_map(|option| option.unrealized_pnl)
+        .sum();
+    let option_credit: f64 = priced_options
+        .iter()
+        .map(|option| option.avg_credit * f64::from(option.multiplier) * f64::from(option.open_qty))
+        .sum();
     let totals = HoldingsTotalsView {
         account_count: accounts_with_holdings.len(),
         holding_count: holdings.len(),
@@ -677,6 +754,14 @@ fn holdings_for(conn: &rusqlite::Connection) -> Result<AllHoldingsView, String> 
         option_count: options.len(),
         open_contracts: options.iter().map(|option| option.open_qty).sum(),
         option_collateral: options.iter().map(|option| option.collateral).sum(),
+        option_priced_count: priced_options.len(),
+        option_unpriced_count: options.len() - priced_options.len(),
+        option_close_cost: priced_options
+            .iter()
+            .filter_map(|option| option.close_cost)
+            .sum(),
+        option_unrealized_pnl,
+        option_unrealized_pct: (option_credit > 0.0).then(|| option_unrealized_pnl / option_credit),
     };
 
     Ok(AllHoldingsView {
@@ -772,6 +857,19 @@ fn campaign_detail_for(
         .campaign(campaign_id)
         .ok_or_else(|| format!("campaign `{campaign_id}` not found"))?;
     let price = prices.get(&campaign.symbol).copied();
+    let mut book = QuoteBook::new(conn, OffsetDateTime::now_utc());
+    let mut positions = Vec::new();
+    for position in derived.positions_for(campaign_id) {
+        let mut view = views::position(position, today);
+        let info = book.info(position, today);
+        views::apply_valuation(
+            &mut view,
+            &info.valuation,
+            info.chain_status,
+            info.chain_fetched_at,
+        );
+        positions.push(view);
+    }
 
     Ok(views::CampaignDetailView {
         campaign: views::campaign_card(campaign, &derived, price, today),
@@ -780,11 +878,7 @@ fn campaign_detail_for(
             .into_iter()
             .map(views::entry)
             .collect(),
-        positions: derived
-            .positions_for(campaign_id)
-            .into_iter()
-            .map(|position| views::position(position, today))
-            .collect(),
+        positions,
         lots: derived
             .lots
             .iter()
@@ -1153,11 +1247,7 @@ fn annual_report_for(
         });
         let fee = (event.kind == EventKind::Fee).then_some(event.amount);
         let adjustment = (event.kind == EventKind::Adjustment).then_some(event.amount);
-        if share_pnl.is_none()
-            && dividend.is_none()
-            && fee.is_none()
-            && adjustment.is_none()
-        {
+        if share_pnl.is_none() && dividend.is_none() && fee.is_none() && adjustment.is_none() {
             continue;
         }
         let year = by_year.entry(event.occurred_at.year()).or_default();
@@ -1274,14 +1364,29 @@ pub fn positions(
     state: State<'_, AppState>,
     account_id: Option<String>,
 ) -> Result<Vec<views::PositionView>, String> {
-    let conn = state.conn();
-    let derived = derive(&conn, &account_or_default(account_id))?;
+    positions_for(&state.conn(), &account_or_default(account_id))
+}
+
+fn positions_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<Vec<views::PositionView>, String> {
+    let derived = derive(conn, account_id)?;
     let today = store::today();
-    Ok(derived
-        .positions
-        .iter()
-        .map(|position| views::position(position, today))
-        .collect())
+    let mut book = QuoteBook::new(conn, OffsetDateTime::now_utc());
+    let mut views_out = Vec::with_capacity(derived.positions.len());
+    for position in &derived.positions {
+        let mut view = views::position(position, today);
+        let info = book.info(position, today);
+        views::apply_valuation(
+            &mut view,
+            &info.valuation,
+            info.chain_status,
+            info.chain_fetched_at,
+        );
+        views_out.push(view);
+    }
+    Ok(views_out)
 }
 
 #[tauri::command]
@@ -1450,17 +1555,12 @@ pub fn rebuild(
 }
 
 #[tauri::command]
-pub fn backup_now(
-    state: State<'_, AppState>,
-    password: Option<String>,
-) -> Result<String, String> {
+pub fn backup_now(state: State<'_, AppState>, password: Option<String>) -> Result<String, String> {
     let directory = backups_dir(&state);
     let stamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
     let conn = state.conn();
     let path = match password.filter(|value| !value.is_empty()) {
-        Some(password) => {
-            backup::create_encrypted(&conn, &directory, "wheel-", stamp, &password)
-        }
+        Some(password) => backup::create_encrypted(&conn, &directory, "wheel-", stamp, &password),
         None => backup::create(&conn, &directory, "wheel-", stamp),
     }
     .map_err(|error| format!("{error:#}"))?;
@@ -1576,7 +1676,8 @@ fn export_json_for(conn: &rusqlite::Connection) -> Result<String, String> {
     let accounts = store::list_accounts(conn).map_err(|error| error.to_string())?;
     // The accounts table is authoritative, but include any event-only account
     // ids as well so an export never silently drops rows.
-    let mut account_ids: BTreeSet<String> = accounts.iter().map(|account| account.id.clone()).collect();
+    let mut account_ids: BTreeSet<String> =
+        accounts.iter().map(|account| account.id.clone()).collect();
     {
         let mut statement = conn
             .prepare("SELECT DISTINCT account_id FROM events WHERE deleted_at IS NULL")
@@ -1796,12 +1897,9 @@ pub async fn webdav_restore(
     downloaded.map_err(|error| format!("{error:#}"))?;
 
     let backup_password = backup_password.filter(|value| !value.is_empty());
-    let validation = backup::validate_with_password(
-        &directory,
-        &local_file,
-        backup_password.as_deref(),
-    )
-    .map_err(|error| format!("{error:#}"))?;
+    let validation =
+        backup::validate_with_password(&directory, &local_file, backup_password.as_deref())
+            .map_err(|error| format!("{error:#}"))?;
     if !validation.valid {
         // A corrupt download must not linger as a restore candidate.
         let _ = std::fs::remove_file(&target);
@@ -1940,7 +2038,10 @@ pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountAdminView>
 }
 
 #[tauri::command]
-pub fn create_account(state: State<'_, AppState>, name: String) -> Result<AccountAdminView, String> {
+pub fn create_account(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<AccountAdminView, String> {
     ensure_no_pending_restore(&state)?;
     let name = valid_account_name(&name)?;
     let conn = state.conn();
@@ -1961,8 +2062,7 @@ pub fn create_account(state: State<'_, AppState>, name: String) -> Result<Accoun
         id = format!("acct-{stamp}-{attempt}");
     }
     let created_at = store::today().to_string();
-    store::insert_account(&conn, &id, &name, &created_at)
-        .map_err(|error| format!("{error:#}"))?;
+    store::insert_account(&conn, &id, &name, &created_at).map_err(|error| format!("{error:#}"))?;
     Ok(AccountAdminView {
         id,
         name,
@@ -2017,8 +2117,7 @@ fn set_account_archived_for(
             return Err("至少保留一个可用账户，不能归档最后一个账户。".to_string());
         }
     }
-    store::set_account_archived(conn, account_id, archived)
-        .map_err(|error| error.to_string())?;
+    store::set_account_archived(conn, account_id, archived).map_err(|error| error.to_string())?;
     store::account_record(conn, account_id)
         .map_err(|error| error.to_string())?
         .map(AccountAdminView::from)
@@ -2139,9 +2238,7 @@ fn preview_for(
             let key = crate::import::mapping_key(&document.signature);
             let saved = store::get_setting_value(conn, &key)
                 .map_err(|error| error.to_string())?
-                .and_then(|json| {
-                    serde_json::from_str::<crate::import::ColumnMapping>(&json).ok()
-                })
+                .and_then(|json| serde_json::from_str::<crate::import::ColumnMapping>(&json).ok())
                 .filter(|mapping| crate::import::validate_mapping(mapping, columns).is_ok());
             match saved {
                 Some(mapping) => (mapping, "saved"),
@@ -2159,11 +2256,7 @@ fn preview_for(
     };
 
     Ok(crate::import::build_preview(
-        &document,
-        mapping,
-        source,
-        &account,
-        &existing,
+        &document, mapping, source, &account, &existing,
     ))
 }
 
@@ -2336,7 +2429,11 @@ fn batch_view(
         origin: batch.origin.clone(),
         created_at: batch.created_at.clone(),
         imported: batch.imported,
-        remaining: batch.event_ids.iter().filter(|id| active_ids.contains(*id)).count(),
+        remaining: batch
+            .event_ids
+            .iter()
+            .filter(|id| active_ids.contains(*id))
+            .count(),
         undone_at: batch.undone_at.clone(),
         undone_count: batch.undone_count,
     }
@@ -2521,8 +2618,7 @@ pub async fn vision_import_preview(
                 .collect::<String>()
         });
     let conn = state.conn();
-    let mut preview =
-        extraction_preview_for(&conn, extraction, req.account_id, "vision")?;
+    let mut preview = extraction_preview_for(&conn, extraction, req.account_id, "vision")?;
     if let Some(source) = source {
         preview.warnings.insert(1, format!("来源截图：{source}"));
     }
@@ -2577,8 +2673,7 @@ fn chain_status_for(
     symbol: &str,
     now: OffsetDateTime,
 ) -> Result<views::ChainStatusView, String> {
-    let Some(snapshot) =
-        option_chain::snapshot(conn, symbol).map_err(|error| error.to_string())?
+    let Some(snapshot) = option_chain::snapshot(conn, symbol).map_err(|error| error.to_string())?
     else {
         return Ok(views::ChainStatusView {
             symbol: symbol.to_string(),
@@ -2804,6 +2899,43 @@ mod tests {
         store::parse_date("2026-01-02").unwrap()
     }
 
+    fn chain_fixture(
+        conn: &rusqlite::Connection,
+        symbol: &str,
+        expiry: time::Date,
+        strike: f64,
+        right: Right,
+        mark: Option<f64>,
+    ) {
+        let snapshot = option_chain::ChainSnapshot {
+            symbol: symbol.to_string(),
+            source: "nasdaq".to_string(),
+            as_of: "2020-01-01 00:00:00".to_string(),
+            fetched_at: "2020-01-01 00:00:00".to_string(),
+            underlying: None,
+            notes: String::new(),
+        };
+        let quote = option_chain::OptionQuote {
+            symbol: symbol.to_string(),
+            expiry,
+            strike,
+            right,
+            bid: None,
+            ask: None,
+            last: None,
+            mark,
+            iv: None,
+            delta: None,
+            gamma: None,
+            theta: None,
+            vega: None,
+            open_interest: None,
+            volume: None,
+            multiplier: 100,
+        };
+        option_chain::replace(conn, &snapshot, &[quote]).unwrap();
+    }
+
     #[test]
     fn account_names_are_trimmed_and_validated() {
         assert_eq!(valid_account_name("  长期账户 ").unwrap(), "长期账户");
@@ -2860,12 +2992,30 @@ mod tests {
             &conn,
             &[
                 Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 100, 150.0, 0.0),
-                Event::sell_option("main", "sto", 2, at("2026-01-05"), contract.clone(), 1, 2.0, 1.0),
+                Event::sell_option(
+                    "main",
+                    "sto",
+                    2,
+                    at("2026-01-05"),
+                    contract.clone(),
+                    1,
+                    2.0,
+                    1.0,
+                ),
                 Event::dividend("main", "div", 3, at("2026-01-10"), "AAPL", 1.0, 100),
                 Event::fee("main", "fee", 4, at("2026-01-20"), "AAPL", 5.0),
                 Event::close_option("main", "btc", 5, at("2026-02-20"), contract, 1, 0.5, 1.0),
                 Event::adjustment("main", "adj", 6, at("2026-02-25"), "AAPL", 20.0),
-                Event::buy_shares("other", "other-buy", 1, at("2026-03-01"), "MSFT", 10, 300.0, 0.0),
+                Event::buy_shares(
+                    "other",
+                    "other-buy",
+                    1,
+                    at("2026-03-01"),
+                    "MSFT",
+                    10,
+                    300.0,
+                    0.0,
+                ),
                 Event::dividend("other", "other-div", 2, at("2026-03-10"), "MSFT", 2.0, 10),
             ],
         )
@@ -2873,7 +3023,11 @@ mod tests {
 
         let report = monthly_income_for(&conn, "main").unwrap();
         assert_eq!(
-            report.months.iter().map(|month| month.month.as_str()).collect::<Vec<_>>(),
+            report
+                .months
+                .iter()
+                .map(|month| month.month.as_str())
+                .collect::<Vec<_>>(),
             vec!["2026-01", "2026-02"]
         );
         let january = &report.months[0];
@@ -2914,18 +3068,63 @@ mod tests {
             &conn,
             &[
                 Event::buy_shares("main", "buy", 1, at("2025-12-01"), "AAPL", 100, 150.0, 0.0),
-                Event::sell_option("main", "sto", 2, at("2025-12-05"), contract.clone(), 1, 2.0, 1.0),
+                Event::sell_option(
+                    "main",
+                    "sto",
+                    2,
+                    at("2025-12-05"),
+                    contract.clone(),
+                    1,
+                    2.0,
+                    1.0,
+                ),
                 Event::close_option("main", "btc", 3, at("2026-01-10"), contract, 1, 0.5, 1.0),
                 Event::dividend("main", "div", 4, at("2026-02-15"), "AAPL", 1.0, 100),
                 Event::fee("main", "fee", 5, at("2026-02-20"), "AAPL", 5.0),
                 Event::adjustment("main", "adj", 6, at("2026-02-25"), "AAPL", 20.0),
                 Event::sell_shares("main", "sell", 7, at("2026-03-10"), "AAPL", 40, 160.0, 0.0),
-                Event::buy_shares("main", "msft-buy", 8, at("2025-12-20"), "MSFT", 10, 300.0, 0.0),
+                Event::buy_shares(
+                    "main",
+                    "msft-buy",
+                    8,
+                    at("2025-12-20"),
+                    "MSFT",
+                    10,
+                    300.0,
+                    0.0,
+                ),
                 Event::dividend("main", "msft-div", 9, at("2025-12-28"), "MSFT", 2.0, 10),
-                Event::sell_shares("main", "msft-sell", 10, at("2025-12-30"), "MSFT", 10, 310.0, 0.0),
-                Event::buy_shares("main", "msft-buy-2", 12, at("2026-03-01"), "MSFT", 10, 300.0, 0.0),
+                Event::sell_shares(
+                    "main",
+                    "msft-sell",
+                    10,
+                    at("2025-12-30"),
+                    "MSFT",
+                    10,
+                    310.0,
+                    0.0,
+                ),
+                Event::buy_shares(
+                    "main",
+                    "msft-buy-2",
+                    12,
+                    at("2026-03-01"),
+                    "MSFT",
+                    10,
+                    300.0,
+                    0.0,
+                ),
                 Event::fee("main", "msft-fee", 11, at("2026-03-15"), "MSFT", 50.0),
-                Event::buy_shares("other", "tsla-buy", 1, at("2025-12-01"), "TSLA", 1, 100.0, 0.0),
+                Event::buy_shares(
+                    "other",
+                    "tsla-buy",
+                    1,
+                    at("2025-12-01"),
+                    "TSLA",
+                    1,
+                    100.0,
+                    0.0,
+                ),
                 Event::dividend("other", "tsla-div", 2, at("2025-12-31"), "TSLA", 7.0, 1),
             ],
         )
@@ -2953,7 +3152,11 @@ mod tests {
         let second = &report.years[1];
         assert_eq!(second.year, 2026);
         assert_eq!(
-            second.months.iter().map(|month| month.month.as_str()).collect::<Vec<_>>(),
+            second
+                .months
+                .iter()
+                .map(|month| month.month.as_str())
+                .collect::<Vec<_>>(),
             vec!["2026-01", "2026-02", "2026-03"]
         );
         let january = &second.months[0];
@@ -2983,7 +3186,11 @@ mod tests {
         assert_eq!(second.total.closed_entries, 1);
         assert_eq!(second.total.share_events, 1);
         assert_eq!(
-            second.symbols.iter().map(|symbol| symbol.symbol.as_str()).collect::<Vec<_>>(),
+            second
+                .symbols
+                .iter()
+                .map(|symbol| symbol.symbol.as_str())
+                .collect::<Vec<_>>(),
             vec!["AAPL", "MSFT"]
         );
         assert_eq!(second.symbols[0].total, 663.0);
@@ -3010,9 +3217,27 @@ mod tests {
             &conn,
             &[
                 Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 100, 100.0, 0.0),
-                Event::sell_option("main", "call-sto", 2, at("2026-01-05"), call.clone(), 1, 1.0, 0.0),
+                Event::sell_option(
+                    "main",
+                    "call-sto",
+                    2,
+                    at("2026-01-05"),
+                    call.clone(),
+                    1,
+                    1.0,
+                    0.0,
+                ),
                 Event::assign_option("main", "call-assign", 3, at("2026-01-20"), call, 1, 0.0),
-                Event::sell_option("main", "put-sto", 4, at("2027-02-02"), put.clone(), 1, 2.0, 0.0),
+                Event::sell_option(
+                    "main",
+                    "put-sto",
+                    4,
+                    at("2027-02-02"),
+                    put.clone(),
+                    1,
+                    2.0,
+                    0.0,
+                ),
                 Event::assign_option("main", "put-assign", 5, at("2027-02-20"), put, 1, 0.0),
             ],
         )
@@ -3035,7 +3260,11 @@ mod tests {
         assert_eq!(february.total, 200.0);
 
         let derived = derive(&conn, "main").unwrap();
-        let closed: f64 = derived.campaigns.iter().filter_map(|campaign| campaign.realized_pnl).sum();
+        let closed: f64 = derived
+            .campaigns
+            .iter()
+            .filter_map(|campaign| campaign.realized_pnl)
+            .sum();
         assert_eq!(closed, report.years[0].total.total);
     }
 
@@ -3047,7 +3276,16 @@ mod tests {
             &conn,
             &[
                 Event::buy_shares("main", "buy", 1, at("2026-01-02"), "AAPL", 101, 50.0, 0.0),
-                Event::stock_split("main", "split", 2, at("2026-02-01"), "AAPL", 1, 10, Some(12.5)),
+                Event::stock_split(
+                    "main",
+                    "split",
+                    2,
+                    at("2026-02-01"),
+                    "AAPL",
+                    1,
+                    10,
+                    Some(12.5),
+                ),
             ],
         )
         .unwrap();
@@ -3071,7 +3309,16 @@ mod tests {
         let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
         store::insert_events(
             &conn,
-            &[Event::sell_option("main", "sto", 1, at("2026-01-05"), contract, 1, 2.0, 1.0)],
+            &[Event::sell_option(
+                "main",
+                "sto",
+                1,
+                at("2026-01-05"),
+                contract,
+                1,
+                2.0,
+                1.0,
+            )],
         )
         .unwrap();
 
@@ -3160,10 +3407,7 @@ mod tests {
         let mut corrected = request();
         corrected.price = 2.75;
         corrected.note = Some("修正权利金".to_string());
-        assert_eq!(
-            update_event_for(&conn, &ids[0], corrected).unwrap(),
-            ids[0]
-        );
+        assert_eq!(update_event_for(&conn, &ids[0], corrected).unwrap(), ids[0]);
         let events = store::list_events(&conn, "main").unwrap();
         assert_eq!(events[0].price, 2.75);
         assert_eq!(events[0].note, "修正权利金");
@@ -3244,12 +3488,16 @@ mod tests {
             ],
         )
         .unwrap();
-        let before = campaign_detail_for(&conn, "main", "main#c0").unwrap().campaign;
+        let before = campaign_detail_for(&conn, "main", "main#c0")
+            .unwrap()
+            .campaign;
         assert_eq!(before.cost_a, Some(150.0));
         assert_eq!(before.cost_b, Some(150.0));
         assert_eq!(before.cost_c, Some(150.0));
         store::set_settings(&conn, true).unwrap();
-        let after = campaign_detail_for(&conn, "main", "main#c0").unwrap().campaign;
+        let after = campaign_detail_for(&conn, "main", "main#c0")
+            .unwrap()
+            .campaign;
         assert_eq!(after.cost_a, before.cost_a);
         assert_eq!(after.cost_b, Some(148.0));
         assert_eq!(after.cost_c, Some(148.0));
@@ -3544,12 +3792,10 @@ mod tests {
             .rows
             .iter()
             .filter_map(|row| {
-                row.event
-                    .clone()
-                    .map(|event| ImportCommitRow {
-                        row_number: row.row_number,
-                        event,
-                    })
+                row.event.clone().map(|event| ImportCommitRow {
+                    row_number: row.row_number,
+                    event,
+                })
             })
             .collect()
     }
@@ -3771,12 +4017,11 @@ mod tests {
         mapping.fields.insert(crate::import::Field::Symbol, 1);
         mapping.fields.insert(crate::import::Field::Action, 2);
         assert!(save_mapping_for(&conn, "0123456789abcdef", mapping).unwrap());
-        assert!(store::get_setting_value(
-            &conn,
-            &crate::import::mapping_key("0123456789abcdef")
-        )
-        .unwrap()
-        .is_some());
+        assert!(
+            store::get_setting_value(&conn, &crate::import::mapping_key("0123456789abcdef"))
+                .unwrap()
+                .is_some()
+        );
     }
 
     fn vision_settings(api_key: Option<&str>, enabled: bool, consent: bool) -> VisionSettingsReq {
@@ -3792,8 +4037,8 @@ mod tests {
     #[test]
     fn vision_settings_mask_the_key_and_require_consent_to_enable() {
         let conn = db();
-        let saved = set_vision_for(&conn, vision_settings(Some("sk-test-1234"), false, false))
-            .unwrap();
+        let saved =
+            set_vision_for(&conn, vision_settings(Some("sk-test-1234"), false, false)).unwrap();
         assert_eq!(saved.base_url, "https://api.openai.com/v1");
         assert!(saved.has_key);
         assert_eq!(saved.key_hint, "1234");
@@ -3861,7 +4106,10 @@ mod tests {
         assert_eq!(preview.mapping_source, "vision");
         assert_eq!(preview.rows.len(), 1);
         assert!(preview.warnings[0].contains("云端视觉（gpt-4o）"));
-        assert_eq!(preview.rows[0].event.as_ref().unwrap().note.as_deref(), Some("云端视觉 · gpt-4o"));
+        assert_eq!(
+            preview.rows[0].event.as_ref().unwrap().note.as_deref(),
+            Some("云端视觉 · gpt-4o")
+        );
     }
 
     #[test]
@@ -4006,12 +4254,23 @@ mod tests {
 
         let overview = overview_for(&conn).unwrap();
         assert_eq!(overview.accounts.len(), 3);
-        assert!(overview.accounts.iter().all(|account| account.id != "archived"));
-        let main = overview.accounts.iter().find(|account| account.id == "main").unwrap();
+        assert!(overview
+            .accounts
+            .iter()
+            .all(|account| account.id != "archived"));
+        let main = overview
+            .accounts
+            .iter()
+            .find(|account| account.id == "main")
+            .unwrap();
         assert_eq!(main.account_cash, 5_200.0);
         assert_eq!(main.collateral, 15_000.0);
         assert_eq!(main.cash_shortfall, 9_800.0);
-        let third = overview.accounts.iter().find(|account| account.id == "third").unwrap();
+        let third = overview
+            .accounts
+            .iter()
+            .find(|account| account.id == "third")
+            .unwrap();
         assert!(!third.cash_tracked);
         assert_eq!(third.account_cash, 100.0);
 
@@ -4078,7 +4337,16 @@ mod tests {
             &conn,
             &[
                 Event::buy_shares("main", "main-buy", 1, date(), "AAPL", 100, 150.0, 0.0),
-                Event::sell_option("main", "main-put", 2, date(), expired_put.clone(), 1, 2.0, 0.0),
+                Event::sell_option(
+                    "main",
+                    "main-put",
+                    2,
+                    date(),
+                    expired_put.clone(),
+                    1,
+                    2.0,
+                    0.0,
+                ),
                 Event::expire_option("main", "main-expire", 3, expiry, expired_put, 1),
                 Event::buy_shares("second", "second-buy", 1, date(), "MSFT", 50, 100.0, 0.0),
                 Event::sell_option(
@@ -4091,7 +4359,16 @@ mod tests {
                     1.0,
                     0.0,
                 ),
-                Event::buy_shares("archived", "archived-buy", 1, date(), "TSLA", 10, 300.0, 0.0),
+                Event::buy_shares(
+                    "archived",
+                    "archived-buy",
+                    1,
+                    date(),
+                    "TSLA",
+                    10,
+                    300.0,
+                    0.0,
+                ),
             ],
         )
         .unwrap();
@@ -4100,7 +4377,10 @@ mod tests {
 
         let view = holdings_for(&conn).unwrap();
         assert_eq!(view.holdings.len(), 2);
-        assert!(view.holdings.iter().all(|holding| holding.account_id != "archived"));
+        assert!(view
+            .holdings
+            .iter()
+            .all(|holding| holding.account_id != "archived"));
 
         let main = view
             .holdings
@@ -4145,6 +4425,102 @@ mod tests {
         assert_eq!(totals.option_count, 1);
         assert_eq!(totals.open_contracts, 1);
         assert_eq!(totals.option_collateral, 20_000.0);
+    }
+
+    #[test]
+    fn open_options_are_valued_against_the_stored_chain() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        let expiry = store::today() + time::Duration::days(30);
+        let contract = OptionContract::new("AAPL", expiry, 100.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[Event::sell_option(
+                "main",
+                "put",
+                1,
+                date(),
+                contract.clone(),
+                1,
+                2.0,
+                0.0,
+            )],
+        )
+        .unwrap();
+        chain_fixture(&conn, "AAPL", expiry, 100.0, Right::Put, Some(0.5));
+
+        let view = holdings_for(&conn).unwrap();
+        assert_eq!(view.options.len(), 1);
+        let option = &view.options[0];
+        assert_eq!(option.mark, Some(0.5));
+        assert_eq!(option.chain_status, "stale");
+        assert_eq!(
+            option.chain_fetched_at.as_deref(),
+            Some("2020-01-01 00:00:00")
+        );
+        assert_eq!(option.close_cost, Some(50.0));
+        assert_eq!(option.unrealized_pnl, Some(150.0));
+        assert_eq!(option.collateral, 10_000.0);
+        assert!((option.unrealized_pct.unwrap() - 0.75).abs() < 1e-9);
+        assert!((option.collateral_return_pct.unwrap() - 0.015).abs() < 1e-9);
+
+        let totals = view.totals;
+        assert_eq!(totals.option_priced_count, 1);
+        assert_eq!(totals.option_unpriced_count, 0);
+        assert_eq!(totals.option_close_cost, 50.0);
+        assert_eq!(totals.option_unrealized_pnl, 150.0);
+        assert!((totals.option_unrealized_pct.unwrap() - 0.75).abs() < 1e-9);
+
+        let positions = positions_for(&conn, "main").unwrap();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].unrealized_pnl, Some(150.0));
+        assert_eq!(positions[0].chain_status, "stale");
+    }
+
+    #[test]
+    fn unpriced_options_stay_out_of_the_totals() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        let expiry = store::today() + time::Duration::days(30);
+        store::insert_events(
+            &conn,
+            &[
+                Event::sell_option(
+                    "main",
+                    "aapl",
+                    1,
+                    date(),
+                    OptionContract::new("AAPL", expiry, 100.0, Right::Put),
+                    1,
+                    2.0,
+                    0.0,
+                ),
+                Event::sell_option(
+                    "main",
+                    "msft",
+                    2,
+                    date(),
+                    OptionContract::new("MSFT", expiry, 200.0, Right::Call),
+                    1,
+                    3.0,
+                    0.0,
+                ),
+            ],
+        )
+        .unwrap();
+        chain_fixture(&conn, "AAPL", expiry, 100.0, Right::Put, Some(0.5));
+
+        let view = holdings_for(&conn).unwrap();
+        let unpriced = view
+            .options
+            .iter()
+            .find(|option| option.symbol == "MSFT")
+            .unwrap();
+        assert!(unpriced.unrealized_pnl.is_none());
+        assert_eq!(unpriced.chain_status, "missing");
+        assert_eq!(view.totals.option_priced_count, 1);
+        assert_eq!(view.totals.option_unpriced_count, 1);
+        assert_eq!(view.totals.option_unrealized_pnl, 150.0);
     }
 
     #[test]

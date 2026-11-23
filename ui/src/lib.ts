@@ -6,6 +6,23 @@ export async function api<T>(command: string, args?: Record<string, unknown>): P
 }
 export const money = (value: number | null | undefined) => value == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 export const percent = (value: number | null | undefined) => value == null ? '—' : `${(value * 100).toFixed(2)}%`;
+export function pnlTone(value: number | null | undefined) {
+  if (value == null || value === 0) return '';
+  return value > 0 ? 'positive text-success-foreground' : 'negative text-destructive-foreground';
+}
+export function pnlLabel(value: number | null | undefined) {
+  if (value == null) return '—';
+  return `${value > 0 ? '+' : ''}${money(value)}`;
+}
+export const chainStatusLabel: Record<string, string> = {
+  fresh: '刚刚更新',
+  delayed: '延迟',
+  stale: '已过期',
+  missing: '无期权报价',
+};
+export function chainTime(value: string | null | undefined) {
+  return value ? `${value.slice(0, 16)} UTC` : '—';
+}
 const TRADING_TIME_ZONE = 'America/New_York';
 /** Ledger dates are US trading dates, not the user's local calendar date. */
 export function today() {

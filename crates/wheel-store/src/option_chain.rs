@@ -3,13 +3,13 @@
 //! Quotes live in their own tables and never touch `prices`, so the cost chart
 //! and the ledger keep their strict "stock close only" semantics.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Deserialize;
 use time::{macros::format_description, Date, Month};
-use wheel_core::Right;
+use wheel_core::{OptionContract, Right};
 
 /// One option contract quote. Missing fields stay `None`; the scanner decides
 /// whether a contract is tradable.
@@ -47,6 +47,57 @@ pub struct ChainSnapshot {
 pub struct ChainFetch {
     pub snapshot: ChainSnapshot,
     pub quotes: Vec<OptionQuote>,
+}
+
+/// Exact-match key for one contract. Strikes are quantized the same way the
+/// parsers do, so `149.999999` from a hand-written CSV still matches `150`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct QuoteKey {
+    pub expiry: Date,
+    pub strike_key: i64,
+    pub right: Right,
+}
+
+impl QuoteKey {
+    pub fn new(expiry: Date, strike: f64, right: Right) -> Self {
+        Self {
+            expiry,
+            strike_key: (strike * 10_000.0).round() as i64,
+            right,
+        }
+    }
+
+    pub fn for_contract(contract: &OptionContract) -> Self {
+        Self::new(contract.expiry, contract.strike, contract.right)
+    }
+}
+
+/// One symbol's stored chain, loaded once so a read model can value every
+/// open contract without re-querying the table per position.
+#[derive(Debug, Clone)]
+pub struct SymbolChain {
+    pub snapshot: Option<ChainSnapshot>,
+    pub quotes: HashMap<QuoteKey, OptionQuote>,
+}
+
+impl SymbolChain {
+    pub fn quote(&self, contract: &OptionContract) -> Option<&OptionQuote> {
+        self.quotes.get(&QuoteKey::for_contract(contract))
+    }
+}
+
+pub fn load_symbol(conn: &Connection, symbol: &str) -> Result<SymbolChain> {
+    let snapshot = snapshot(conn, symbol)?;
+    let quotes = quotes(conn, symbol)?
+        .into_iter()
+        .map(|quote| {
+            (
+                QuoteKey::new(quote.expiry, quote.strike, quote.right),
+                quote,
+            )
+        })
+        .collect();
+    Ok(SymbolChain { snapshot, quotes })
 }
 
 /// Replace every quote for one symbol in a single transaction. The snapshot row
@@ -162,10 +213,13 @@ pub fn quotes(conn: &Connection, symbol: &str) -> Result<Vec<OptionQuote>> {
         let right: String = row.get(2)?;
         Ok(OptionQuote {
             symbol: symbol.to_string(),
-            expiry: crate::store::parse_date(&expiry)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            expiry: crate::store::parse_date(&expiry).map_err(|_| rusqlite::Error::InvalidQuery)?,
             strike: row.get(1)?,
-            right: if right == "C" { Right::Call } else { Right::Put },
+            right: if right == "C" {
+                Right::Call
+            } else {
+                Right::Put
+            },
             bid: row.get(3)?,
             ask: row.get(4)?,
             last: row.get(5)?,
@@ -295,7 +349,10 @@ pub fn parse_text(text: &str) -> Result<ParseOutcome> {
     Ok(ParseOutcome {
         rows: rows.into_values().collect(),
         errors,
-        headers: headers.iter().map(|header| header.trim().to_string()).collect(),
+        headers: headers
+            .iter()
+            .map(|header| header.trim().to_string())
+            .collect(),
         delimiter,
     })
 }
@@ -379,14 +436,31 @@ fn find_column(headers: &[String], aliases: &[&str]) -> Option<usize> {
 fn map_columns(headers: &[String]) -> Result<Columns> {
     let expiry = find_column(
         headers,
-        &["expiry", "expiration", "expirydate", "expirationdate", "到期日", "到期", "日期"],
+        &[
+            "expiry",
+            "expiration",
+            "expirydate",
+            "expirationdate",
+            "到期日",
+            "到期",
+            "日期",
+        ],
     )
     .ok_or_else(|| anyhow::anyhow!("缺少到期日列"))?;
     let strike = find_column(headers, &["strike", "strikeprice", "行权价", "行使价"])
         .ok_or_else(|| anyhow::anyhow!("缺少行权价列"))?;
     let right = find_column(
         headers,
-        &["right", "type", "callput", "cp", "direction", "方向", "类型", "看涨看跌"],
+        &[
+            "right",
+            "type",
+            "callput",
+            "cp",
+            "direction",
+            "方向",
+            "类型",
+            "看涨看跌",
+        ],
     )
     .ok_or_else(|| anyhow::anyhow!("缺少方向列（Call/Put 或 C/P）"))?;
     Ok(Columns {
@@ -399,7 +473,14 @@ fn map_columns(headers: &[String]) -> Result<Columns> {
         iv: find_column(headers, &["iv", "impliedvolatility", "隐含波动率", "隐波"]),
         open_interest: find_column(
             headers,
-            &["openinterest", "openint", "oi", "未平仓", "持仓量", "未平仓量"],
+            &[
+                "openinterest",
+                "openint",
+                "oi",
+                "未平仓",
+                "持仓量",
+                "未平仓量",
+            ],
         ),
         volume: find_column(headers, &["volume", "vol", "成交量"]),
         multiplier: find_column(headers, &["multiplier", "每手股数", "乘数"]),
@@ -489,11 +570,11 @@ pub fn parse_right(text: &str) -> Option<Right> {
 }
 
 fn parse_number(text: &str) -> Option<f64> {
-    let cleaned = text
-        .trim()
-        .trim_start_matches('$')
-        .replace([',', '%'], "");
-    if cleaned.is_empty() || cleaned == "--" || cleaned == "-" || cleaned.eq_ignore_ascii_case("n/a")
+    let cleaned = text.trim().trim_start_matches('$').replace([',', '%'], "");
+    if cleaned.is_empty()
+        || cleaned == "--"
+        || cleaned == "-"
+        || cleaned.eq_ignore_ascii_case("n/a")
     {
         return None;
     }

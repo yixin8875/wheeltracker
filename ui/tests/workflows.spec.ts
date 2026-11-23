@@ -4,8 +4,8 @@ import { test, expect, type Page } from '@playwright/test';
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const campaign = { id: 'campaign', symbol: 'TEST', status: 'active', shares: 100, costA: 150, costB: 148, costC: 147, premiumRealized: 200, premiumOpen: 100, dividends: 0, adjustments: 0, price: 160, safetyMargin: 12 / 148, nextOption: null, realizedPnl: null, sharePnl: 0, startedAt: '2026-01-02', endedAt: null, cycles: 1, costPoints: [{ at: '2026-01-02', shares: 100, premiumRealized: 0, premiumOpen: 0, costA: 150, costB: 150, costC: 150 }, { at: '2026-02-20', shares: 100, premiumRealized: 200, premiumOpen: 0, costA: 150, costB: 148, costC: 148 }] };
-    const position = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-02-20 150P', right: 'P', strike: 150, expiry: '2026-02-20', daysLeft: -256, openQty: 1, multiplier: 100, avgCredit: 2, openedAt: '2026-01-02' };
-    const callPosition = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20' };
+    const position = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-02-20 150P', right: 'P', strike: 150, expiry: '2026-02-20', daysLeft: -256, openQty: 1, multiplier: 100, avgCredit: 2, openedAt: '2026-01-02', mark: null, chainStatus: 'missing', chainFetchedAt: null, closeCost: null, unrealizedPnl: null, unrealizedPct: null, collateralReturnPct: null };
+    const callPosition = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20', mark: 0.5, chainStatus: 'delayed', chainFetchedAt: '2026-11-03 15:42:00', closeCost: 50, unrealizedPnl: 50, unrealizedPct: 0.5, collateralReturnPct: null };
     const entry = { id: 'entry', campaignId: 'campaign', symbol: 'TEST', contract: position.contract, right: 'P', multiplier: 100, qty: 1, openQty: 0, openedAt: '2026-01-02', closedAt: '2026-02-20', status: 'closed', premiumGross: 200, fees: 1, closeCost: 324.5, netPremium: -125.5, collateral: 15000, daysHeld: 49, annualizedReturn: -.0623 };
     const state = window as any;
     state.isTauri = true; state.testCalls = []; state.testReject = false;
@@ -42,8 +42,8 @@ async function setup(page: Page) {
         case 'all_holdings_overview': return state.testHoldings ?? {
           asOf: '2026-11-03',
           holdings: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, dividends: 0, startedAt: '2026-01-02' }],
-          options: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, collateral: 0 }],
-          totals: { accountCount: 1, holdingCount: 1, pricedHoldings: 1, unpricedHoldings: 0, totalShares: 100, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 0 },
+          options: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, collateral: 0, mark: 0.5, chainStatus: 'delayed', chainFetchedAt: '2026-11-03 15:42:00', closeCost: 50, unrealizedPnl: 50, unrealizedPct: 0.5, collateralReturnPct: null }],
+          totals: { accountCount: 1, holdingCount: 1, pricedHoldings: 1, unpricedHoldings: 0, totalShares: 100, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 0, optionPricedCount: 1, optionUnpricedCount: 0, optionCloseCost: 50, optionUnrealizedPnl: 50, optionUnrealizedPct: 0.5 },
         };
         case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1 };
         case 'send_test_notification': return null;
@@ -54,9 +54,11 @@ async function setup(page: Page) {
         ];
         case 'positions': return [...(state.testExtraPositions ?? []), { ...position, multiplier: state.testMultiplier ?? position.multiplier }];
         case 'option_chain_status': return state.testChainStatus ?? [{ symbol: 'TEST', source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'delayed', notes: '' }];
+        case 'fetch_option_chain': return { status: { symbol: args.symbol, source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'fresh', notes: '' }, imported: 240, skipped: 0 };
         case 'scan_cost_reduction': return state.testScan ?? {
           campaign: { id: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, unrealizedPnl: 1200, unrealizedPct: 0.0811, premiumRealized: 200, coveredShares: 0, freeShares: 100, cash: 5200, cashTracked: true },
           chainStale: false, scannedQuotes: 24, dropped: 0,
+          filters: { totalQuotes: 24, invalidQuotes: 0, outsideDte: 0, callsDisabled: 0, putsDisabled: 0, missingPrice: 0, illiquid: 0, outsideDelta: 0, belowCost: 0, putStrikeTooHigh: 0, noQuantity: 0, noPremium: 0 },
           candidates: [{
             id: 'cc|2026-12-18|165', kind: 'covered_call',
             legs: [{ side: 'short', expiry: '2026-12-18', strike: 165, right: 'C', qty: 1, price: 2.1, priceSource: 'bid', multiplier: 100 }],
@@ -391,7 +393,7 @@ test('failed write retains values and permits correction', async ({ page }) => {
 test('put and call assignment previews show cash and post-assignment holdings', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => {
-    (window as any).testExtraPositions = [{ campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20' }];
+    (window as any).testExtraPositions = [{ campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20', mark: 0.5, chainStatus: 'delayed', chainFetchedAt: '2026-11-03 15:42:00', closeCost: 50, unrealizedPnl: 50, unrealizedPct: 0.5, collateralReturnPct: null }];
   });
   await page.getByRole('button', { name: '刷新账本', exact: true }).click();
   await page.locator('header').getByRole('button', { name: '记一笔', exact: true }).click();
@@ -1299,12 +1301,13 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
         { accountId: 'acct-2', accountName: '长期账户', campaignId: 'other', symbol: 'OTHER', shares: 50, costA: 100, costB: 99, costC: 98, price: null, marketValue: null, costBasis: null, unrealizedPnl: null, unrealizedPct: null, premiumRealized: 50, premiumOpen: 0, dividends: 0, startedAt: '2026-02-01' },
         { accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, dividends: 0, startedAt: '2026-01-02' },
       ],
-      options: [{ accountId: 'acct-2', accountName: '长期账户', campaignId: 'other', symbol: 'PUT', contract: 'PUT 2026-12-18 50P', right: 'P', strike: 50, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1.5, collateral: 5000 }],
-      totals: { accountCount: 2, holdingCount: 2, pricedHoldings: 1, unpricedHoldings: 1, totalShares: 150, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 250, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 5000 },
+      options: [{ accountId: 'acct-2', accountName: '长期账户', campaignId: 'other', symbol: 'PUT', contract: 'PUT 2026-12-18 50P', right: 'P', strike: 50, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1.5, collateral: 5000, mark: null, chainStatus: 'missing', chainFetchedAt: null, closeCost: null, unrealizedPnl: null, unrealizedPct: null, collateralReturnPct: null }],
+      totals: { accountCount: 2, holdingCount: 2, pricedHoldings: 1, unpricedHoldings: 1, totalShares: 150, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 250, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 5000, optionPricedCount: 0, optionUnpricedCount: 1, optionCloseCost: 0, optionUnrealizedPnl: 0, optionUnrealizedPct: null },
     };
   });
   await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('有 1 个持仓尚无参考价');
+  await expect(page.getByRole('status').filter({ hasText: '有 1 个持仓尚无参考价' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '有 1 个未平仓期权尚无期权报价' })).toBeVisible();
   const unpriced = page.locator('table.holdings-table').first().locator('tbody tr').filter({ hasText: '长期账户' });
   await expect(unpriced).toContainText('无参考价');
   await expect(unpriced).toContainText('已落袋 $50.00');
@@ -1312,9 +1315,52 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
   const optionRow = page.locator('table.holdings-table').nth(1).locator('tbody tr').filter({ hasText: 'PUT 2026-12-18 50P' });
   await expect(optionRow).toContainText('$5,000.00');
   await expect(optionRow).toContainText('45 天');
+  await expect(optionRow).toContainText('无期权报价');
   await optionRow.getByRole('button', { name: '打开战役' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'campaign_detail').at(-1)?.args.accountId)).toBe('acct-2');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('wheel.account'))).toBe('acct-2');
+});
+
+test('all-holdings values open options and refreshes their chain', async ({ page }) => {
+  await setup(page);
+  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  const summary = page.locator('.holdings-summary');
+  await expect(summary).toContainText('期权浮动盈亏');
+  await expect(summary).toContainText('+$50.00');
+  await expect(summary).toContainText('1/1 个合约有报价');
+  const row = page.locator('table.holdings-table').nth(1).locator('tbody tr').filter({ hasText: 'TEST 2026-12-18 160C' });
+  await expect(row).toContainText('$0.50');
+  await expect(row).toContainText('+$50.00');
+  await expect(row).toContainText('平仓 $50.00');
+  await expect(row).toContainText('50.00%');
+  await expect(row).toContainText('延迟');
+  await page.getByRole('button', { name: '更新期权行情', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'fetch_option_chain').length)).toBe(1);
+  const args = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'fetch_option_chain').at(-1)?.args);
+  expect(args.symbol).toBe('TEST');
+  expect(args.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  expect(args.to >= args.from).toBeTruthy();
+});
+
+test('positions page values open options against the chain', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testExtraPositions = [{ campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, openedAt: '2026-02-20', mark: 0.5, chainStatus: 'delayed', chainFetchedAt: '2026-11-03 15:42:00', closeCost: 50, unrealizedPnl: 50, unrealizedPct: 0.5, collateralReturnPct: null }];
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '当前持仓', exact: true }).click();
+  const summary = page.locator('.option-pnl-summary');
+  await expect(summary).toContainText('+$50.00');
+  await expect(summary).toContainText('50.00%');
+  await expect(summary).toContainText('1/2 个合约有报价');
+  const section = page.locator('section').filter({ has: page.getByRole('heading', { name: '未平仓期权' }) });
+  const row = section.locator('tbody tr').filter({ hasText: 'TEST 2026-12-18 160C' });
+  await expect(row).toContainText('$0.50');
+  await expect(row).toContainText('+$50.00');
+  await expect(row).toContainText('平仓 $50.00');
+  await expect(row).toContainText('50.00%');
+  await expect(row).toContainText('延迟');
+  await expect(section.locator('tbody tr').filter({ hasText: 'TEST 2026-02-20 150P' })).toContainText('无期权报价');
 });
 
 test('cost scanner shows projected candidates and prefills entry without writing', async ({ page }) => {
@@ -1336,6 +1382,29 @@ test('cost scanner shows projected candidates and prefills entry without writing
   await expect(page.getByLabel('到期日')).toHaveValue('2026-12-18');
   const writes = await page.evaluate(() => (window as any).testCalls.filter((call: any) => ['add_event', 'add_events'].includes(call.command)).length);
   expect(writes).toBe(0);
+});
+
+test('cost scanner explains why an empty result has no candidates', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testScan = {
+      campaign: { id: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, unrealizedPnl: 1200, unrealizedPct: 0.0811, premiumRealized: 200, coveredShares: 100, freeShares: 0, cash: 0, cashTracked: false },
+      chainStale: true, scannedQuotes: 24, dropped: 0,
+      filters: { totalQuotes: 240, invalidQuotes: 0, outsideDte: 44, callsDisabled: 0, putsDisabled: 0, missingPrice: 0, illiquid: 156, outsideDelta: 0, belowCost: 0, putStrikeTooHigh: 0, noQuantity: 0, noPremium: 0 },
+      candidates: [],
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '降本扫描', exact: true }).click();
+  await page.getByLabel('允许卖出 Put').check();
+  await page.getByRole('button', { name: '扫描', exact: true }).click();
+
+  const reasons = page.locator('.scan-empty-reasons');
+  await expect(reasons).toContainText('可用股数 0');
+  await expect(reasons).toContainText('100 股已被未平仓 Call 覆盖');
+  await expect(reasons).toContainText('流动性过滤');
+  await expect(reasons).toContainText('156 条报价未通过流动性过滤');
+  await expect(reasons).toContainText('44 条报价不在 14–45 天到期窗口内');
+  await expect(reasons).toContainText('没有记录入金 / 出金');
 });
 
 test('settings can check for updates manually and shares the result with the banner', async ({ page }) => {

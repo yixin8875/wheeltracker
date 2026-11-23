@@ -18,6 +18,6 @@ pub mod strategy;
 
 pub use strategy::{
     scan, AssignmentOutcome, CampaignSummary, Candidate, ChainQuote, Flag, Preset, PriceSource,
-    ScanError, ScanInput, ScanOutcome, ScanSettings, Side, StrategyKind, StrategyLeg,
+    ScanError, ScanFilters, ScanInput, ScanOutcome, ScanSettings, Side, StrategyKind, StrategyLeg,
     StressScenario,
 };
