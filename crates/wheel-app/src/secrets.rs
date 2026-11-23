@@ -191,7 +191,11 @@ mod tests {
             OffsetDateTime::now_utc().unix_timestamp_nanos()
         );
         let source = store(&target, "tester", "secret-value");
-        assert_eq!(source, Source::Keychain, "Credential Manager should be available");
+        assert_eq!(
+            source,
+            Source::Keychain,
+            "Credential Manager should be available"
+        );
         let (password, source) = get(&target).expect("stored credential");
         assert_eq!(password, "secret-value");
         assert_eq!(source, Source::Keychain);

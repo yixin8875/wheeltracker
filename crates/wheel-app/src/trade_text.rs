@@ -250,9 +250,18 @@ mod tests {
 
     #[test]
     fn normalizes_month_names_and_plain_dates() {
-        assert_eq!(normalize_any_date("Feb 20, 2026").as_deref(), Some("2026-02-20"));
-        assert_eq!(normalize_any_date("20 FEB 26").as_deref(), Some("2026-02-20"));
-        assert_eq!(normalize_any_date("2026年1月5日").as_deref(), Some("2026-01-05"));
+        assert_eq!(
+            normalize_any_date("Feb 20, 2026").as_deref(),
+            Some("2026-02-20")
+        );
+        assert_eq!(
+            normalize_any_date("20 FEB 26").as_deref(),
+            Some("2026-02-20")
+        );
+        assert_eq!(
+            normalize_any_date("2026年1月5日").as_deref(),
+            Some("2026-01-05")
+        );
         assert_eq!(normalize_any_date("not a date"), None);
     }
 
@@ -273,7 +282,8 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].ends_with(",乘数,备注"));
-        assert!(lines[1].contains("option_open_short,AAPL,1,2,1,2026-02-20,150,P,100,\"note, with comma\""));
+        assert!(lines[1]
+            .contains("option_open_short,AAPL,1,2,1,2026-02-20,150,P,100,\"note, with comma\""));
     }
 
     #[test]

@@ -271,15 +271,15 @@ pub fn get_preferences(conn: &Connection) -> Result<Preferences> {
     if !(1..=100).contains(&auto_backup_keep) {
         bail!("自动备份保留数量必须在 1 到 100 之间");
     }
-    let system_notifications_enabled =
-        match get_setting_value(conn, "systemNotificationsEnabled")? {
-            Some(value) => match value.as_str() {
-                "true" => true,
-                "false" => false,
-                _ => bail!("已保存的系统通知开关无效 `{value}`"),
-            },
-            None => defaults.system_notifications_enabled,
-        };
+    let system_notifications_enabled = match get_setting_value(conn, "systemNotificationsEnabled")?
+    {
+        Some(value) => match value.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => bail!("已保存的系统通知开关无效 `{value}`"),
+        },
+        None => defaults.system_notifications_enabled,
+    };
     let close_to_tray = match get_setting_value(conn, "closeToTray")? {
         Some(value) => match value.as_str() {
             "true" => true,
@@ -506,16 +506,10 @@ fn is_us_eastern_dst(now: time::OffsetDateTime) -> bool {
     now >= start && now < end
 }
 
-fn nth_weekday(
-    year: i32,
-    month: time::Month,
-    weekday: time::Weekday,
-    occurrence: u8,
-) -> Date {
+fn nth_weekday(year: i32, month: time::Month, weekday: time::Weekday, occurrence: u8) -> Date {
     let first = Date::from_calendar_date(year, month, 1).expect("valid first of month");
-    let delta = (weekday.number_days_from_monday() + 7
-        - first.weekday().number_days_from_monday())
-        % 7;
+    let delta =
+        (weekday.number_days_from_monday() + 7 - first.weekday().number_days_from_monday()) % 7;
     Date::from_calendar_date(year, month, 1 + delta + 7 * (occurrence - 1))
         .expect("valid nth weekday")
 }
@@ -597,8 +591,7 @@ pub fn list_events(conn: &Connection, account_id: &str) -> Result<Vec<Event>> {
                 expiry: parse_date(&expiry)?,
                 strike,
                 right: parse_right(&right)?,
-                multiplier: u32::try_from(multiplier.unwrap_or(100))
-                    .context("每手股数无效")?,
+                multiplier: u32::try_from(multiplier.unwrap_or(100)).context("每手股数无效")?,
             }),
             _ => None,
         };
@@ -803,7 +796,8 @@ pub fn delete_events(conn: &Connection, event_ids: &[String]) -> Result<usize> {
     let mut accounts = std::collections::BTreeSet::new();
     let mut found = Vec::new();
     {
-        let mut statement = tx.prepare("SELECT id, account_id FROM events WHERE deleted_at IS NULL")?;
+        let mut statement =
+            tx.prepare("SELECT id, account_id FROM events WHERE deleted_at IS NULL")?;
         let rows = statement.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -822,8 +816,7 @@ pub fn delete_events(conn: &Connection, event_ids: &[String]) -> Result<usize> {
     for account in &accounts {
         let mut remaining = list_events(&tx, account)?;
         remaining.retain(|event| !found_set.contains(&event.id));
-        replay_checked(account, &remaining, get_settings(&tx)?)
-            .context("撤销后的事件历史无效")?;
+        replay_checked(account, &remaining, get_settings(&tx)?).context("撤销后的事件历史无效")?;
     }
     let stamp = time::OffsetDateTime::now_utc().to_string();
     for id in &found {
@@ -1338,7 +1331,11 @@ mod tests {
         assert_eq!(
             delete_events(
                 &conn,
-                &["open".to_string(), "close".to_string(), "missing".to_string()]
+                &[
+                    "open".to_string(),
+                    "close".to_string(),
+                    "missing".to_string()
+                ]
             )
             .unwrap(),
             2
@@ -1431,12 +1428,8 @@ mod tests {
         with_qty.qty = 1;
         assert!(insert_event(&conn, &with_qty).is_err());
 
-        let contract = OptionContract::new(
-            "AAPL",
-            parse_date("2026-02-20").unwrap(),
-            150.0,
-            Right::Put,
-        );
+        let contract =
+            OptionContract::new("AAPL", parse_date("2026-02-20").unwrap(), 150.0, Right::Put);
         let mut with_contract = split.clone();
         with_contract.id = "bad-contract".into();
         with_contract.seq = 2;
@@ -1637,7 +1630,10 @@ mod tests {
             Some("{\"fields\":{}}")
         );
         set_setting_value(&conn, key, "{}").unwrap();
-        assert_eq!(get_setting_value(&conn, key).unwrap().as_deref(), Some("{}"));
+        assert_eq!(
+            get_setting_value(&conn, key).unwrap().as_deref(),
+            Some("{}")
+        );
     }
 
     #[test]
@@ -1720,8 +1716,11 @@ mod tests {
     fn accounts_can_be_listed_created_and_renamed_without_duplicate_names() {
         let conn = db();
         ensure_account(&conn, "main", "默认账户").unwrap();
-        conn.execute("UPDATE accounts SET created_at = '2000-01-01' WHERE id = 'main'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE accounts SET created_at = '2000-01-01' WHERE id = 'main'",
+            [],
+        )
+        .unwrap();
         let accounts = list_accounts(&conn).unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].name, "默认账户");
@@ -1739,7 +1738,10 @@ mod tests {
         assert!(!rename_account(&conn, "missing", "无此账户").unwrap());
         let accounts = list_accounts(&conn).unwrap();
         assert_eq!(
-            accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
+            accounts
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["默认账户", "长期账户"]
         );
     }
@@ -1758,7 +1760,11 @@ mod tests {
         let accounts = list_accounts(&conn).unwrap();
         assert!(accounts.iter().all(|account| account.archived_at.is_none()));
         assert_eq!(
-            accounts.iter().find(|account| account.id == "second").unwrap().event_count,
+            accounts
+                .iter()
+                .find(|account| account.id == "second")
+                .unwrap()
+                .event_count,
             1
         );
         assert_eq!(count_active_accounts(&conn).unwrap(), 2);
@@ -1770,7 +1776,11 @@ mod tests {
         assert!(!set_account_archived(&conn, "missing", true).unwrap());
 
         assert!(set_account_archived(&conn, "second", false).unwrap());
-        assert!(account_record(&conn, "second").unwrap().unwrap().archived_at.is_none());
+        assert!(account_record(&conn, "second")
+            .unwrap()
+            .unwrap()
+            .archived_at
+            .is_none());
 
         assert!(delete_account(&conn, "second").unwrap());
         assert!(account_record(&conn, "second").unwrap().is_none());
@@ -1780,11 +1790,8 @@ mod tests {
     #[test]
     fn trading_date_uses_new_york_time_and_dst() {
         let parse = |value: &str| {
-            time::OffsetDateTime::parse(
-                value,
-                &time::format_description::well_known::Rfc3339,
-            )
-            .unwrap()
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .unwrap()
         };
         // Winter is UTC-5: 04:30Z is still the previous New York date.
         assert_eq!(
@@ -1862,13 +1869,19 @@ mod tests {
         assert_eq!(events[0].symbol, "");
         assert_eq!(events[1].kind, EventKind::CashWithdrawal);
         assert_eq!(kind_to_str(EventKind::CashDeposit), "cash_deposit");
-        assert_eq!(parse_kind("cash_withdrawal").unwrap(), EventKind::CashWithdrawal);
+        assert_eq!(
+            parse_kind("cash_withdrawal").unwrap(),
+            EventKind::CashWithdrawal
+        );
         validate_event(&events[0]).unwrap();
         validate_event(&events[1]).unwrap();
 
         let mut bad = events[0].clone();
         bad.symbol = "AAPL".into();
-        assert!(validate_event(&bad).unwrap_err().to_string().contains("标的"));
+        assert!(validate_event(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("标的"));
         bad = events[0].clone();
         bad.qty = 1;
         assert!(validate_event(&bad).is_err());

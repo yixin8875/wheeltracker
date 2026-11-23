@@ -743,7 +743,16 @@ fn split_aliases_let_the_old_contract_close() {
 fn reverse_split_scales_strike_and_multiplier() {
     let c = call(date!(2026 - 05 - 15), 60.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            50.0,
+            0.0,
+        ),
         Event::sell_option(
             ACCOUNT,
             "e2",
@@ -771,7 +780,16 @@ fn reverse_split_scales_strike_and_multiplier() {
 fn three_for_two_split_keeps_fractional_strike() {
     let c = call(date!(2026 - 05 - 15), 30.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 10.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            10.0,
+            0.0,
+        ),
         Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), c, 1, 1.0, 0.0),
         Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 3, 2, None),
     ];
@@ -790,7 +808,16 @@ fn three_for_two_split_keeps_fractional_strike() {
 fn non_integral_option_split_is_rejected() {
     let c = call(date!(2026 - 05 - 15), 30.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 10.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            10.0,
+            0.0,
+        ),
         Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), c, 1, 1.0, 0.0),
         Event::stock_split(ACCOUNT, "e3", 3, date!(2026 - 03 - 01), "AAPL", 4, 3, None),
     ];
@@ -856,7 +883,16 @@ fn fractional_split_needs_cash_in_lieu_and_books_it() {
 fn consecutive_splits_follow_the_alias_chain() {
     let c = call(date!(2026 - 06 - 19), 200.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            50.0,
+            0.0,
+        ),
         Event::sell_option(
             ACCOUNT,
             "e2",
@@ -884,7 +920,16 @@ fn consecutive_splits_follow_the_alias_chain() {
 fn backfilled_split_applies_before_a_later_dated_close() {
     let c = call(date!(2026 - 05 - 15), 110.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            50.0,
+            0.0,
+        ),
         Event::sell_option(
             ACCOUNT,
             "e2",
@@ -910,7 +955,16 @@ fn backfilled_split_applies_before_a_later_dated_close() {
 #[test]
 fn one_for_one_split_is_a_no_op() {
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            50.0,
+            0.0,
+        ),
         Event::stock_split(ACCOUNT, "e2", 2, date!(2026 - 02 - 01), "AAPL", 1, 1, None),
     ];
     let state = run(&events);
@@ -941,7 +995,16 @@ fn split_without_a_campaign_is_recorded_as_a_note() {
 fn opening_a_pre_split_contract_after_the_split_is_rejected() {
     let c = call(date!(2026 - 05 - 15), 110.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 50.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            50.0,
+            0.0,
+        ),
         Event::sell_option(
             ACCOUNT,
             "e2",
@@ -967,7 +1030,16 @@ fn cash_transfers_track_account_cash_without_creating_campaigns() {
     let p = put(date!(2026 - 02 - 20), 150.0);
     let events = vec![
         Event::cash_deposit(ACCOUNT, "e1", 1, date!(2026 - 01 - 02), 20_000.0),
-        Event::buy_shares(ACCOUNT, "e2", 2, date!(2026 - 01 - 05), "AAPL", 100, 150.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            150.0,
+            0.0,
+        ),
         Event::sell_option(ACCOUNT, "e3", 3, date!(2026 - 01 - 06), p, 1, 2.0, 0.0),
         Event::cash_withdrawal(ACCOUNT, "e4", 4, date!(2026 - 01 - 10), 500.0),
     ];
@@ -1011,8 +1083,26 @@ fn cash_transfer_requires_a_positive_amount() {
 fn cash_transfers_do_not_change_campaign_cost_basis_or_premium() {
     let p = put(date!(2026 - 02 - 20), 150.0);
     let events = vec![
-        Event::buy_shares(ACCOUNT, "e1", 1, date!(2026 - 01 - 05), "AAPL", 100, 150.0, 0.0),
-        Event::sell_option(ACCOUNT, "e2", 2, date!(2026 - 01 - 06), p.clone(), 1, 2.0, 0.0),
+        Event::buy_shares(
+            ACCOUNT,
+            "e1",
+            1,
+            date!(2026 - 01 - 05),
+            "AAPL",
+            100,
+            150.0,
+            0.0,
+        ),
+        Event::sell_option(
+            ACCOUNT,
+            "e2",
+            2,
+            date!(2026 - 01 - 06),
+            p.clone(),
+            1,
+            2.0,
+            0.0,
+        ),
         Event::cash_deposit(ACCOUNT, "e3", 3, date!(2026 - 01 - 07), 15_000.0),
         Event::assign_option(ACCOUNT, "e4", 4, date!(2026 - 02 - 20), p.clone(), 1, 0.0),
     ];

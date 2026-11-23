@@ -830,15 +830,14 @@ impl Builder {
                     .map(|position| &position.contract),
             )
         {
-            let next =
-                adjusted_contract(contract, terms).ok_or_else(|| {
-                    EngineError::NonIntegralOptionAdjustment {
-                        event: event.id.clone(),
-                        contract: contract.display(),
-                        numerator: terms.numerator,
-                        denominator: terms.denominator,
-                    }
-                })?;
+            let next = adjusted_contract(contract, terms).ok_or_else(|| {
+                EngineError::NonIntegralOptionAdjustment {
+                    event: event.id.clone(),
+                    contract: contract.display(),
+                    numerator: terms.numerator,
+                    denominator: terms.denominator,
+                }
+            })?;
             adjusted.insert(contract.id(), next);
         }
 

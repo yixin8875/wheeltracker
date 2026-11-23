@@ -427,7 +427,10 @@ impl fmt::Display for Event {
                 write!(
                     f,
                     "{} split {} {}:{} cash_in_lieu={:?}",
-                    self.occurred_at, self.symbol, terms.numerator, terms.denominator,
+                    self.occurred_at,
+                    self.symbol,
+                    terms.numerator,
+                    terms.denominator,
                     terms.cash_in_lieu
                 )
             }

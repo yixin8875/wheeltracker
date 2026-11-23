@@ -122,9 +122,7 @@ fn magic_matches(bytes: &[u8], mime: &str) -> bool {
         "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
         "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        "image/webp" => {
-            bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP"
-        }
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
         _ => false,
     }
 }
@@ -159,7 +157,10 @@ pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     let normalized = url.to_string();
     let normalized = normalized.trim_end_matches('/');
     if normalized.ends_with("/chat/completions") {
-        return Err("请填写 API 根地址（例如 https://api.openai.com/v1），不要包含 /chat/completions。".to_string());
+        return Err(
+            "请填写 API 根地址（例如 https://api.openai.com/v1），不要包含 /chat/completions。"
+                .to_string(),
+        );
     }
     Ok(normalized.to_string())
 }
@@ -242,11 +243,7 @@ Rules:
 - If there are no executed trades, return {"trades":[],"warnings":["..."]}.
 - Do not use Markdown and do not write any text outside the JSON object."#;
 
-pub async fn extract(
-    config: &VisionConfig,
-    data: &str,
-    mime: &str,
-) -> Result<Extraction, String> {
+pub async fn extract(config: &VisionConfig, data: &str, mime: &str) -> Result<Extraction, String> {
     let base_url = normalize_base_url(&config.base_url)?;
     let model = validate_model(&config.model)?;
     let api_key = validate_api_key(&config.api_key)?;
@@ -417,7 +414,9 @@ pub(crate) fn to_extraction(
     model: &str,
 ) -> Result<Extraction, String> {
     if values.len() > MAX_TRADES {
-        return Err(format!("单次最多识别 {MAX_TRADES} 笔交易，请缩小截图范围。"));
+        return Err(format!(
+            "单次最多识别 {MAX_TRADES} 笔交易，请缩小截图范围。"
+        ));
     }
     let mut warnings = model_warnings;
     let mut trades = Vec::new();
@@ -514,8 +513,7 @@ fn normalize_trade(trade: &ModelTrade, model: &str) -> Result<ExtractedTrade, St
     let option_kind = kind.starts_with("option_");
     let expiry = value_text(&trade.expiry)
         .map(|raw| {
-            trade_text::normalize_any_date(&raw)
-                .ok_or_else(|| format!("无法识别到期日 `{raw}`"))
+            trade_text::normalize_any_date(&raw).ok_or_else(|| format!("无法识别到期日 `{raw}`"))
         })
         .transpose()?;
     let strike = value_number(&trade.strike).filter(|value| *value != 0.0);
@@ -662,9 +660,7 @@ fn normalize_kind(raw: &str) -> Result<&'static str, String> {
         "shares_buy" | "buy" | "bought" | "stock_buy" | "buy_shares" => Ok("shares_buy"),
         "shares_sell" | "sell" | "sold" | "stock_sell" | "sell_shares" => Ok("shares_sell"),
         "dividend" | "cash_dividend" => Ok("dividend"),
-        "buy_to_open" | "bto" | "sell_to_close" | "stc" => {
-            Err("暂不支持做多期权操作".to_string())
-        }
+        "buy_to_open" | "bto" | "sell_to_close" | "stc" => Err("暂不支持做多期权操作".to_string()),
         _ => Err(format!("不支持的交易类型 `{raw}`")),
     }
 }
@@ -849,10 +845,7 @@ mod tests {
             "choices": [{ "finish_reason": "stop", "message": { "content": "{\"trades\":[]}" } }]
         })
         .to_string();
-        assert_eq!(
-            completion_content(&string_body).unwrap(),
-            "{\"trades\":[]}"
-        );
+        assert_eq!(completion_content(&string_body).unwrap(), "{\"trades\":[]}");
         let array_body = json!({
             "choices": [{
                 "finish_reason": "stop",
@@ -860,10 +853,7 @@ mod tests {
             }]
         })
         .to_string();
-        assert_eq!(
-            completion_content(&array_body).unwrap(),
-            "{\"trades\":[]}"
-        );
+        assert_eq!(completion_content(&array_body).unwrap(), "{\"trades\":[]}");
         let truncated = json!({
             "choices": [{ "finish_reason": "length", "message": { "content": "{}" } }]
         })
@@ -939,7 +929,10 @@ mod tests {
         let mut bad_date = option_trade();
         bad_date["date"] = json!("2026-02-30");
         let error = to_extraction(vec![bad_date], Vec::new(), "gpt-4o").unwrap_err();
-        assert!(error.contains("无法识别交易日期") || error.contains("日期"), "{error}");
+        assert!(
+            error.contains("无法识别交易日期") || error.contains("日期"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -956,17 +949,13 @@ mod tests {
         assert_eq!(extraction.trades[0].amount, 75.0);
         assert_eq!(extraction.trades[0].kind, "dividend");
 
-        let extraction = to_extraction(
-            vec![option_trade(), option_trade()],
-            Vec::new(),
-            "gpt-4o",
-        )
-        .unwrap();
+        let extraction =
+            to_extraction(vec![option_trade(), option_trade()], Vec::new(), "gpt-4o").unwrap();
         assert_eq!(extraction.trades.len(), 1);
         assert!(extraction.warnings[0].contains("重复"));
 
-        let error = to_extraction(vec![json!({}); MAX_TRADES + 1], Vec::new(), "gpt-4o")
-            .unwrap_err();
+        let error =
+            to_extraction(vec![json!({}); MAX_TRADES + 1], Vec::new(), "gpt-4o").unwrap_err();
         assert!(error.contains("最多识别"));
     }
 

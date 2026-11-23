@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use time::macros::format_description;
 use time::format_description::FormatItem;
+use time::macros::format_description;
 use time::{Date, Month};
 use wheel_core::Event;
 
@@ -421,7 +421,14 @@ const ALIASES: &[(Field, &[&str])] = &[
     ),
     (
         Field::Kind,
-        &["kind", "event", "event type", "类型", "交易类型", "事件类型"],
+        &[
+            "kind",
+            "event",
+            "event type",
+            "类型",
+            "交易类型",
+            "事件类型",
+        ],
     ),
     (
         Field::Action,
@@ -669,9 +676,7 @@ pub fn parse_date_cell(raw: &str, format: DateFormat) -> Result<(String, Option<
     if text.is_empty() {
         return Err("缺少日期".to_string());
     }
-    let chinese = text
-        .replace(['年', '月'], "-")
-        .replace(['日', ' '], "");
+    let chinese = text.replace(['年', '月'], "-").replace(['日', ' '], "");
     let hyphen = format_description!("[year]-[month]-[day]");
     let hyphen_any = format_description!("[year]-[month padding:none]-[day padding:none]");
     let slash = format_description!("[year]/[month padding:none]/[day padding:none]");
@@ -702,7 +707,10 @@ pub fn parse_date_cell(raw: &str, format: DateFormat) -> Result<(String, Option<
             } else if let Some(date) = attempt(&chinese, hyphen_any) {
                 (Some(date), None)
             } else if let Some(date) = attempt(text, american) {
-                (Some(date), Some("按月/日/年解析日期，请确认无误。".to_string()))
+                (
+                    Some(date),
+                    Some("按月/日/年解析日期，请确认无误。".to_string()),
+                )
             } else {
                 (None, None)
             }
@@ -849,8 +857,8 @@ pub fn kind_from_action(text: &str, _has_contract: bool) -> ActionResult {
         }
         "fee" | "fees" | "commission" | "费用" | "手续费" | "佣金" | "利息" => Some("fee"),
         "adjustment" | "adjust" | "调整" | "现金调整" => Some("adjustment"),
-        "cash_deposit" | "deposit" | "cash deposit" | "transfer in" | "入金" | "存入"
-        | "存款" | "转入" => Some("cash_deposit"),
+        "cash_deposit" | "deposit" | "cash deposit" | "transfer in" | "入金" | "存入" | "存款"
+        | "转入" => Some("cash_deposit"),
         "cash_withdrawal" | "withdrawal" | "withdraw" | "cash withdrawal" | "transfer out"
         | "出金" | "取出" | "取款" | "转出" => Some("cash_withdrawal"),
         "buy to open" | "bto" | "买入开仓" | "sell to close" | "stc" | "卖出平仓" => {
@@ -902,10 +910,7 @@ pub fn parse_document(
     has_header: Option<bool>,
 ) -> Result<ParsedDocument, String> {
     if text.len() > MAX_TEXT_BYTES {
-        return Err(format!(
-            "CSV 超过 {} MB 上限",
-            MAX_TEXT_BYTES / 1024 / 1024
-        ));
+        return Err(format!("CSV 超过 {} MB 上限", MAX_TEXT_BYTES / 1024 / 1024));
     }
     let delimiter = delimiter.unwrap_or_else(|| detect_delimiter(text));
     let records = parse_csv(text, delimiter.as_char())?;
@@ -1158,10 +1163,7 @@ pub fn normalize_row(
     };
     let parsed_multiplier = match optional_number(cells, mapping, Field::Multiplier) {
         Some(raw) => match parse_number(&raw) {
-            Ok(value)
-                if value.fract().abs() < 1e-9
-                    && (1.0..=1_000_000.0).contains(&value) =>
-            {
+            Ok(value) if value.fract().abs() < 1e-9 && (1.0..=1_000_000.0).contains(&value) => {
                 value as u32
             }
             Ok(_) => {
@@ -1609,9 +1611,7 @@ mod tests {
     #[test]
     fn date_parser_accepts_iso_slash_chinese_and_flags_us_order() {
         assert_eq!(
-            parse_date_cell("2026-01-02", DateFormat::Auto)
-                .unwrap()
-                .0,
+            parse_date_cell("2026-01-02", DateFormat::Auto).unwrap().0,
             "2026-01-02"
         );
         assert_eq!(
@@ -1699,17 +1699,7 @@ mod tests {
         let mut mapping = mapping();
         mapping.fields.remove(&Field::Price);
         mapping.fields.insert(Field::Amount, 4);
-        let cells = row(&[
-            "2026-01-02",
-            "入金",
-            "",
-            "0",
-            "10,000.50",
-            "0",
-            "",
-            "",
-            "",
-        ]);
+        let cells = row(&["2026-01-02", "入金", "", "0", "10,000.50", "0", "", "", ""]);
         let parsed = normalize_row(1, 2, &cells, &mapping);
         assert_eq!(parsed.status, RowStatus::Ok);
         let event = parsed.event.unwrap();
@@ -1744,13 +1734,19 @@ mod tests {
         let cells = row(&["2026-01-04", "Deposit", "", "0", "-100", "0", "", "", ""]);
         let parsed = normalize_row(3, 4, &cells, &mapping);
         assert_eq!(parsed.status, RowStatus::Error);
-        assert!(parsed.messages.iter().any(|message| message.contains("不能为负数")));
+        assert!(parsed
+            .messages
+            .iter()
+            .any(|message| message.contains("不能为负数")));
 
         // Missing amount is an error.
         let cells = row(&["2026-01-05", "Deposit", "", "0", "", "0", "", "", ""]);
         let parsed = normalize_row(4, 5, &cells, &mapping);
         assert_eq!(parsed.status, RowStatus::Error);
-        assert!(parsed.messages.iter().any(|message| message.contains("需要金额")));
+        assert!(parsed
+            .messages
+            .iter()
+            .any(|message| message.contains("需要金额")));
     }
 
     #[test]
@@ -2004,7 +2000,9 @@ mod tests {
             3.0,
             0.0,
         );
-        let existing: BTreeSet<String> = [fingerprint_existing(&existing_event)].into_iter().collect();
+        let existing: BTreeSet<String> = [fingerprint_existing(&existing_event)]
+            .into_iter()
+            .collect();
         let preview = build_preview(&document, mapping, "detected", "main", &existing);
         assert_eq!(preview.counts.total, 3);
         assert_eq!(preview.counts.duplicate, 2);

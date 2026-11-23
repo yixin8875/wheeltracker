@@ -22,8 +22,7 @@ fn erf(x: f64) -> f64 {
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
     let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = ((((1.061_405_429 * t - 1.453_152_027) * t + 1.421_413_741) * t
-        - 0.284_496_736)
+    let poly = ((((1.061_405_429 * t - 1.453_152_027) * t + 1.421_413_741) * t - 0.284_496_736)
         * t
         + 0.254_829_592)
         * t;
@@ -42,8 +41,8 @@ fn d1_d2(
         return None;
     }
     let sqrt_t = years.sqrt();
-    let d1 = ((spot / strike).ln() + (rate - dividend_yield + 0.5 * vol * vol) * years)
-        / (vol * sqrt_t);
+    let d1 =
+        ((spot / strike).ln() + (rate - dividend_yield + 0.5 * vol * vol) * years) / (vol * sqrt_t);
     Some((d1, d1 - vol * sqrt_t))
 }
 
@@ -63,7 +62,9 @@ pub fn price(
     let discount_yield = (-dividend_yield * years).exp();
     Some(match right {
         Right::Call => spot * discount_yield * norm_cdf(d1) - strike * discount_rate * norm_cdf(d2),
-        Right::Put => strike * discount_rate * norm_cdf(-d2) - spot * discount_yield * norm_cdf(-d1),
+        Right::Put => {
+            strike * discount_rate * norm_cdf(-d2) - spot * discount_yield * norm_cdf(-d1)
+        }
     })
 }
 

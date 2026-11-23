@@ -332,7 +332,8 @@ mod tests {
         put_on(&conn, "today", 1, store::today());
         let sent = RefCell::new(Vec::new());
         let first = check_and_notify(&conn, |title, body| {
-            sent.borrow_mut().push((title.to_string(), body.to_string()));
+            sent.borrow_mut()
+                .push((title.to_string(), body.to_string()));
             Ok(())
         })
         .unwrap();
@@ -370,12 +371,9 @@ mod tests {
         store::set_setting_value(&conn, LOG_KEY, &serde_json::to_string(&log).unwrap()).unwrap();
 
         check_and_notify(&conn, |_, _| Ok(())).unwrap();
-        let stored: BTreeMap<String, String> = serde_json::from_str(
-            &store::get_setting_value(&conn, LOG_KEY)
-                .unwrap()
-                .unwrap(),
-        )
-        .unwrap();
+        let stored: BTreeMap<String, String> =
+            serde_json::from_str(&store::get_setting_value(&conn, LOG_KEY).unwrap().unwrap())
+                .unwrap();
         assert!(!stored.contains_key("old|AAPL 150P|2020-01-01|overdue"));
         assert_eq!(stored.len(), 1);
     }

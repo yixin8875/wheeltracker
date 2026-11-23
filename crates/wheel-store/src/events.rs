@@ -64,10 +64,7 @@ pub fn next_event_id(seq: u64) -> String {
 
 /// Validates a batch of requests and assigns each one the next sequence number
 /// of its account. Rows are written in one transaction by `insert_events`.
-pub fn append_requests(
-    conn: &Connection,
-    reqs: Vec<NewEventReq>,
-) -> Result<Vec<String>, String> {
+pub fn append_requests(conn: &Connection, reqs: Vec<NewEventReq>) -> Result<Vec<String>, String> {
     if reqs.is_empty() {
         return Err("至少需要一笔交易。".to_string());
     }
@@ -96,7 +93,12 @@ pub fn append_requests(
     Ok(ids)
 }
 
-pub fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> Result<Event, String> {
+pub fn build_event(
+    req: &NewEventReq,
+    account_id: &str,
+    id: &str,
+    seq: u64,
+) -> Result<Event, String> {
     let at = store::parse_date(&req.date).map_err(|error| error.to_string())?;
     let cash_transfer = matches!(req.kind.as_str(), "cash_deposit" | "cash_withdrawal");
     let symbol = if cash_transfer {
@@ -113,9 +115,7 @@ pub fn build_event(req: &NewEventReq, account_id: &str, id: &str, seq: u64) -> R
         || req.fees < 0.0
         || !req.amount.is_finite()
     {
-        return Err(
-            "价格与费用必须为有限的非负数，金额必须为有限数。".to_string(),
-        );
+        return Err("价格与费用必须为有限的非负数，金额必须为有限数。".to_string());
     }
     let contract = match (&req.expiry, req.strike, &req.right) {
         (None, None, None) => None,

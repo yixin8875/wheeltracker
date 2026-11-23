@@ -261,8 +261,7 @@ pub fn apply_pending(data_dir: &Path, stamp: i128) -> Result<Option<RestoreResul
         .context("read restore marker")
         .and_then(|bytes| {
             serde_json::from_slice::<PendingRestore>(&bytes).context("parse restore marker")
-        })
-    {
+        }) {
         Ok(pending) if matches!(pending.version, 1 | 2) => pending,
         Ok(pending) => {
             let result = RestoreResult {
@@ -332,13 +331,7 @@ pub fn apply_pending(data_dir: &Path, stamp: i128) -> Result<Option<RestoreResul
             }
         }
         (2, _) => {
-            return fail_restore(
-                data_dir,
-                &pending,
-                stamp,
-                "恢复标记缺少暂存副本".into(),
-            )
-            .map(Some)
+            return fail_restore(data_dir, &pending, stamp, "恢复标记缺少暂存副本".into()).map(Some)
         }
         _ => None,
     };
@@ -498,11 +491,7 @@ mod tests {
         store::insert_event(&conn, &buy("keep")).unwrap();
         let backups = directory.join(backup::BACKUP_DIR);
         let snapshot = backup::create(&conn, &backups, "wheel-", 10).unwrap();
-        let file_name = snapshot
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
         let original = std::fs::read(&db_path).unwrap();
         let pending = stage_with_password(&conn, &directory, &file_name, 11, None).unwrap();
         assert_eq!(pending.backup_file, file_name);
@@ -531,11 +520,7 @@ mod tests {
         store::insert_event(&conn, &buy("restored-event")).unwrap();
         let backups = directory.join(backup::BACKUP_DIR);
         let snapshot = backup::create(&conn, &backups, "wheel-", 20).unwrap();
-        let file_name = snapshot
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
         store::delete_event(&conn, "restored-event").unwrap();
         let mut live_only = buy("live-only");
         live_only.seq = 2;
@@ -571,11 +556,7 @@ mod tests {
         store::insert_event(&conn, &buy("live")).unwrap();
         let backups = directory.join(backup::BACKUP_DIR);
         let snapshot = backup::create(&conn, &backups, "wheel-", 30).unwrap();
-        let file_name = snapshot
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
         stage_with_password(&conn, &directory, &file_name, 31, None).unwrap();
         drop(conn);
         std::fs::write(&snapshot, b"corrupted after staging").unwrap();
@@ -603,21 +584,12 @@ mod tests {
         let backups = directory.join(backup::BACKUP_DIR);
         let snapshot =
             backup::create_encrypted(&conn, &backups, "wheel-", 50, "correct horse").unwrap();
-        let file_name = snapshot
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
         store::delete_event(&conn, "restored").unwrap();
 
-        assert!(stage_with_password(
-            &conn,
-            &directory,
-            &file_name,
-            51,
-            Some("wrong password")
-        )
-        .is_err());
+        assert!(
+            stage_with_password(&conn, &directory, &file_name, 51, Some("wrong password")).is_err()
+        );
         assert!(stage_with_password(&conn, &directory, &file_name, 52, None).is_err());
         assert!(!is_pending(&directory).unwrap());
 
@@ -627,9 +599,11 @@ mod tests {
         let staged_name = pending.staged_file.clone().unwrap();
         let staged_path = restore_dir(&directory).join(&staged_name);
         assert!(staged_path.is_file());
-        assert!(backup::validate(&restore_dir(&directory), &staged_name)
-            .unwrap()
-            .valid);
+        assert!(
+            backup::validate(&restore_dir(&directory), &staged_name)
+                .unwrap()
+                .valid
+        );
         assert_eq!(store::count_events(&conn, "main").unwrap(), 0);
         drop(conn);
 
@@ -651,11 +625,7 @@ mod tests {
         let backups = directory.join(backup::BACKUP_DIR);
         let snapshot =
             backup::create_encrypted(&conn, &backups, "wheel-", 60, "correct horse").unwrap();
-        let file_name = snapshot
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
         let pending =
             stage_with_password(&conn, &directory, &file_name, 61, Some("correct horse")).unwrap();
         drop(conn);

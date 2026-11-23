@@ -141,7 +141,14 @@ mod tests {
     use super::*;
 
     fn encrypted(plain: &[u8]) -> Vec<u8> {
-        encrypt_with(plain, "correct horse", 1_000, &[7u8; SALT_LEN], &[9u8; NONCE_LEN]).unwrap()
+        encrypt_with(
+            plain,
+            "correct horse",
+            1_000,
+            &[7u8; SALT_LEN],
+            &[9u8; NONCE_LEN],
+        )
+        .unwrap()
     }
 
     #[test]

@@ -543,11 +543,16 @@ mod tests {
         assert!(!validation.issues.is_empty());
 
         let empty = Connection::open(backups.join("wheel-empty.sqlite")).unwrap();
-        empty.execute_batch("CREATE TABLE unrelated (id TEXT);").unwrap();
+        empty
+            .execute_batch("CREATE TABLE unrelated (id TEXT);")
+            .unwrap();
         drop(empty);
         let validation = validate(&backups, "wheel-empty.sqlite").unwrap();
         assert!(!validation.valid);
-        assert!(validation.issues.iter().any(|issue| issue.contains("settings")));
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.contains("settings")));
         drop(conn);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -577,12 +582,7 @@ mod tests {
         let plaintext_left = std::fs::read_dir(&backups)
             .unwrap()
             .flatten()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .ends_with(".sqlite")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".sqlite"))
             .count();
         assert_eq!(plaintext_left, 0, "plaintext snapshot must be removed");
         let listed = list(&backups).unwrap();
