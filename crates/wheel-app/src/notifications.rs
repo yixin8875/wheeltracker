@@ -6,7 +6,7 @@
 //! contract notifies once when it enters the soon window, once within three
 //! days, once on expiry day and once after it is overdue.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -14,14 +14,17 @@ use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
 use time::Duration;
 
+use crate::insights::{self, InsightView};
 use crate::store;
 use crate::views;
 
 const LOG_KEY: &str = "expiryNotificationLog";
+const ALERT_LOG_KEY: &str = "alertNotificationLog";
 const LOG_RETENTION_DAYS: i64 = 90;
 const LOG_MAX_ENTRIES: usize = 500;
 const TRAY_ID: &str = "main";
 const NOTIFICATION_TITLE: &str = "Wheel Tracker · 到期提醒";
+const ALERT_TITLE: &str = "Wheel Tracker · 条件提醒";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +49,10 @@ pub struct CheckSummary {
     pub soon: u32,
     pub total: u32,
     pub notified: u32,
+    /// Conditional alerts that are currently firing.
+    pub alerts: u32,
+    /// Conditional alerts sent by this check.
+    pub alert_notified: u32,
 }
 
 pub struct Scan {
@@ -139,6 +146,24 @@ fn save_log(conn: &Connection, log: &BTreeMap<String, String>) -> Result<()> {
     store::set_setting_value(conn, LOG_KEY, &raw)
 }
 
+fn load_alert_log(conn: &Connection) -> Result<BTreeMap<String, String>> {
+    let Some(raw) = store::get_setting_value(conn, ALERT_LOG_KEY)? else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+fn save_alert_log(conn: &Connection, log: &BTreeMap<String, String>) -> Result<()> {
+    let cutoff = (store::today() - Duration::days(LOG_RETENTION_DAYS)).to_string();
+    let kept: BTreeMap<String, String> = log
+        .iter()
+        .filter(|(_, sent_on)| sent_on.as_str() >= cutoff.as_str())
+        .map(|(key, sent_on)| (key.clone(), sent_on.clone()))
+        .collect();
+    let raw = serde_json::to_string(&kept)?;
+    store::set_setting_value(conn, ALERT_LOG_KEY, &raw)
+}
+
 fn log_key(item: &DueContract, lead_days: i64) -> String {
     format!(
         "{}|{}|{}|{}",
@@ -159,6 +184,24 @@ fn day_label(days_left: i64) -> String {
     }
 }
 
+fn alert_body(items: &[InsightView]) -> String {
+    let detail = items
+        .iter()
+        .take(3)
+        .map(|item| match &item.contract {
+            Some(contract) => format!("{contract} {}", item.title),
+            None => format!("{} {}", item.symbol, item.title),
+        })
+        .collect::<Vec<_>>()
+        .join("；");
+    let suffix = if items.len() > 3 {
+        format!("；另有 {} 条", items.len() - 3)
+    } else {
+        String::new()
+    };
+    format!("{detail}{suffix}。打开应用查看今日待办。")
+}
+
 fn notification_body(items: &[DueContract], summary: &CheckSummary) -> String {
     let detail = items
         .iter()
@@ -177,42 +220,82 @@ fn notification_body(items: &[DueContract], summary: &CheckSummary) -> String {
     )
 }
 
-/// Scan, send at most one aggregated notification for newly phased contracts,
-/// then remember what was sent. `send` is injected so the tests can observe it.
-pub fn check_and_notify<F>(conn: &Connection, send: F) -> Result<CheckSummary>
+/// Scan, send at most one aggregated notification per newly phased contract
+/// and one for newly firing conditional alerts, then remember what was sent.
+/// `send` is injected so the tests can observe it.
+pub fn check_and_notify<F>(conn: &Connection, mut send: F) -> Result<CheckSummary>
 where
-    F: FnOnce(&str, &str) -> Result<(), String>,
+    F: FnMut(&str, &str) -> Result<(), String>,
 {
     let preferences = store::get_preferences(conn)?;
     let scan = scan(conn, preferences.reminder_lead_days)?;
     let mut summary = scan.summary;
-    if !preferences.system_notifications_enabled || scan.due.is_empty() {
+    if !preferences.system_notifications_enabled {
         return Ok(summary);
     }
 
-    let log = load_log(conn)?;
-    let fresh: Vec<DueContract> = scan
-        .due
+    if !scan.due.is_empty() {
+        let log = load_log(conn)?;
+        let fresh: Vec<DueContract> = scan
+            .due
+            .iter()
+            .filter(|item| !log.contains_key(&log_key(item, preferences.reminder_lead_days)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            send(NOTIFICATION_TITLE, &notification_body(&fresh, &summary))
+                .map_err(|error| anyhow::anyhow!(error))
+                .context("发送系统通知失败")?;
+
+            let mut updated = log;
+            let today = store::today().to_string();
+            for item in &fresh {
+                updated.insert(log_key(item, preferences.reminder_lead_days), today.clone());
+            }
+            save_log(conn, &updated)?;
+            summary.notified = fresh.len() as u32;
+        }
+    }
+
+    notify_alerts(conn, &mut send, &mut summary)?;
+    Ok(summary)
+}
+
+/// Conditional alerts use the same once-per-condition contract as expiry
+/// reminders. The log is pruned to conditions still firing, so a condition
+/// that resolves and later returns can notify again.
+fn notify_alerts<F>(conn: &Connection, send: &mut F, summary: &mut CheckSummary) -> Result<()>
+where
+    F: FnMut(&str, &str) -> Result<(), String>,
+{
+    let rules = insights::load_rules(conn)?;
+    let alerts = insights::conditional(conn, rules)?;
+    summary.alerts = alerts.len() as u32;
+
+    let active: BTreeSet<&str> = alerts.iter().map(|item| item.id.as_str()).collect();
+    let mut updated: BTreeMap<String, String> = load_alert_log(conn)?
+        .into_iter()
+        .filter(|(key, _)| active.contains(key.as_str()))
+        .collect();
+
+    let fresh: Vec<InsightView> = alerts
         .iter()
-        .filter(|item| !log.contains_key(&log_key(item, preferences.reminder_lead_days)))
+        .filter(|item| !updated.contains_key(&item.id))
         .cloned()
         .collect();
-    if fresh.is_empty() {
-        return Ok(summary);
+    if !fresh.is_empty() {
+        send(ALERT_TITLE, &alert_body(&fresh))
+            .map_err(|error| anyhow::anyhow!(error))
+            .context("发送条件提醒失败")?;
+        let today = store::today().to_string();
+        for item in &fresh {
+            updated.insert(item.id.clone(), today.clone());
+        }
+        summary.alert_notified = fresh.len() as u32;
     }
-
-    send(NOTIFICATION_TITLE, &notification_body(&fresh, &summary))
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("发送系统通知失败")?;
-
-    let mut updated = log;
-    let today = store::today().to_string();
-    for item in &fresh {
-        updated.insert(log_key(item, preferences.reminder_lead_days), today.clone());
-    }
-    save_log(conn, &updated)?;
-    summary.notified = fresh.len() as u32;
-    Ok(summary)
+    // Save even when nothing is fresh: this records the prune.
+    save_alert_log(conn, &updated)?;
+    Ok(())
 }
 
 pub fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
@@ -225,12 +308,24 @@ pub fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), Strin
 }
 
 pub fn update_tray_tooltip(app: &tauri::AppHandle, summary: &CheckSummary) {
-    let tooltip = if summary.total == 0 {
-        "Wheel Tracker · 无到期提醒".to_string()
+    let tooltip = if summary.total == 0 && summary.alerts == 0 {
+        "Wheel Tracker · 无提醒".to_string()
+    } else if summary.total == 0 {
+        format!("Wheel Tracker · {} 个条件提醒", summary.alerts)
     } else if summary.overdue > 0 {
-        format!(
+        let base = format!(
             "Wheel Tracker · {} 个到期提醒（{} 个已过期）",
             summary.total, summary.overdue
+        );
+        if summary.alerts > 0 {
+            format!("{base}，{} 个条件提醒", summary.alerts)
+        } else {
+            base
+        }
+    } else if summary.alerts > 0 {
+        format!(
+            "Wheel Tracker · {} 个到期提醒，{} 个条件提醒",
+            summary.total, summary.alerts
         )
     } else {
         format!("Wheel Tracker · {} 个到期提醒", summary.total)
@@ -386,5 +481,96 @@ mod tests {
         let error = check_and_notify(&conn, |_, _| Err("toast unavailable".into())).unwrap_err();
         assert!(format!("{error:#}").contains("toast unavailable"));
         assert!(store::get_setting_value(&conn, LOG_KEY).unwrap().is_none());
+    }
+
+    fn mark(conn: &Connection, strike: f64, mark: f64) {
+        let expiry = store::today() + Duration::days(5);
+        let snapshot = crate::option_chain::ChainSnapshot {
+            symbol: "AAPL".to_string(),
+            source: "test".to_string(),
+            as_of: "2026-01-02 00:00:00".to_string(),
+            fetched_at: "2026-01-02 00:00:00".to_string(),
+            underlying: Some(100.0),
+            notes: String::new(),
+        };
+        let quote = crate::option_chain::OptionQuote {
+            symbol: "AAPL".to_string(),
+            expiry,
+            strike,
+            right: Right::Put,
+            bid: Some(mark),
+            ask: Some(mark),
+            last: None,
+            mark: Some(mark),
+            iv: None,
+            delta: None,
+            gamma: None,
+            theta: None,
+            vega: None,
+            open_interest: Some(100),
+            volume: Some(1),
+            multiplier: 100,
+        };
+        crate::option_chain::replace(conn, &snapshot, &[quote]).unwrap();
+    }
+
+    #[test]
+    fn conditional_alerts_notify_once_and_rearm_after_resolution() {
+        let conn = db();
+        enable_notifications(&conn);
+        let mut preferences = store::get_preferences(&conn).unwrap();
+        preferences.reminder_lead_days = 0;
+        store::set_preferences(&conn, preferences).unwrap();
+
+        let expiry = store::today() + Duration::days(5);
+        store::insert_event(
+            &conn,
+            &Event::sell_option(
+                "main",
+                "profit",
+                1,
+                store::today(),
+                OptionContract::new("AAPL", expiry, 100.0, Right::Put),
+                1,
+                2.0,
+                0.0,
+            ),
+        )
+        .unwrap();
+        mark(&conn, 100.0, 0.4);
+
+        let sent = RefCell::new(Vec::new());
+        let first = check_and_notify(&conn, |title, body| {
+            sent.borrow_mut()
+                .push((title.to_string(), body.to_string()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(first.notified, 0);
+        assert_eq!(first.alerts, 1);
+        assert_eq!(first.alert_notified, 1);
+        assert_eq!(sent.borrow().len(), 1);
+        assert!(sent.borrow()[0].0.contains("条件提醒"));
+        assert!(sent.borrow()[0].1.contains("权利金已基本收回"));
+
+        let second =
+            check_and_notify(&conn, |_, _| panic!("the same alert must not notify twice")).unwrap();
+        assert_eq!(second.alerts, 1);
+        assert_eq!(second.alert_notified, 0);
+
+        // The condition resolves; pruning lets it notify again when it returns.
+        mark(&conn, 100.0, 2.0);
+        let resolved = check_and_notify(&conn, |_, _| Ok(())).unwrap();
+        assert_eq!(resolved.alerts, 0);
+
+        mark(&conn, 100.0, 0.4);
+        let again_sent = RefCell::new(0);
+        let again = check_and_notify(&conn, |_, _| {
+            *again_sent.borrow_mut() += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(again.alert_notified, 1);
+        assert_eq!(*again_sent.borrow(), 1);
     }
 }

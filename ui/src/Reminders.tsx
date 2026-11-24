@@ -5,10 +5,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
-import type { AccountingSettings, Position } from './types';
+import type { AccountingSettings, AlertRules, Position } from './types';
 import { api, desktop, money } from './lib';
 
 export type ReminderSeverity = 'overdue' | 'critical' | 'soon' | 'later';
+
+const defaultRules: AlertRules = {
+  alertsEnabled: true,
+  expiryDays: 7,
+  profitTargetPct: 30,
+  deepItmPct: 5,
+  belowCostPct: 0,
+};
 
 const severityTone: Record<ReminderSeverity, string> = {
   overdue: 'border-destructive/40 bg-destructive/5 text-destructive-foreground',
@@ -104,6 +112,10 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
   const [leadDays, setLeadDays] = useState(settings?.reminderLeadDays ?? 7);
   const [systemNotifications, setSystemNotifications] = useState(settings?.systemNotificationsEnabled ?? false);
   const [closeToTray, setCloseToTray] = useState(settings?.closeToTray ?? false);
+  const [rules, setRules] = useState<AlertRules>(settings?.alertRules ?? defaultRules);
+  const [rulesBusy, setRulesBusy] = useState(false);
+  const [rulesStatus, setRulesStatus] = useState('');
+  const [rulesError, setRulesError] = useState('');
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
@@ -112,7 +124,8 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
     setLeadDays(settings?.reminderLeadDays ?? 7);
     setSystemNotifications(settings?.systemNotificationsEnabled ?? false);
     setCloseToTray(settings?.closeToTray ?? false);
-  }, [settings?.reminderLeadDays, settings?.systemNotificationsEnabled, settings?.closeToTray]);
+    setRules(settings?.alertRules ?? defaultRules);
+  }, [settings?.reminderLeadDays, settings?.systemNotificationsEnabled, settings?.closeToTray, settings?.alertRules]);
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy || !settings) return;
@@ -131,6 +144,21 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
     } catch (failure) { setError(String(failure)); }
     finally { setBusy(false); }
   }
+  async function saveRules(event: FormEvent) {
+    event.preventDefault();
+    if (rulesBusy || !settings) return;
+    if (!Number.isInteger(rules.expiryDays) || rules.expiryDays < 0 || rules.expiryDays > 60) { setRulesError('待办到期天数必须是 0 到 60 之间的整数。'); return; }
+    if (rules.profitTargetPct < 1 || rules.profitTargetPct > 95) { setRulesError('权利金剩余比例必须是 1 到 95。'); return; }
+    if (rules.deepItmPct < 1 || rules.deepItmPct > 50) { setRulesError('深度实值阈值必须是 1 到 50。'); return; }
+    if (rules.belowCostPct < 0 || rules.belowCostPct > 50) { setRulesError('低于成本阈值必须是 0 到 50。'); return; }
+    setRulesBusy(true); setRulesError(''); setRulesStatus('');
+    try {
+      const result = await api<AlertRules>('set_alert_rules', { rules });
+      await onSaved({ ...settings, alertRules: result });
+      setRulesStatus('条件提醒规则已保存。');
+    } catch (failure) { setRulesError(String(failure)); }
+    finally { setRulesBusy(false); }
+  }
   async function testNotification() {
     if (testing || !desktop) return;
     setTesting(true); setError(''); setStatus('');
@@ -144,6 +172,7 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
     || closeToTray !== settings?.closeToTray
   );
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle className="text-base">提醒设置</CardTitle>
@@ -176,5 +205,43 @@ export function ReminderPreferences({ settings, onSaved }: { settings: Accountin
         </form>
       </CardPanel>
     </Card>
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle className="text-base">条件提醒</CardTitle>
+        <CardDescription>今日待办与 Windows 条件通知共用这套阈值</CardDescription>
+      </CardHeader>
+      <CardPanel>
+        {rulesError && <Alert variant="error" role="alert" className="negative mb-3">{rulesError}</Alert>}
+        {rulesStatus && <Alert variant="success" role="status" className="positive mb-3">{rulesStatus}</Alert>}
+        <form onSubmit={saveRules} className="space-y-4">
+          <label className="check flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={rules.alertsEnabled} disabled={!desktop || !settings || rulesBusy} onChange={event => setRules({ ...rules, alertsEnabled: event.target.checked })} />
+            发送条件提醒系统通知
+          </label>
+          <p className="text-xs leading-relaxed text-muted-foreground">关闭后仪表盘「今日待办」仍会显示，但不再弹 Windows 通知。同一条件只提醒一次；条件解除后再次出现会重新提醒。</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              待办到期窗口（天）
+              <Input type="number" min={0} max={60} step={1} className="max-w-40" value={rules.expiryDays} disabled={!desktop || !settings || rulesBusy} onChange={event => setRules({ ...rules, expiryDays: Number(event.target.value) })} />
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              权利金剩余阈值（%）
+              <Input type="number" min={1} max={95} step={1} className="max-w-40" value={rules.profitTargetPct} disabled={!desktop || !settings || rulesBusy} onChange={event => setRules({ ...rules, profitTargetPct: Number(event.target.value) })} />
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              深度实值偏离（%）
+              <Input type="number" min={1} max={50} step={1} className="max-w-40" value={rules.deepItmPct} disabled={!desktop || !settings || rulesBusy} onChange={event => setRules({ ...rules, deepItmPct: Number(event.target.value) })} />
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              低于 B 轨成本（%）
+              <Input type="number" min={0} max={50} step={1} className="max-w-40" value={rules.belowCostPct} disabled={!desktop || !settings || rulesBusy} onChange={event => setRules({ ...rules, belowCostPct: Number(event.target.value) })} />
+            </label>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">权利金剩余 = 当前平仓成本 / 开仓净权利金，低于阈值即视为基本收回；深度实值按现价越过行权价的比例判断；低于成本以 B 轨（扣除已落袋权利金）为基准。</p>
+          <Button type="submit" disabled={!desktop || !settings || rulesBusy}>{rulesBusy ? '保存中…' : '保存条件提醒规则'}</Button>
+        </form>
+      </CardPanel>
+    </Card>
+    </>
   );
 }

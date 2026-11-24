@@ -57,8 +57,58 @@ export interface Position extends OptionSummary {
   collateralReturnPct: number | null;
 }
 export interface Lot { id: string; symbol: string; openedAt: string; qty: number; remainingQty: number; costPerShare: number }
-export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number; systemNotificationsEnabled: boolean; closeToTray: boolean }
-export interface ExpiryCheckSummary { overdue: number; today: number; critical: number; soon: number; total: number; notified: number }
+export interface AlertRules {
+  alertsEnabled: boolean;
+  expiryDays: number;
+  profitTargetPct: number;
+  deepItmPct: number;
+  belowCostPct: number;
+}
+export interface AccountingSettings { includeDividendsInCost: boolean; reminderLeadDays: number; autoBackupEnabled: boolean; autoBackupKeep: number; systemNotificationsEnabled: boolean; closeToTray: boolean; alertRules: AlertRules }
+export interface ExpiryCheckSummary { overdue: number; today: number; critical: number; soon: number; total: number; notified: number; alerts: number; alertNotified: number }
+export type InsightSeverity = 'urgent' | 'warning' | 'info';
+export type InsightKind = 'overdue' | 'expiry' | 'profit' | 'deep_itm' | 'cash' | 'below_cost';
+export type InsightAction = 'expire' | 'close' | 'roll' | 'cost' | 'cash';
+export interface InsightItem {
+  id: string;
+  severity: InsightSeverity;
+  kind: InsightKind;
+  accountId: string;
+  accountName: string;
+  symbol: string;
+  campaignId: string | null;
+  contract: string | null;
+  title: string;
+  detail: string;
+  action: InsightAction;
+  qty: number | null;
+  expiry: string | null;
+  strike: number | null;
+  right: string | null;
+  multiplier: number | null;
+  daysLeft: number | null;
+}
+export interface TodoView { asOf: string; rules: AlertRules; items: InsightItem[] }
+export interface WatchlistView { symbols: string[] }
+export interface CspCandidate {
+  symbol: string; expiry: string; dte: number; strike: number; right: string;
+  perShare: number; priceSource: 'bid' | 'mark'; qty: number; cashRequired: number;
+  premiumTotal: number; fees: number; annualized: number; delta: number | null;
+  probItm: number | null; breakeven: number; otmPct: number;
+  openInterest: number | null; multiplier: number; flags: ScanFlag[];
+}
+export interface WatchlistOutcome {
+  symbol: string; chainStale: boolean; scannedQuotes: number; filters: ScanFilters;
+  candidates: CspCandidate[];
+}
+export interface WatchlistSymbol {
+  symbol: string; price: number | null; chainStatus: ChainFreshness;
+  error: string | null; outcome: WatchlistOutcome | null;
+}
+export interface WatchlistScanView {
+  asOf: string; accountId: string; accountName: string;
+  cash: number | null; cashTracked: boolean; symbols: WatchlistSymbol[];
+}
 export interface VisionSettings {
   baseUrl: string;
   model: string;

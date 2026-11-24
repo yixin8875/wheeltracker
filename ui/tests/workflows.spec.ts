@@ -14,7 +14,7 @@ async function setup(page: Page) {
     state.testRejectMetadata = false; state.testRejectDashboard = false;
     state.testVision = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', hasKey: true, keyHint: '1234', enabled: true, consent: true };
     state.testVisionKey = 'sk-test-1234';
-    const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7, systemNotificationsEnabled: false, closeToTray: false };
+    const preferences = { includeDividendsInCost: localStorage.getItem('test-dividends') === 'true', reminderLeadDays: 7, autoBackupEnabled: true, autoBackupKeep: 7, systemNotificationsEnabled: false, closeToTray: false, alertRules: { alertsEnabled: true, expiryDays: 7, profitTargetPct: 30, deepItmPct: 5, belowCostPct: 0 } };
     const currentCampaign = () => ({ ...campaign, dividends: 100,
       costB: preferences.includeDividendsInCost ? 147 : 148,
       costC: preferences.includeDividendsInCost ? 146 : 147,
@@ -45,8 +45,15 @@ async function setup(page: Page) {
           options: [{ accountId: 'main', accountName: '默认账户', campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-12-18 160C', right: 'C', strike: 160, expiry: '2026-12-18', daysLeft: 45, openQty: 1, multiplier: 100, avgCredit: 1, collateral: 0, mark: 0.5, chainStatus: 'delayed', chainFetchedAt: '2026-11-03 15:42:00', closeCost: 50, unrealizedPnl: 50, unrealizedPct: 0.5, collateralReturnPct: null }],
           totals: { accountCount: 1, holdingCount: 1, pricedHoldings: 1, unpricedHoldings: 0, totalShares: 100, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 200, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 0, optionPricedCount: 1, optionUnpricedCount: 0, optionCloseCost: 50, optionUnrealizedPnl: 50, optionUnrealizedPct: 0.5 },
         };
-        case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1 };
+        case 'check_expiries': return { overdue: 1, today: 0, critical: 0, soon: 0, total: 1, notified: 1, alerts: 0, alertNotified: 0 };
         case 'send_test_notification': return null;
+        case 'todos': return state.testTodos ?? { asOf: '2026-11-03', rules: preferences.alertRules, items: [] };
+        case 'set_alert_rules': state.testAlertRules = args.rules; preferences.alertRules = args.rules as any; return args.rules;
+        case 'get_watchlist': return state.testWatchlist ?? { symbols: [] };
+        case 'set_watchlist': state.testWatchlist = { symbols: args.symbols }; return state.testWatchlist;
+        case 'scan_watchlist': return state.testWatchlistScan ?? { asOf: '2026-11-03', accountId: 'main', accountName: '默认账户', cash: 5200, cashTracked: true, symbols: [] };
+        case 'option_chain_preview': return state.testChainPreview ?? { headers: [], delimiter: ',', rows: [], errors: [], valid: 1, invalid: 0 };
+        case 'option_chain_commit': return { status: { symbol: args.symbol, source: 'manual', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 1, status: 'fresh', notes: '' }, imported: 1, skipped: 0 };
         case 'cash_movements': return [
           { date: '2026-01-10', kind: 'cash_withdrawal', symbol: '', note: '转出到储蓄账户', amount: -500, balanceAfter: 5200 },
           { date: '2026-01-06', kind: 'option_open_short', symbol: 'TEST', note: '本轮卖 Put', amount: 100, balanceAfter: 5700 },
@@ -54,7 +61,9 @@ async function setup(page: Page) {
         ];
         case 'positions': return [...(state.testExtraPositions ?? []), { ...position, multiplier: state.testMultiplier ?? position.multiplier }];
         case 'option_chain_status': return state.testChainStatus ?? [{ symbol: 'TEST', source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'delayed', notes: '' }];
-        case 'fetch_option_chain': return { status: { symbol: args.symbol, source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'fresh', notes: '' }, imported: 240, skipped: 0 };
+        case 'fetch_option_chain':
+          if (state.testRejectChain) throw new Error('chain offline');
+          return { status: { symbol: args.symbol, source: 'nasdaq', asOf: '2026-11-03', fetchedAt: '2026-11-03 15:42:00', underlying: 160, quoteCount: 240, status: 'fresh', notes: '' }, imported: 240, skipped: 0 };
         case 'scan_cost_reduction': return state.testScan ?? {
           campaign: { id: 'campaign', symbol: 'TEST', shares: 100, costA: 150, costB: 148, costC: 147, price: 160, unrealizedPnl: 1200, unrealizedPct: 0.0811, premiumRealized: 200, coveredShares: 0, freeShares: 100, cash: 5200, cashTracked: true },
           chainStale: false, scannedQuotes: 24, dropped: 0,
@@ -1467,4 +1476,91 @@ test('settings can check for updates manually and shares the result with the ban
   await expect(status).toContainText('发现新版本 v0.7.0');
   await expect(page.getByRole('button', { name: '下载并安装 v0.7.0', exact: true })).toBeVisible();
   await expect(page.locator('.update-banner')).toContainText('发现新版本');
+});
+
+test('today card surfaces rule hits and prefills the matching action', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testTodos = {
+      asOf: '2026-11-03',
+      rules: { alertsEnabled: true, expiryDays: 3, profitTargetPct: 30, deepItmPct: 5, belowCostPct: 0 },
+      items: [{
+        id: 'main|TEST 2026-12-18 160C|profit', severity: 'info', kind: 'profit',
+        accountId: 'main', accountName: '默认账户', symbol: 'TEST', campaignId: 'campaign',
+        contract: 'TEST 2026-12-18 160C', title: '权利金已基本收回', detail: '已收回 80% 权利金，剩余时间价值不多。',
+        action: 'close', qty: 1, expiry: '2026-12-18', strike: 160, right: 'C', multiplier: 100, daysLeft: 45,
+      }],
+    };
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  const card = page.locator('.todo-card');
+  await expect(card).toContainText('权利金已基本收回');
+  await expect(page.locator('.todo-badge')).toHaveText('1');
+  await page.screenshot({ path: 'test-results/today-card.png', fullPage: true });
+  await card.getByRole('button', { name: '平仓', exact: true }).click();
+  await expect(page.getByLabel('到期日')).toHaveValue('2026-12-18');
+  await expect(page.getByLabel('行权价')).toHaveValue('160');
+});
+
+test('watchlist scan ranks cash-secured puts and records one', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testWatchlist = { symbols: ['AAPL'] };
+    (window as any).testWatchlistScan = {
+      asOf: '2026-11-03', accountId: 'main', accountName: '默认账户', cash: 5200, cashTracked: true,
+      symbols: [{
+        symbol: 'AAPL', price: 100, chainStatus: 'fresh', error: null,
+        outcome: {
+          symbol: 'AAPL', chainStale: false, scannedQuotes: 12,
+          filters: { totalQuotes: 12, invalidQuotes: 0, outsideDte: 0, callsDisabled: 0, putsDisabled: 0, missingPrice: 0, illiquid: 0, outsideDelta: 0, belowCost: 0, putStrikeTooHigh: 0, noQuantity: 0, noPremium: 0 },
+          candidates: [{
+            symbol: 'AAPL', expiry: '2026-12-18', dte: 35, strike: 95, right: 'P', perShare: 2,
+            priceSource: 'bid', qty: 2, cashRequired: 19000, premiumTotal: 398.7, fees: 1.3,
+            annualized: 0.219, delta: -0.25, probItm: 0.22, breakeven: 93, otmPct: 0.05,
+            openInterest: 450, multiplier: 100, flags: [],
+          }],
+        },
+      }],
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '新开仓扫描', exact: true }).click();
+  const row = page.getByRole('row').filter({ hasText: 'AAPL' }).first();
+  await expect(row).toContainText('95.00P');
+  await expect(row).toContainText('21.90%');
+  await expect(row).toContainText('19,000.00');
+  await page.screenshot({ path: 'test-results/watchlist-scan.png', fullPage: true });
+  await row.getByRole('button', { name: '记一笔', exact: true }).click();
+  await expect(page.getByLabel('到期日')).toHaveValue('2026-12-18');
+  await expect(page.getByLabel('行权价')).toHaveValue('95');
+  await expect(page.getByLabel('手数')).toHaveValue('2');
+});
+
+test('watchlist auto-fetches missing chains and offers manual import', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).testRejectChain = true;
+    (window as any).testWatchlist = { symbols: ['AAPL'] };
+    (window as any).testWatchlistScan = {
+      asOf: '2026-11-03', accountId: 'main', accountName: '默认账户', cash: 5200, cashTracked: true,
+      symbols: [{ symbol: 'AAPL', price: 100, chainStatus: 'missing', error: '尚未导入期权链', outcome: null }],
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '新开仓扫描', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'fetch_option_chain').map((call: any) => call.args.symbol))).toContain('AAPL');
+  await expect(page.getByText('自动获取期权链失败', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: '手动导入', exact: true }).first().click();
+  await expect(page.getByLabel('期权链文本')).toBeVisible();
+});
+
+test('conditional alert thresholds save through their own command', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '到期提醒', exact: true }).click();
+  await page.getByLabel('待办到期窗口（天）').fill('5');
+  await page.getByLabel('权利金剩余阈值（%）').fill('25');
+  await page.getByRole('button', { name: '保存条件提醒规则', exact: true }).click();
+  await expect(page.getByText('条件提醒规则已保存。')).toBeVisible();
+  const call = await page.evaluate(() => (window as any).testCalls.filter((item: any) => item.command === 'set_alert_rules').at(-1));
+  expect(call.args.rules.expiryDays).toBe(5);
+  expect(call.args.rules.profitTargetPct).toBe(25);
 });

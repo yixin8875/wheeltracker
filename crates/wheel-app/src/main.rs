@@ -2,6 +2,7 @@
 
 mod commands;
 mod import;
+mod insights;
 mod notifications;
 mod secrets;
 mod trade_text;
@@ -82,13 +83,20 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }) {
                     Ok(summary) => {
                         notifications::update_tray_tooltip(app, &summary);
-                        if summary.notified == 0 {
-                            let body = if summary.total == 0 {
+                        if summary.notified == 0 && summary.alert_notified == 0 {
+                            let body = if summary.total == 0 && summary.alerts == 0 {
                                 "当前没有到期提醒。".to_string()
-                            } else {
+                            } else if summary.total == 0 {
+                                format!("{} 条条件提醒，没有到期合约。", summary.alerts)
+                            } else if summary.alerts == 0 {
                                 format!(
                                     "{} 个到期提醒（{} 个已过期，{} 个今天到期）。",
                                     summary.total, summary.overdue, summary.today
+                                )
+                            } else {
+                                format!(
+                                    "{} 个到期提醒（{} 个已过期，{} 个今天到期），{} 条条件提醒。",
+                                    summary.total, summary.overdue, summary.today, summary.alerts
                                 )
                             };
                             let _ = notifications::send(app, "Wheel Tracker · 到期检查", &body);
@@ -220,6 +228,11 @@ fn main() {
             commands::cash_movements,
             commands::check_expiries,
             commands::send_test_notification,
+            commands::todos,
+            commands::set_alert_rules,
+            commands::get_watchlist,
+            commands::set_watchlist,
+            commands::scan_watchlist,
             commands::campaign_detail,
             commands::ledger,
             commands::monthly_income,

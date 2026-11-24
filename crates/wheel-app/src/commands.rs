@@ -14,7 +14,8 @@ use wheel_core::{DerivedState, Event, EventKind, OptionPosition, Right};
 use crate::events::{append_requests, build_event, NewEventReq};
 use crate::views::{event_view, EventView};
 use crate::{
-    backup, notifications, option_chain, options_market, restore, store, views, webdav, AppState,
+    backup, insights, notifications, option_chain, options_market, restore, store, views, webdav,
+    AppState,
 };
 
 fn account_or_default(account_id: Option<String>) -> String {
@@ -108,6 +109,7 @@ pub struct SettingsView {
     pub auto_backup_keep: u32,
     pub system_notifications_enabled: bool,
     pub close_to_tray: bool,
+    pub alert_rules: insights::AlertRules,
 }
 
 fn settings_view(
@@ -122,6 +124,7 @@ fn settings_view(
         auto_backup_keep: preferences.auto_backup_keep,
         system_notifications_enabled: preferences.system_notifications_enabled,
         close_to_tray: preferences.close_to_tray,
+        alert_rules: insights::load_rules(conn).map_err(|error| error.to_string())?,
     })
 }
 
@@ -2887,6 +2890,218 @@ pub fn scan_cost_reduction(
     .map_err(|error| error.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// P1: today's actions and watchlist cash-secured-put scan
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn todos(state: State<'_, AppState>) -> Result<insights::TodoView, String> {
+    let conn = state.conn();
+    let rules = insights::load_rules(&conn).map_err(|error| format!("{error:#}"))?;
+    let items = insights::build_with(&conn, rules).map_err(|error| format!("{error:#}"))?;
+    Ok(insights::TodoView {
+        as_of: store::today().to_string(),
+        rules,
+        items,
+    })
+}
+
+#[tauri::command]
+pub fn set_alert_rules(
+    state: State<'_, AppState>,
+    rules: insights::AlertRules,
+) -> Result<insights::AlertRules, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    insights::save_rules(&conn, rules).map_err(|error| format!("{error:#}"))
+}
+
+const WATCHLIST_KEY: &str = "watchlist";
+const WATCHLIST_LIMIT: usize = 30;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WatchlistView {
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchlistSymbolView {
+    pub symbol: String,
+    pub price: Option<f64>,
+    /// `fresh` / `stale` / `missing`.
+    pub chain_status: String,
+    pub error: Option<String>,
+    pub outcome: Option<wheel_scan::WatchlistOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchlistScanView {
+    pub as_of: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub cash: Option<f64>,
+    pub cash_tracked: bool,
+    pub symbols: Vec<WatchlistSymbolView>,
+}
+
+fn load_watchlist(conn: &rusqlite::Connection) -> Result<WatchlistView, String> {
+    let Some(raw) =
+        store::get_setting_value(conn, WATCHLIST_KEY).map_err(|error| error.to_string())?
+    else {
+        return Ok(WatchlistView::default());
+    };
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+fn normalize_watchlist(symbols: Vec<String>) -> Result<Vec<String>, String> {
+    let mut unique = Vec::new();
+    for symbol in symbols {
+        if symbol.trim().is_empty() {
+            continue;
+        }
+        let symbol = crate::market::normalize_symbol(&symbol)?;
+        if !unique.contains(&symbol) {
+            unique.push(symbol);
+        }
+    }
+    if unique.len() > WATCHLIST_LIMIT {
+        return Err(format!("观察名单最多 {WATCHLIST_LIMIT} 个标的"));
+    }
+    Ok(unique)
+}
+
+fn save_watchlist(
+    conn: &rusqlite::Connection,
+    symbols: Vec<String>,
+) -> Result<WatchlistView, String> {
+    let view = WatchlistView {
+        symbols: normalize_watchlist(symbols)?,
+    };
+    let raw = serde_json::to_string(&view).map_err(|error| error.to_string())?;
+    store::set_setting_value(conn, WATCHLIST_KEY, &raw).map_err(|error| error.to_string())?;
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn get_watchlist(state: State<'_, AppState>) -> Result<WatchlistView, String> {
+    let conn = state.conn();
+    load_watchlist(&conn)
+}
+
+#[tauri::command]
+pub fn set_watchlist(
+    state: State<'_, AppState>,
+    symbols: Vec<String>,
+) -> Result<WatchlistView, String> {
+    ensure_no_pending_restore(&state)?;
+    let conn = state.conn();
+    save_watchlist(&conn, symbols)
+}
+
+fn scan_quote(quote: option_chain::OptionQuote) -> wheel_scan::ChainQuote {
+    wheel_scan::ChainQuote {
+        expiry: quote.expiry,
+        strike: quote.strike,
+        right: quote.right,
+        bid: quote.bid,
+        ask: quote.ask,
+        mark: quote.mark,
+        iv: quote.iv,
+        open_interest: quote.open_interest,
+        volume: quote.volume,
+        multiplier: quote.multiplier,
+    }
+}
+
+fn scan_watchlist_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    settings: wheel_scan::ScanSettings,
+) -> Result<WatchlistScanView, String> {
+    let watchlist = load_watchlist(conn)?;
+    let derived = derive(conn, account_id)?;
+    let account_name = store::list_accounts(conn)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|account| account.id == account_id)
+        .map(|account| account.name)
+        .unwrap_or_else(|| account_id.to_string());
+    let prices = store::latest_prices(conn).map_err(|error| error.to_string())?;
+    let now = OffsetDateTime::now_utc();
+    let today = now.date();
+    let cash_tracked = derived.cash_deposits > 0.0 || derived.cash_withdrawals > 0.0;
+    // A margin balance is not a balance the scan can secure puts with; it falls
+    // back to the single-contract sizing hint with its warning flag.
+    let cash = (cash_tracked && derived.account_cash > 0.0).then_some(derived.account_cash);
+
+    let mut rows = Vec::new();
+    for symbol in &watchlist.symbols {
+        let snapshot = option_chain::snapshot(conn, symbol).map_err(|error| error.to_string())?;
+        let chain_status = match &snapshot {
+            Some(snapshot) => views::chain_freshness(&snapshot.fetched_at, now).to_string(),
+            None => "missing".to_string(),
+        };
+        let price = prices.get(symbol).copied();
+        let quotes: Vec<wheel_scan::ChainQuote> = if snapshot.is_some() {
+            option_chain::quotes(conn, symbol)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .map(scan_quote)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let error = if snapshot.is_none() {
+            Some("尚未导入期权链".to_string())
+        } else if price.is_none() {
+            Some("缺少最新价格".to_string())
+        } else {
+            None
+        };
+        let outcome = price.map(|price| {
+            wheel_scan::scan_watchlist(&wheel_scan::WatchlistInput {
+                symbol: symbol.clone(),
+                today,
+                price,
+                cash,
+                chain_stale: chain_status == "stale",
+                quotes: &quotes,
+                settings,
+            })
+        });
+        rows.push(WatchlistSymbolView {
+            symbol: symbol.clone(),
+            price,
+            chain_status,
+            error,
+            outcome,
+        });
+    }
+
+    Ok(WatchlistScanView {
+        as_of: today.to_string(),
+        account_id: account_id.to_string(),
+        account_name,
+        cash,
+        cash_tracked,
+        symbols: rows,
+    })
+}
+
+#[tauri::command]
+pub fn scan_watchlist(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    settings: Option<wheel_scan::ScanSettings>,
+) -> Result<WatchlistScanView, String> {
+    let account_id = account_or_default(account_id);
+    let conn = state.conn();
+    scan_watchlist_for(&conn, &account_id, settings.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3536,6 +3751,7 @@ mod tests {
                 auto_backup_keep: 7,
                 system_notifications_enabled: false,
                 close_to_tray: false,
+                alert_rules: insights::AlertRules::default(),
             })
             .unwrap(),
             serde_json::json!({
@@ -3544,7 +3760,14 @@ mod tests {
                 "autoBackupEnabled": true,
                 "autoBackupKeep": 7,
                 "systemNotificationsEnabled": false,
-                "closeToTray": false
+                "closeToTray": false,
+                "alertRules": {
+                    "alertsEnabled": true,
+                    "expiryDays": 7,
+                    "profitTargetPct": 30.0,
+                    "deepItmPct": 5.0,
+                    "belowCostPct": 0.0
+                }
             })
         );
     }
@@ -4619,5 +4842,55 @@ mod tests {
         .unwrap();
         let event = build_event(&with_cash, "main", "e3", 3).unwrap();
         assert_eq!(event.split.unwrap().cash_in_lieu, Some(3.25));
+    }
+
+    #[test]
+    fn watchlist_normalizes_and_scans_against_recorded_cash() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        let saved = save_watchlist(
+            &conn,
+            vec![" aapl ".into(), "AAPL".into(), "msft".into(), "  ".into()],
+        )
+        .unwrap();
+        assert_eq!(saved.symbols, vec!["AAPL", "MSFT"]);
+        assert_eq!(load_watchlist(&conn).unwrap().symbols, saved.symbols);
+
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_event(
+            &conn,
+            &Event::cash_deposit("main", "dep", 1, date(), 20_000.0),
+        )
+        .unwrap();
+        store::upsert_price(&conn, "AAPL", date(), 100.0).unwrap();
+        chain_fixture(
+            &conn,
+            "AAPL",
+            store::today() + time::Duration::days(30),
+            90.0,
+            Right::Put,
+            Some(1.0),
+        );
+        save_watchlist(&conn, vec!["AAPL".into()]).unwrap();
+
+        let view = scan_watchlist_for(
+            &conn,
+            "main",
+            wheel_scan::ScanSettings {
+                delta_min: 0.0,
+                delta_max: 1.0,
+                liquidity_filter: false,
+                price_source: wheel_scan::PriceSource::Mark,
+                ..wheel_scan::ScanSettings::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(view.account_name, "默认账户");
+        assert_eq!(view.cash, Some(20_000.0));
+        let outcome = view.symbols[0].outcome.as_ref().unwrap();
+        assert_eq!(outcome.candidates.len(), 1);
+        assert_eq!(outcome.candidates[0].qty, 2);
+        assert_eq!(outcome.candidates[0].cash_required, 18_000.0);
     }
 }

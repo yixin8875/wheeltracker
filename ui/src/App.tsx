@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, Radar } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -22,7 +22,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Footnote, Stat, StatGrid } from '@/components/page-kit';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus } from './types';
+import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, InsightItem, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus, TodoView } from './types';
 import { api, chainStatusLabel, chainTime, desktop, labels, money, percent, pnlLabel, pnlTone, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -47,16 +47,19 @@ import { Updater } from './Updater';
 import { UpdateProvider } from './update';
 import { AboutPanel } from './AboutPanel';
 import { CostReduction } from './CostReduction';
+import { TodoCard } from './TodoCard';
+import { WatchlistScan } from './WatchlistScan';
 import { useOptionQuotes } from './hooks/useOptionQuotes';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'cost' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'cost' | 'watchlist' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 const navigation: NavGroup[] = [
   { id: 'daily', title: '日常', items: [
     { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
     { id: 'positions', label: '当前持仓', icon: Layers },
     { id: 'cost', label: '降本扫描', icon: TrendingDown },
+    { id: 'watchlist', label: '新开仓扫描', icon: Radar },
   ] },
   { id: 'books', title: '账本', items: [
     { id: 'ledger', label: '收租台账', icon: BookOpen },
@@ -95,6 +98,7 @@ export default function App() {
   const [holdingsBusy, setHoldingsBusy] = useState(false);
   const [holdingsError, setHoldingsError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
+  const [todos, setTodos] = useState<TodoView | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [scanCampaign, setScanCampaign] = useState<string | null>(null);
@@ -158,6 +162,14 @@ export default function App() {
   const [ledgerTab, setLedgerTab] = useState<'entries' | 'events'>('entries');
   const [reportTab, setReportTab] = useState<ReportTab>('income');
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
+  useEffect(() => {
+    if (!desktop) { setTodos(null); return; }
+    let cancelled = false;
+    api<TodoView>('todos')
+      .then(result => { if (!cancelled) setTodos(result); })
+      .catch(() => { if (!cancelled) setTodos(null); });
+    return () => { cancelled = true; };
+  }, [accountId, data]);
   useEffect(() => { if (page === 'overview') void loadOverview(); }, [page, data, accounts, loadOverview]);
   useEffect(() => { if (page === 'holdings') void loadHoldings(); }, [page, data, accounts, loadHoldings]);
   useEffect(() => {
@@ -212,6 +224,37 @@ export default function App() {
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   function openCampaign(id: string) { setSelected(id); setPage('detail'); }
   function openCostScan(campaignId?: string) { setScanCampaign(campaignId ?? null); setPage('cost'); }
+  function actOnTodo(item: InsightItem) {
+    if (item.accountId !== accountId) {
+      try { localStorage.setItem(ACCOUNT_KEY, item.accountId); } catch { /* storage unavailable in preview */ }
+      setAccountId(item.accountId);
+    }
+    const prefill: Partial<NewEvent> = {
+      symbol: item.symbol,
+      qty: item.qty ?? 1,
+      expiry: item.expiry ?? '',
+      strike: item.strike ?? 0,
+      right: item.right ?? 'P',
+      multiplier: item.multiplier ?? 100,
+    };
+    switch (item.action) {
+      case 'expire':
+        startEntry({ ...prefill, kind: 'option_expire', date: item.expiry ?? today() });
+        break;
+      case 'close':
+        startEntry({ ...prefill, kind: 'option_close', date: today() });
+        break;
+      case 'roll':
+        startEntry({ ...prefill, kind: 'option_close', date: today() }, { roll: true });
+        break;
+      case 'cost':
+        openCostScan(item.campaignId ?? undefined);
+        break;
+      case 'cash':
+        setReconcileOpen(true);
+        break;
+    }
+  }
   function openHolding(targetAccount: string, campaignId: string) {
     if (targetAccount !== accountId) {
       try { localStorage.setItem(ACCOUNT_KEY, targetAccount); } catch { /* storage unavailable in preview */ }
@@ -268,6 +311,8 @@ export default function App() {
             onNavigate={id => navigate(id as Page)}
             reminderCount={reminders.length}
             overdueReminders={overdueReminders}
+            todoCount={todos?.items.length ?? 0}
+            urgentTodos={todos?.items.filter(item => item.severity === 'urgent').length ?? 0}
             desktop={desktop}
             accounts={activeAccounts}
             accountId={accountId}
@@ -403,6 +448,7 @@ export default function App() {
                     />
                   </StatGrid>
                   {data && <AccountCashPanel summary={data.summary} onEntry={kind => startEntry({ kind })} onReconcile={() => setReconcileOpen(true)} />}
+                  <TodoCard todos={todos} onAction={actOnTodo} onOpenExpiry={() => setPage('expiry')} />
                   <ReminderCard positions={positions} leadDays={leadDays} onOpenExpiry={() => setPage('expiry')} onOpenCalendar={() => setPage('calendar')} onOpenCampaign={openCampaign} />
                   <section className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -456,6 +502,9 @@ export default function App() {
 
               {page === 'cost' && !unavailable && (
                 <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
+              )}
+              {page === 'watchlist' && !unavailable && (
+                <WatchlistScan accountId={accountId} onEntry={prefill => startEntry(prefill)} />
               )}
               {page === 'entry' && (
                 <EntryForm key={entryKey} initial={initial} initialRoll={initialRoll} initialNext={initialNext} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} onDone={target => { setPage(target); if (target === 'ledger') setLedgerTab('events'); }} />

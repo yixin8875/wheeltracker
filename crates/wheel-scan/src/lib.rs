@@ -15,9 +15,11 @@
 pub mod pricing;
 pub mod projection;
 pub mod strategy;
+pub mod watchlist;
 
 pub use strategy::{
     scan, AssignmentOutcome, CampaignSummary, Candidate, ChainQuote, Flag, Preset, PriceSource,
     ScanError, ScanFilters, ScanInput, ScanOutcome, ScanSettings, Side, StrategyKind, StrategyLeg,
     StressScenario,
 };
+pub use watchlist::{scan_watchlist, CspCandidate, WatchlistInput, WatchlistOutcome};

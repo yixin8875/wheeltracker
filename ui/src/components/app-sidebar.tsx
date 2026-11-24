@@ -27,6 +27,8 @@ export function AppSidebar({
   onNavigate,
   reminderCount,
   overdueReminders,
+  todoCount,
+  urgentTodos,
   desktop,
   accounts,
   accountId,
@@ -39,6 +41,8 @@ export function AppSidebar({
   onNavigate: (page: string) => void;
   reminderCount: number;
   overdueReminders: number;
+  todoCount: number;
+  urgentTodos: number;
   desktop: boolean;
   accounts: Account[];
   accountId: string;
@@ -78,7 +82,11 @@ export function AppSidebar({
                         isActive={page === item.id}
                         onClick={() => go(item.id)}
                         tooltip={item.label}
-                        title={item.id === 'expiry' && reminderCount > 0 ? `${reminderCount} 个到期提醒` : undefined}
+                        title={
+                          item.id === 'expiry' && reminderCount > 0 ? `${reminderCount} 个到期提醒`
+                            : item.id === 'dashboard' && todoCount > 0 ? `${todoCount} 条今日待办`
+                              : undefined
+                        }
                         aria-current={page === item.id ? 'page' : undefined}
                       >
                         <item.icon />
@@ -86,6 +94,11 @@ export function AppSidebar({
                         {item.id === 'expiry' && reminderCount > 0 ? (
                           <SidebarMenuBadge aria-hidden="true" className={overdueReminders ? 'text-destructive-foreground font-semibold' : undefined}>
                             <span className="nav-badge">{reminderCount}</span>
+                          </SidebarMenuBadge>
+                        ) : null}
+                        {item.id === 'dashboard' && todoCount > 0 ? (
+                          <SidebarMenuBadge aria-hidden="true" className={urgentTodos ? 'text-destructive-foreground font-semibold' : undefined}>
+                            <span className="todo-badge">{todoCount}</span>
                           </SidebarMenuBadge>
                         ) : null}
                       </SidebarMenuButton>

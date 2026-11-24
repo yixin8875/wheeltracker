@@ -738,7 +738,7 @@ fn project_candidate(
     Ok(())
 }
 
-fn pick_price(quote: &ChainQuote, source: PriceSource) -> Option<f64> {
+pub(crate) fn pick_price(quote: &ChainQuote, source: PriceSource) -> Option<f64> {
     let price = match source {
         PriceSource::Bid => quote.bid,
         PriceSource::Mark => quote.mark,
@@ -746,7 +746,7 @@ fn pick_price(quote: &ChainQuote, source: PriceSource) -> Option<f64> {
     (price.is_finite() && price > 0.0).then_some(price)
 }
 
-fn liquid(quote: &ChainQuote, settings: &ScanSettings) -> bool {
+pub(crate) fn liquid(quote: &ChainQuote, settings: &ScanSettings) -> bool {
     let open_interest_ok = quote
         .open_interest
         .is_some_and(|open_interest| open_interest >= settings.min_open_interest);
@@ -760,7 +760,7 @@ fn liquid(quote: &ChainQuote, settings: &ScanSettings) -> bool {
     open_interest_ok && spread_ok
 }
 
-fn otm_distance(price: f64, strike: f64, right: Right) -> f64 {
+pub(crate) fn otm_distance(price: f64, strike: f64, right: Right) -> f64 {
     match right {
         Right::Call => (strike - price) / price,
         Right::Put => (price - strike) / price,

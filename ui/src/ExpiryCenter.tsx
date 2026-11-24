@@ -248,7 +248,7 @@ export function ExpiryCenter({ positions, leadDays, asOf, accountId, onEntry, on
           {error && <Alert variant="error" role="alert" className="negative">{error}</Alert>}
           {summary && (
             <Alert variant={summary.total ? 'success' : 'default'} role="status" className={summary.total ? 'positive' : ''}>
-              已检查：已过期 {summary.overdue} · 今天 {summary.today} · 3 天内 {summary.critical} · 提醒期内 {summary.soon}。{summary.notified ? `已发送 ${summary.notified} 条新通知。` : summary.total ? '没有新的系统通知。' : '当前没有到期提醒。'}
+              已检查：已过期 {summary.overdue} · 今天 {summary.today} · 3 天内 {summary.critical} · 提醒期内 {summary.soon}。{summary.notified ? `已发送 ${summary.notified} 条新通知。` : summary.total ? '没有新的系统通知。' : '当前没有到期提醒。'}{summary.alerts ? `另有 ${summary.alerts} 条条件提醒${summary.alertNotified ? `，已发送 ${summary.alertNotified} 条` : ''}。` : ''}
             </Alert>
           )}
           {overdue > 0 && (
