@@ -4963,7 +4963,7 @@ dependencies = [
 
 [[package]]
 name = "wheel-app"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4992,14 +4992,14 @@ dependencies = [
 
 [[package]]
 name = "wheel-core"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "wheel-mobile"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -5015,7 +5015,7 @@ dependencies = [
 
 [[package]]
 name = "wheel-scan"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "serde",
  "time",
@@ -5024,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "wheel-secure-store"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "serde",
  "tauri",
@@ -5033,7 +5033,7 @@ dependencies = [
 
 [[package]]
 name = "wheel-store"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "anyhow",
  "http",
