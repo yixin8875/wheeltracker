@@ -1620,6 +1620,60 @@ fn audit_log_for(
     Ok(AuditLogView { entries })
 }
 
+const CAMPAIGN_NOTE_LIMIT: usize = 4000;
+
+#[tauri::command]
+pub fn campaign_notes(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<Vec<store::CampaignNote>, String> {
+    let account_id = account_or_default(account_id);
+    campaign_notes_for(&state.conn(), &account_id)
+}
+
+fn campaign_notes_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<Vec<store::CampaignNote>, String> {
+    store::list_campaign_notes(conn, account_id).map_err(|error| format!("{error:#}"))
+}
+
+/// Save or clear the investment thesis for one campaign. The campaign must
+/// still exist in the replayed ledger so notes cannot attach to stale ids.
+#[tauri::command]
+pub fn set_campaign_note(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    campaign_id: String,
+    note: String,
+) -> Result<Option<store::CampaignNote>, String> {
+    ensure_no_pending_restore(&state)?;
+    let account_id = account_or_default(account_id);
+    set_campaign_note_for(&state.conn(), &account_id, &campaign_id, &note)
+}
+
+fn set_campaign_note_for(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    campaign_id: &str,
+    note: &str,
+) -> Result<Option<store::CampaignNote>, String> {
+    let note = note.trim();
+    if note.chars().count() > CAMPAIGN_NOTE_LIMIT {
+        return Err(format!("战役笔记最多 {CAMPAIGN_NOTE_LIMIT} 字"));
+    }
+    let derived = derive(conn, account_id)?;
+    if !derived
+        .campaigns
+        .iter()
+        .any(|campaign| campaign.id == campaign_id)
+    {
+        return Err("战役不存在或已被账本变更移除，请刷新后重试。".to_string());
+    }
+    store::set_campaign_note(conn, account_id, campaign_id, note)
+        .map_err(|error| format!("{error:#}"))
+}
+
 #[tauri::command]
 pub fn set_price(
     state: State<'_, AppState>,
@@ -5354,6 +5408,34 @@ mod tests {
         assert_eq!(updates.entries[0].before.as_ref().unwrap().price, 150.0);
         assert_eq!(updates.entries[0].after.as_ref().unwrap().price, 149.0);
         assert!(audit_log_for(&conn, None, Some("bogus".into()), None).is_err());
+    }
+
+    #[test]
+    fn campaign_notes_attach_to_a_live_campaign_and_clear_when_empty() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_event(
+            &conn,
+            &Event::buy_shares("main", "buy", 1, date(), "AAPL", 10, 150.0, 0.0),
+        )
+        .unwrap();
+
+        let saved = set_campaign_note_for(&conn, "main", "main#c0", "  第一轮：等财报后卖 Put  ")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.campaign_id, "main#c0");
+        assert_eq!(saved.note, "第一轮：等财报后卖 Put");
+        let notes = campaign_notes_for(&conn, "main").unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].note, "第一轮：等财报后卖 Put");
+
+        assert!(set_campaign_note_for(&conn, "main", "main#c9", "不存在的战役").is_err());
+        assert!(set_campaign_note_for(&conn, "main", "main#c0", &"字".repeat(4001)).is_err());
+
+        assert!(set_campaign_note_for(&conn, "main", "main#c0", "   ")
+            .unwrap()
+            .is_none());
+        assert!(campaign_notes_for(&conn, "main").unwrap().is_empty());
     }
 
     #[test]

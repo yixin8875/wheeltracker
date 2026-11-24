@@ -21,6 +21,7 @@ async function setup(page: Page, options: { onboarding?: boolean } = {}) {
       costC: preferences.includeDividendsInCost ? 146 : 147,
       costPoints: campaign.costPoints.map((point, index) => index === 0 || !preferences.includeDividendsInCost ? point : { ...point, costB: point.costB - 1, costC: point.costC - 1 }),
     });
+    state.testCampaignBase = currentCampaign();
     const history = [
       { id: 'buy', date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null },
       { id: 'dividend', date: '2026-01-10', kind: 'dividend', symbol: 'TEST', qty: 100, price: 1, fees: 0, amount: 0, note: '本轮分红', expiry: null, strike: null, right: null, multiplier: null, splitNumerator: null, splitDenominator: null, splitCashInLieu: null },
@@ -33,7 +34,7 @@ async function setup(page: Page, options: { onboarding?: boolean } = {}) {
         case 'dashboard':
           if (state.testRejectDashboard) throw new Error('dashboard read failed');
           if (args.accountId === 'acct-2') return { accountId: 'acct-2', asOf: '2026-11-03', summary: { premiumRealized: 0, premiumOpen: 0, activeCampaigns: 1, openPositions: 0, openContracts: 0, collateral: 0, sharesHeld: 0, accountCash: 0, cashDeposits: 0, cashWithdrawals: 0, cashTracked: false, cashCoverage: null, cashShortfall: 0 }, campaigns: [{ ...currentCampaign(), id: 'other', symbol: 'OTHER', shares: 0, costA: null, costB: null, costC: null }] };
-          return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }, campaigns: state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()] };
+          return { accountId: 'main', asOf: '2026-11-03', summary: { premiumRealized: 200, premiumOpen: 100, activeCampaigns: 1, openPositions: 1, openContracts: 1, collateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashTracked: true, cashCoverage: 5200 / 15000, cashShortfall: 9800 }, campaigns: state.testCampaignList ?? (state.testExtraCampaign ? [currentCampaign(), { ...currentCampaign(), id: 'second', symbol: 'NEW' }] : [currentCampaign()]) };
         case 'ledger': return { entries: [entry], totalNet: -125.5, totalCollateral: 15000, count: 1 };
         case 'all_accounts_overview': return state.testOverview ?? {
           asOf: '2026-11-03',
@@ -265,6 +266,15 @@ async function setup(page: Page, options: { onboarding?: boolean } = {}) {
           if (args.action) entries = entries.filter((entry: any) => entry.action === args.action);
           if (args.accountId) entries = entries.filter((entry: any) => entry.accountId === args.accountId);
           return { entries: entries.slice(0, Number(args.limit ?? 200)) };
+        }
+        case 'campaign_notes': return [...(state.testCampaignNotes ?? [])];
+        case 'set_campaign_note': {
+          const note = String(args.note ?? '').trim();
+          state.testCampaignNotes = (state.testCampaignNotes ?? []).filter((item: any) => item.campaignId !== args.campaignId);
+          if (!note) return null;
+          const saved = { campaignId: args.campaignId, note, updatedAt: '2026-11-24 10:00:00+00:00' };
+          state.testCampaignNotes.push(saved);
+          return saved;
         }
         case 'get_vision_settings': return { ...state.testVision };
         case 'set_vision_settings': {
@@ -826,7 +836,8 @@ test('expiry reminders and calendar surface overdue contracts', async ({ page })
   const card = page.locator('.reminder-card');
   await expect(card).toContainText('TEST 2026-02-20 150P');
   await expect(card).toContainText('已过期 256 天');
-  await page.locator('nav').getByRole('button', { name: '到期日历', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '到期处理', exact: true }).click();
+  await page.getByRole('group', { name: '到期视图' }).getByRole('button', { name: '到期日历', exact: true }).click();
   await expect(page.getByRole('heading', { name: '到期日历', level: 1 })).toBeVisible();
   for (let index = 0; index < 9; index++) await page.getByRole('button', { name: '上一个月' }).click();
   await expect(page.locator('.calendar-month')).toHaveText('2026 年 2 月');
@@ -1076,6 +1087,97 @@ test('all-accounts reports list each account beside merged totals in monthly and
   await expect(page.locator('.account-income-breakdown')).toHaveCount(0);
 });
 
+test('sidebar groups related pages into tabs and keeps seven top-level entries', async ({ page }) => {
+  await setup(page);
+  const nav = page.locator('nav');
+  await expect(nav.getByRole('button')).toHaveCount(7);
+  for (const label of ['仪表盘', '当前持仓', '扫描', '收租台账', '报告', '到期处理', '总览']) {
+    await expect(nav.getByRole('button', { name: label, exact: true })).toBeVisible();
+  }
+  for (const label of ['审计日志', '导入', '行情', '到期日历', '账户总览', '跨账户持仓', '降本扫描', '新开仓扫描']) {
+    await expect(nav.getByRole('button', { name: label, exact: true })).toHaveCount(0);
+  }
+
+  await nav.getByRole('button', { name: '扫描', exact: true }).click();
+  const scanTabs = page.getByRole('group', { name: '扫描类型' });
+  await expect(scanTabs.getByRole('button', { name: '降本扫描', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await scanTabs.getByRole('button', { name: '新开仓扫描', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '新开仓扫描', level: 1 })).toBeVisible();
+
+  await nav.getByRole('button', { name: '收租台账', exact: true }).click();
+  await page.getByRole('group', { name: '台账分类' }).getByRole('button', { name: '审计日志', exact: true }).click();
+  await expect(page.locator('.audit-log')).toBeVisible();
+
+  await nav.getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '跨账户持仓', level: 1 })).toBeVisible();
+
+  await expect(page.getByRole('button', { name: '行情', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '导入', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '全局搜索', exact: true })).toBeVisible();
+});
+
+test('campaign list sorts by urgency, pnl and expiry', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const base = (window as any).testCampaignBase;
+    const option = (expiry: string) => ({ contract: `X ${expiry} 150P`, right: 'P', strike: 150, expiry, daysLeft: 10, openQty: 1, multiplier: 100, avgCredit: 1 });
+    (window as any).testCampaignList = [
+      { ...base, id: 'aaa', symbol: 'AAA', premiumRealized: 100, nextOption: option('2026-12-18') },
+      { ...base, id: 'bbb', symbol: 'BBB', premiumRealized: 300, nextOption: option('2026-11-28') },
+      { ...base, id: 'ccc', symbol: 'CCC', premiumRealized: 500, nextOption: option('2027-01-15') },
+    ];
+  });
+  await page.getByRole('button', { name: '刷新账本', exact: true }).click();
+  const symbols = page.locator('.campaign-card h2');
+  await expect(symbols).toHaveText(['AAA', 'BBB', 'CCC']);
+  await page.getByLabel('战役排序').selectOption('urgency');
+  await expect(symbols).toHaveText(['BBB', 'AAA', 'CCC']);
+  await page.getByLabel('战役排序').selectOption('pnl');
+  await expect(symbols).toHaveText(['CCC', 'BBB', 'AAA']);
+  await page.getByLabel('战役排序').selectOption('expiry');
+  await expect(symbols).toHaveText(['BBB', 'AAA', 'CCC']);
+});
+
+test('Ctrl+K searches campaigns and opens details or a prefilled entry', async ({ page }) => {
+  await setup(page);
+  await page.keyboard.press('Control+k');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '快速搜索' })).toBeVisible();
+  await dialog.getByLabel('全局搜索').fill('TEST');
+  await expect(dialog.getByRole('option').filter({ hasText: 'TEST' }).first()).toBeVisible();
+  await dialog.getByLabel('全局搜索').press('Enter');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '返回仪表盘' })).toBeVisible();
+  await expect(page.locator('.campaign-card').first()).toContainText('TEST');
+
+  await page.keyboard.press('Control+k');
+  await dialog.getByLabel('全局搜索').fill('AAPL');
+  await dialog.getByLabel('全局搜索').press('Enter');
+  await expect(page.getByLabel('标的代码')).toHaveValue('AAPL');
+});
+
+test('campaign notes save, appear on the dashboard card, and clear', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '查看战役' }).click();
+  const notes = page.locator('.campaign-notes');
+  await expect(notes).toContainText('尚未记录笔记');
+  await notes.getByLabel('战役笔记').fill('财报后 IV 偏高，计划卖 Put。');
+  await notes.getByRole('button', { name: '保存笔记' }).click();
+  await expect(page.getByRole('status')).toContainText('战役笔记已保存');
+  await expect(notes).toContainText('更新于 2026-11-24 10:00:00');
+  const call = await page.evaluate(() => (window as any).testCalls.filter((item: any) => item.command === 'set_campaign_note').at(-1).args);
+  expect(call).toMatchObject({ accountId: 'main', campaignId: 'campaign', note: '财报后 IV 偏高，计划卖 Put。' });
+
+  await page.getByRole('button', { name: '返回仪表盘' }).click();
+  await expect(page.locator('.campaign-card').first()).toContainText('财报后 IV 偏高');
+  await page.getByRole('button', { name: '查看战役' }).click();
+  await notes.getByLabel('战役笔记').fill('   ');
+  await notes.getByRole('button', { name: '保存笔记' }).click();
+  await expect(page.getByRole('status')).toContainText('战役笔记已清空');
+  await expect(notes).toContainText('尚未记录笔记');
+});
+
 test('renaming the current account updates the switcher and header', async ({ page }) => {
   await setup(page);
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -1270,7 +1372,8 @@ test('audit log shows inserted, edited and undone snapshots with account and act
         before: null, after: { date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入' } },
     ];
   });
-  await page.locator('nav').getByRole('button', { name: '审计日志', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '收租台账', exact: true }).click();
+  await page.getByRole('group', { name: '台账分类' }).getByRole('button', { name: '审计日志', exact: true }).click();
   const log = page.locator('.audit-log');
   await expect(log.getByRole('heading', { name: '审计日志' })).toBeVisible();
   await expect(log.locator('tbody tr')).toHaveCount(3);
@@ -1460,7 +1563,8 @@ test('notification preferences and a test toast can be saved', async ({ page }) 
 
 test('all-accounts overview totals cash and opens an account read-only', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '账户总览', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '账户总览', exact: true }).click();
   await expect(page.getByRole('heading', { name: '账户总览', exact: true })).toBeVisible();
   const summary = page.locator('.overview-summary');
   await expect(summary).toContainText('$5,200.00');
@@ -1488,7 +1592,8 @@ test('overview flags untracked Put accounts and switches account', async ({ page
       totals: { accountCount: 2, cashTrackedAccounts: 1, untrackedAccounts: 1, untrackedPutAccounts: 1, premiumRealized: 200, premiumOpen: 200, activeCampaigns: 2, openPositions: 2, openContracts: 2, collateral: 35000, trackedCollateral: 15000, sharesHeld: 100, accountCash: 5200, cashDeposits: 20000, cashWithdrawals: 500, cashCoverage: 5200 / 15000, cashShortfall: 9800 },
     };
   });
-  await page.locator('nav').getByRole('button', { name: '账户总览', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '账户总览', exact: true }).click();
   await expect(page.getByText('有 1 个账户持有未平仓 Put，但尚未记录入金 / 出金')).toBeVisible();
   const untracked = page.locator('.overview-table tbody tr').filter({ hasText: '长期账户' });
   await expect(untracked).toContainText('未记录现金');
@@ -1502,7 +1607,8 @@ test('overview flags untracked Put accounts and switches account', async ({ page
 
 test('all-holdings page totals unrealized P&L and opens the campaign', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '跨账户持仓', exact: true }).click();
   await expect(page.getByRole('heading', { name: '跨账户持仓', exact: true })).toBeVisible();
   const summary = page.locator('.holdings-summary');
   await expect(summary).toContainText('$16,000.00');
@@ -1534,7 +1640,8 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
       totals: { accountCount: 2, holdingCount: 2, pricedHoldings: 1, unpricedHoldings: 1, totalShares: 150, marketValue: 16000, costBasis: 14800, unrealizedPnl: 1200, unrealizedPct: 1200 / 14800, premiumRealized: 250, premiumOpen: 100, optionCount: 1, openContracts: 1, optionCollateral: 5000, optionPricedCount: 0, optionUnpricedCount: 1, optionCloseCost: 0, optionUnrealizedPnl: 0, optionUnrealizedPct: null },
     };
   });
-  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '跨账户持仓', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: '有 1 个持仓尚无参考价' })).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: '有 1 个未平仓期权尚无期权报价' })).toBeVisible();
   const unpriced = page.locator('table.holdings-table').first().locator('tbody tr').filter({ hasText: '长期账户' });
@@ -1552,7 +1659,8 @@ test('all-holdings flags unpriced positions and lists open puts', async ({ page 
 
 test('all-holdings values open options and refreshes their chain', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '跨账户持仓', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '总览', exact: true }).click();
+  await page.getByRole('group', { name: '总览视图' }).getByRole('button', { name: '跨账户持仓', exact: true }).click();
   const summary = page.locator('.holdings-summary');
   await expect(summary).toContainText('期权浮动盈亏');
   await expect(summary).toContainText('+$50.00');
@@ -1594,11 +1702,12 @@ test('positions page values open options against the chain', async ({ page }) =>
 
 test('cost scanner shows projected candidates and prefills entry without writing', async ({ page }) => {
   await setup(page);
-  await page.locator('nav').getByRole('button', { name: '降本扫描', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '扫描', exact: true }).click();
+  await page.getByRole('group', { name: '扫描类型' }).getByRole('button', { name: '降本扫描', exact: true }).click();
   await expect(page.getByRole('heading', { name: '降本扫描', level: 1 })).toBeVisible();
   await expect(page.getByText(/nasdaq · 240 条 · 延迟/)).toBeVisible();
 
-  await page.getByRole('button', { name: '扫描', exact: true }).click();
+  await page.locator('.cost-reduction').getByRole('button', { name: '扫描', exact: true }).click();
   const row = page.locator('table tbody tr').filter({ hasText: '2026-12-18 165C' });
   await expect(row).toContainText('$209.35');
   await expect(row).toContainText('锁定亏损');
@@ -1623,9 +1732,10 @@ test('cost scanner explains why an empty result has no candidates', async ({ pag
       candidates: [],
     };
   });
-  await page.locator('nav').getByRole('button', { name: '降本扫描', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '扫描', exact: true }).click();
+  await page.getByRole('group', { name: '扫描类型' }).getByRole('button', { name: '降本扫描', exact: true }).click();
   await page.getByLabel('允许卖出 Put').check();
-  await page.getByRole('button', { name: '扫描', exact: true }).click();
+  await page.locator('.cost-reduction').getByRole('button', { name: '扫描', exact: true }).click();
 
   const reasons = page.locator('.scan-empty-reasons');
   await expect(reasons).toContainText('可用股数 0');
@@ -1701,7 +1811,8 @@ test('watchlist scan ranks cash-secured puts and records one', async ({ page }) 
       }],
     };
   });
-  await page.locator('nav').getByRole('button', { name: '新开仓扫描', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '扫描', exact: true }).click();
+  await page.getByRole('group', { name: '扫描类型' }).getByRole('button', { name: '新开仓扫描', exact: true }).click();
   const row = page.getByRole('row').filter({ hasText: 'AAPL' }).first();
   await expect(row).toContainText('95.00P');
   await expect(row).toContainText('21.90%');
@@ -1723,7 +1834,8 @@ test('watchlist auto-fetches missing chains and offers manual import', async ({ 
       symbols: [{ symbol: 'AAPL', price: 100, chainStatus: 'missing', error: '尚未导入期权链', outcome: null }],
     };
   });
-  await page.locator('nav').getByRole('button', { name: '新开仓扫描', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '扫描', exact: true }).click();
+  await page.getByRole('group', { name: '扫描类型' }).getByRole('button', { name: '新开仓扫描', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'fetch_option_chain').map((call: any) => call.args.symbol))).toContain('AAPL');
   await expect(page.getByText('自动获取期权链失败', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '手动导入', exact: true }).first().click();

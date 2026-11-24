@@ -235,6 +235,8 @@ fn main() {
             commands::scan_watchlist,
             commands::all_accounts_reports,
             commands::audit_log,
+            commands::campaign_notes,
+            commands::set_campaign_note,
             commands::import_presets,
             commands::onboarding_status,
             commands::complete_onboarding,

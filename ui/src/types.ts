@@ -16,6 +16,7 @@ export interface Summary {
 }
 export interface CashMovement { date: string; kind: string; symbol: string; note: string; amount: number; balanceAfter: number }
 export interface Dashboard { accountId: string; asOf: string; summary: Summary; campaigns: Campaign[] }
+export interface CampaignNote { campaignId: string; note: string; updatedAt: string }
 export interface OverviewAccount extends Summary { id: string; name: string }
 export interface OverviewTotals {
   accountCount: number; cashTrackedAccounts: number; untrackedAccounts: number; untrackedPutAccounts: number;

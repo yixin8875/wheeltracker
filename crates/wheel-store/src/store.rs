@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS event_audit (
   recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_event_audit_account ON event_audit (account_id, id);
+
+-- One free-form investment thesis per campaign. Notes are user-authored and do
+-- not participate in replay; deleting a note removes the row.
+CREATE TABLE IF NOT EXISTS campaign_notes (
+  account_id  TEXT NOT NULL,
+  campaign_id TEXT NOT NULL,
+  note        TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (account_id, campaign_id)
+);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -772,6 +782,65 @@ pub fn list_audit(
         });
     }
     Ok(entries)
+}
+
+/// A user-authored investment thesis attached to one campaign cycle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CampaignNote {
+    pub campaign_id: String,
+    pub note: String,
+    pub updated_at: String,
+}
+
+pub fn list_campaign_notes(conn: &Connection, account_id: &str) -> Result<Vec<CampaignNote>> {
+    let mut stmt = conn.prepare(
+        "SELECT campaign_id, note, updated_at
+         FROM campaign_notes
+         WHERE account_id = ?1
+         ORDER BY updated_at DESC, campaign_id",
+    )?;
+    let rows = stmt.query_map(params![account_id], |row| {
+        Ok(CampaignNote {
+            campaign_id: row.get(0)?,
+            note: row.get(1)?,
+            updated_at: row.get(2)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("读取战役笔记")
+}
+
+/// Trim and upsert a note. An empty note deletes the row and returns `None`.
+pub fn set_campaign_note(
+    conn: &Connection,
+    account_id: &str,
+    campaign_id: &str,
+    note: &str,
+) -> Result<Option<CampaignNote>> {
+    let note = note.trim();
+    if note.is_empty() {
+        conn.execute(
+            "DELETE FROM campaign_notes WHERE account_id = ?1 AND campaign_id = ?2",
+            params![account_id, campaign_id],
+        )?;
+        return Ok(None);
+    }
+    let updated_at = time::OffsetDateTime::now_utc().to_string();
+    conn.execute(
+        "INSERT INTO campaign_notes (account_id, campaign_id, note, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(account_id, campaign_id) DO UPDATE SET
+           note = excluded.note,
+           updated_at = excluded.updated_at",
+        params![account_id, campaign_id, note, updated_at],
+    )
+    .context("保存战役笔记")?;
+    Ok(Some(CampaignNote {
+        campaign_id: campaign_id.to_string(),
+        note: note.to_string(),
+        updated_at,
+    }))
 }
 
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
@@ -1538,6 +1607,38 @@ mod tests {
         assert!(list_audit(&conn, Some("other"), None, 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn campaign_notes_upsert_trim_and_delete_per_account() {
+        let conn = db();
+        assert!(list_campaign_notes(&conn, "main").unwrap().is_empty());
+
+        let saved = set_campaign_note(&conn, "main", "main#c0", "  为什么开这一轮  ")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.campaign_id, "main#c0");
+        assert_eq!(saved.note, "为什么开这一轮");
+        assert!(saved.updated_at.contains("+00:00") || saved.updated_at.contains("UTC"));
+        assert_eq!(list_campaign_notes(&conn, "main").unwrap(), vec![saved]);
+
+        let updated = set_campaign_note(&conn, "main", "main#c0", "计划：跌到 140 加仓")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.note, "计划：跌到 140 加仓");
+        assert_eq!(list_campaign_notes(&conn, "main").unwrap().len(), 1);
+
+        set_campaign_note(&conn, "other", "main#c0", "另一个账户")
+            .unwrap()
+            .unwrap();
+        assert_eq!(list_campaign_notes(&conn, "main").unwrap().len(), 1);
+        assert_eq!(list_campaign_notes(&conn, "other").unwrap().len(), 1);
+
+        assert!(set_campaign_note(&conn, "main", "main#c0", "   ")
+            .unwrap()
+            .is_none());
+        assert!(list_campaign_notes(&conn, "main").unwrap().is_empty());
+        assert_eq!(list_campaign_notes(&conn, "other").unwrap().len(), 1);
     }
 
     #[test]

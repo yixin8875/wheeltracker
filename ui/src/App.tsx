@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, Radar, History } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, ChartColumn, Wallet, Radar, Search, StickyNote } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -20,9 +20,10 @@ import { ToastProvider } from '@/components/ui/toast';
 import { AppSidebar, type NavGroup } from '@/components/app-sidebar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/native-select';
 import { Footnote, Stat, StatGrid } from '@/components/page-kit';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AllAccountsOverview, AllAccountsReports, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, InsightItem, Ledger, MonthlyIncome, NewEvent, OnboardingStatus, Position, Price, RestoreStatus, TodoView } from './types';
+import type { Account, AllAccountsOverview, AllAccountsReports, AllHoldings, AnnualReport, AppInfo, Campaign, CampaignNote, Dashboard, Detail, EventRow, InsightItem, Ledger, MonthlyIncome, NewEvent, OnboardingStatus, Position, Price, RestoreStatus, TodoView } from './types';
 import { api, chainStatusLabel, chainTime, desktop, labels, money, percent, pnlLabel, pnlTone, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -52,6 +53,8 @@ import { WatchlistScan } from './WatchlistScan';
 import { AuditLogPage } from './AuditLog';
 import { GlossaryTerm } from './glossary';
 import { OnboardingGuide } from './Onboarding';
+import { CommandPalette } from './CommandPalette';
+import { CampaignNotes } from './CampaignNotes';
 import { useOptionQuotes } from './hooks/useOptionQuotes';
 
 const ACCOUNT_KEY = 'wheel.account';
@@ -61,24 +64,36 @@ const navigation: NavGroup[] = [
   { id: 'daily', title: '日常', items: [
     { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
     { id: 'positions', label: '当前持仓', icon: Layers },
-    { id: 'cost', label: '降本扫描', icon: TrendingDown },
-    { id: 'watchlist', label: '新开仓扫描', icon: Radar },
+    { id: 'scan', label: '扫描', icon: Radar },
   ] },
   { id: 'books', title: '账本', items: [
     { id: 'ledger', label: '收租台账', icon: BookOpen },
-    { id: 'audit', label: '审计日志', icon: History },
-    { id: 'import', label: '导入', icon: Upload },
   ] },
   { id: 'review', title: '复盘', items: [
     { id: 'reports', label: '报告', icon: ChartColumn },
     { id: 'expiry', label: '到期处理', icon: AlarmClock },
-    { id: 'calendar', label: '到期日历', icon: CalendarDays },
-    { id: 'overview', label: '账户总览', icon: Wallet },
-    { id: 'holdings', label: '跨账户持仓', icon: Table2 },
-    { id: 'market', label: '行情', icon: Activity },
+    { id: 'overview', label: '总览', icon: Wallet },
   ] },
 ];
-const navigationItems = navigation.flatMap(group => group.items);
+const SECTION_PAGES: Record<string, Page[]> = {
+  scan: ['cost', 'watchlist'],
+  ledger: ['ledger', 'audit'],
+  expiry: ['expiry', 'calendar'],
+  overview: ['overview', 'holdings'],
+};
+const PAGE_TITLES: Record<Page, string> = {
+  dashboard: '仪表盘', positions: '当前持仓', cost: '降本扫描', watchlist: '新开仓扫描',
+  ledger: '收租台账', audit: '审计日志', entry: '记一笔', import: '导入',
+  overview: '账户总览', holdings: '跨账户持仓', expiry: '到期处理', calendar: '到期日历',
+  reports: '报告', market: '行情', settings: '设置', detail: '战役详情',
+};
+type CampaignSort = 'default' | 'urgency' | 'pnl' | 'expiry';
+function campaignExpiry(campaign: Campaign) {
+  return campaign.nextOption?.expiry ?? '9999-12-31';
+}
+function campaignPnl(campaign: Campaign) {
+  return campaign.realizedPnl ?? campaign.premiumRealized + campaign.sharePnl + campaign.dividends + campaign.adjustments;
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
@@ -107,6 +122,9 @@ export default function App() {
   const [allReportsBusy, setAllReportsBusy] = useState(false);
   const [allReportsError, setAllReportsError] = useState('');
   const [reportScope, setReportScope] = useState<'account' | 'all'>('account');
+  const [campaignSort, setCampaignSort] = useState<CampaignSort>('default');
+  const [notes, setNotes] = useState<Record<string, CampaignNote>>({});
+  const [searchOpen, setSearchOpen] = useState(false);
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -211,6 +229,17 @@ export default function App() {
   useEffect(() => { if (page === 'overview') void loadOverview(); }, [page, data, accounts, loadOverview]);
   useEffect(() => { if (page === 'holdings') void loadHoldings(); }, [page, data, accounts, loadHoldings]);
   useEffect(() => {
+    if (!desktop) { setNotes({}); return; }
+    let cancelled = false;
+    api<CampaignNote[]>('campaign_notes', { accountId })
+      .then(list => {
+        if (cancelled) return;
+        setNotes(Object.fromEntries(list.map(note => [note.campaignId, note])));
+      })
+      .catch(() => { if (!cancelled) setNotes({}); });
+    return () => { cancelled = true; };
+  }, [accountId, data]);
+  useEffect(() => {
     if (!desktop) return;
     let cancelled = false;
     api<Account[]>('list_accounts').then(list => {
@@ -258,7 +287,21 @@ export default function App() {
   }
   function cancelEdit() { setEditingId(null); setInitial(undefined); setPage('ledger'); setLedgerTab('events'); }
   function editSaved(message: string) { saved(message); setEditingId(null); setInitial(undefined); setPage('ledger'); setLedgerTab('events'); }
-  useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startEntry(); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, [startEntry]);
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
+        event.preventDefault();
+        setSearchOpen(true);
+      } else if (key === 'n') {
+        event.preventDefault();
+        startEntry();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [startEntry]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   function openCampaign(id: string) { setSelected(id); setPage('detail'); }
   function openCostScan(campaignId?: string) { setScanCampaign(campaignId ?? null); setPage('cost'); }
@@ -300,7 +343,11 @@ export default function App() {
     }
     setSelected(campaignId); setPage('detail');
   }
-  function navigate(next: Page) { setPage(next); if (next === 'entry') startEntry(); }
+  function navigate(next: string) {
+    if (next === 'scan') { setPage('cost'); return; }
+    if (next === 'entry') { startEntry(); return; }
+    setPage(next as Page);
+  }
   function switchAccount(id: string) {
     if (id === accountId) return;
     try { localStorage.setItem(ACCOUNT_KEY, id); } catch { /* storage unavailable in preview */ }
@@ -310,6 +357,16 @@ export default function App() {
   const currentAccount = accounts.find(account => account.id === accountId) ?? null;
   const activeAccounts = accounts.filter(account => !account.archivedAt);
   function saved(message: string) { setNotice(message); void reload(); }
+  async function saveNote(campaignId: string, text: string) {
+    const saved = await api<CampaignNote | null>('set_campaign_note', { accountId, campaignId, note: text });
+    setNotes(current => {
+      const next = { ...current };
+      if (saved) next[campaignId] = saved;
+      else delete next[campaignId];
+      return next;
+    });
+    setNotice(saved ? '战役笔记已保存。' : '战役笔记已清空。');
+  }
   async function settingsSaved(result: AccountingSettings) {
     generation.current++; detailGeneration.current++;
     setData(null); setLedger(null); setIncome(null); setPositions([]); setEvents([]); setPrices([]); setDetail(null); setUnavailable(true); setSettings(result); setNotice('');
@@ -325,7 +382,24 @@ export default function App() {
     try { await api<boolean>('delete_event', { eventId: pendingDelete }); setPendingDelete(null); saved('交易已撤销。原始记录保留在数据库中，当前界面与导出不再展示。'); }
     catch (failure) { setError(String(failure)); } finally { setDeleting(false); }
   }
-  const campaigns = (data?.campaigns ?? []).filter(campaign => (archive || campaign.status === 'active') && campaign.symbol.includes(symbol.trim().toUpperCase()));
+  const campaigns = (data?.campaigns ?? [])
+    .filter(campaign => (archive || campaign.status === 'active') && campaign.symbol.includes(symbol.trim().toUpperCase()))
+    .sort((left, right) => {
+      if (campaignSort === 'urgency') {
+        const rank = (campaign: Campaign) => campaign.status === 'active' ? 0 : 1;
+        return rank(left) - rank(right)
+          || campaignExpiry(left).localeCompare(campaignExpiry(right))
+          || left.symbol.localeCompare(right.symbol);
+      }
+      if (campaignSort === 'expiry') {
+        return campaignExpiry(left).localeCompare(campaignExpiry(right)) || left.symbol.localeCompare(right.symbol);
+      }
+      if (campaignSort === 'pnl') {
+        return campaignPnl(right) - campaignPnl(left) || left.symbol.localeCompare(right.symbol);
+      }
+      return 0;
+    });
+  const navPage = Object.entries(SECTION_PAGES).find(([, pages]) => pages.includes(page))?.[0] ?? page;
   const leadDays = settings?.reminderLeadDays ?? 7;
   const reminders = reminderPositions(positions, leadDays);
   const overdueReminders = reminders.filter(position => position.daysLeft < 0).length;
@@ -338,15 +412,17 @@ export default function App() {
     return !latest || position.chainFetchedAt > latest ? position.chainFetchedAt : latest;
   }, null);
   const asOf = data?.asOf ?? today();
-  const title = page === 'detail' ? detail?.campaign.symbol ?? '战役详情' : page === 'reports' ? '报告' : page === 'settings' ? '设置' : page === 'entry' && editingId ? '修改交易' : navigationItems.find(item => item.id === page)?.label;
+  const title = page === 'detail'
+    ? detail?.campaign.symbol ?? '战役详情'
+    : page === 'entry' && editingId ? '修改交易' : PAGE_TITLES[page];
   return (
     <UpdateProvider>
       <ToastProvider position="bottom-right">
         <SidebarProvider>
           <AppSidebar
             navigation={navigation}
-            page={page}
-            onNavigate={id => navigate(id as Page)}
+            page={navPage}
+            onNavigate={navigate}
             reminderCount={reminders.length}
             overdueReminders={overdueReminders}
             todoCount={todos?.items.length ?? 0}
@@ -367,6 +443,15 @@ export default function App() {
                 <h1 className="truncate font-heading text-base leading-tight font-semibold">{title}</h1>
               </div>
               <div className="flex items-center gap-2">
+                <Button aria-label="全局搜索" title="全局搜索（Ctrl+K）" variant="ghost" size="icon" onClick={() => setSearchOpen(true)}>
+                  <Search />
+                </Button>
+                <Button aria-label="行情" title="行情" variant="outline" size="icon" onClick={() => setPage('market')}>
+                  <Activity />
+                </Button>
+                <Button aria-label="导入" title="导入" variant="outline" size="icon" onClick={() => setPage('import')}>
+                  <Upload />
+                </Button>
                 <Button aria-label="刷新账本" variant="outline" size="icon" disabled={busy || !desktop} onClick={() => void reload()}>
                   <RefreshCw className={busy ? 'animate-spin' : undefined} />
                 </Button>
@@ -383,9 +468,9 @@ export default function App() {
                 <Button
                   key={item.id}
                   size="xs"
-                  variant={page === item.id ? 'secondary' : 'ghost'}
+                  variant={navPage === item.id ? 'secondary' : 'ghost'}
                   className="shrink-0"
-                  onClick={() => navigate(item.id as Page)}
+                  onClick={() => navigate(item.id)}
                 >
                   {item.label}
                 </Button>
@@ -441,35 +526,44 @@ export default function App() {
                 </p>
               )}
 
-              {page === 'overview' && !unavailable && (
+              {(page === 'overview' || page === 'holdings') && !unavailable && (
                 <>
-                  {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看账户总览。</p>}
-                  {overviewError && (
-                    <Alert variant="error">
-                      <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
-                        <span>账户总览读取失败：{overviewError}</span>
-                        <Button size="xs" variant="outline" onClick={() => void loadOverview()}>重试</Button>
-                      </AlertDescription>
-                    </Alert>
+                  <ViewSwitch
+                    label="总览视图"
+                    value={page as 'overview' | 'holdings'}
+                    onChange={value => setPage(value)}
+                    options={[{ value: 'overview', label: '账户总览' }, { value: 'holdings', label: '跨账户持仓' }]}
+                  />
+                  {page === 'overview' && (
+                    <>
+                      {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看账户总览。</p>}
+                      {overviewError && (
+                        <Alert variant="error">
+                          <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                            <span>账户总览读取失败：{overviewError}</span>
+                            <Button size="xs" variant="outline" onClick={() => void loadOverview()}>重试</Button>
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      {!overview && overviewBusy && <p role="status" className="text-sm text-muted-foreground">正在读取账户总览…</p>}
+                      {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }} />}
+                    </>
                   )}
-                  {!overview && overviewBusy && <p role="status" className="text-sm text-muted-foreground">正在读取账户总览…</p>}
-                  {overview && <AccountsOverview overview={overview} onOpenAccount={id => { if (id !== accountId) switchAccount(id); setPage('dashboard'); }} />}
-                </>
-              )}
-
-              {page === 'holdings' && !unavailable && (
-                <>
-                  {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看跨账户持仓。</p>}
-                  {holdingsError && (
-                    <Alert variant="error">
-                      <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
-                        <span>跨账户持仓读取失败：{holdingsError}</span>
-                        <Button size="xs" variant="outline" onClick={() => void loadHoldings()}>重试</Button>
-                      </AlertDescription>
-                    </Alert>
+                  {page === 'holdings' && (
+                    <>
+                      {!desktop && <p className="text-sm text-muted-foreground">浏览器预览不读取本地账本，请在桌面应用查看跨账户持仓。</p>}
+                      {holdingsError && (
+                        <Alert variant="error">
+                          <AlertDescription className="flex flex-row flex-wrap items-center justify-between gap-3">
+                            <span>跨账户持仓读取失败：{holdingsError}</span>
+                            <Button size="xs" variant="outline" onClick={() => void loadHoldings()}>重试</Button>
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      {!holdings && holdingsBusy && <p role="status" className="text-sm text-muted-foreground">正在读取跨账户持仓…</p>}
+                      {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding} onRefresh={loadHoldings} />}
+                    </>
                   )}
-                  {!holdings && holdingsBusy && <p role="status" className="text-sm text-muted-foreground">正在读取跨账户持仓…</p>}
-                  {holdings && <AllHoldingsPage view={holdings} onOpenHolding={openHolding} onRefresh={loadHoldings} />}
                 </>
               )}
 
@@ -496,6 +590,15 @@ export default function App() {
                       <div className="flex flex-wrap items-center gap-3">
                         <Input aria-label="筛选标的" placeholder="搜索标的…" className="w-56" value={symbol} onChange={e => setSymbol(e.target.value)} />
                         <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          排序
+                          <NativeSelect aria-label="战役排序" className="w-28" value={campaignSort} onChange={event => setCampaignSort(event.target.value as CampaignSort)}>
+                            <option value="default">默认</option>
+                            <option value="urgency">紧急度</option>
+                            <option value="pnl">盈亏</option>
+                            <option value="expiry">到期</option>
+                          </NativeSelect>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Checkbox checked={archive} onCheckedChange={value => setArchive(Boolean(value))} />
                           显示已结束
                         </label>
@@ -503,7 +606,7 @@ export default function App() {
                     </div>
                     <div className="grid gap-3">
                       {campaigns.map(campaign => (
-                        <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} onOpen={() => openCampaign(campaign.id)} />
+                        <CampaignCard key={campaign.id} campaign={campaign} quote={latestPrice(prices, campaign.symbol)} note={notes[campaign.id]?.note} onOpen={() => openCampaign(campaign.id)} />
                       ))}
                     </div>
                     {!campaigns.length && (
@@ -524,26 +627,39 @@ export default function App() {
                 </>
               )}
 
-              {page === 'ledger' && !unavailable && (
+              {(page === 'ledger' || page === 'audit') && (
                 <>
                   <ViewSwitch
                     label="台账分类"
-                    value={ledgerTab}
-                    onChange={setLedgerTab}
-                    options={[{ value: 'entries', label: '收租明细' }, { value: 'events', label: '交易记录' }]}
+                    value={page === 'audit' ? 'audit' : ledgerTab}
+                    onChange={value => {
+                      if (value === 'audit') { setPage('audit'); return; }
+                      setPage('ledger');
+                      setLedgerTab(value);
+                    }}
+                    options={[{ value: 'entries', label: '收租明细' }, { value: 'events', label: '交易记录' }, { value: 'audit', label: '审计日志' }]}
                   />
-                  {ledgerTab === 'entries'
+                  {page === 'ledger' && !unavailable && (ledgerTab === 'entries'
                     ? <LedgerTable entries={ledger?.entries ?? []} openCampaign={openCampaign} />
-                    : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent} />}
+                    : <EventLog events={events} onUndo={setPendingDelete} onEdit={editEvent} />)}
+                  {page === 'audit' && <AuditLogPage accountId={accountId} />}
                 </>
               )}
-
-              {page === 'audit' && <AuditLogPage accountId={accountId} />}
-              {page === 'cost' && !unavailable && (
-                <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
-              )}
-              {page === 'watchlist' && !unavailable && (
-                <WatchlistScan accountId={accountId} onEntry={prefill => startEntry(prefill)} />
+              {(page === 'cost' || page === 'watchlist') && !unavailable && (
+                <>
+                  <ViewSwitch
+                    label="扫描类型"
+                    value={page as 'cost' | 'watchlist'}
+                    onChange={value => setPage(value)}
+                    options={[{ value: 'cost', label: '降本扫描' }, { value: 'watchlist', label: '新开仓扫描' }]}
+                  />
+                  {page === 'cost' && (
+                    <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
+                  )}
+                  {page === 'watchlist' && (
+                    <WatchlistScan accountId={accountId} onEntry={prefill => startEntry(prefill)} />
+                  )}
+                </>
               )}
               {page === 'entry' && (
                 <EntryForm key={entryKey} initial={initial} initialRoll={initialRoll} initialNext={initialNext} eventId={editingId ?? undefined} onCancel={editingId ? cancelEdit : undefined} positions={positions} campaigns={data?.campaigns ?? []} includeDividendsInCost={settings?.includeDividendsInCost ?? false} accountId={accountId} onSaved={editingId ? editSaved : saved} onDone={target => { setPage(target); if (target === 'ledger') setLedgerTab('events'); }} />
@@ -551,11 +667,21 @@ export default function App() {
               {page === 'import' && (
                 <ImportWizard accountId={accountId} onCommitted={saved} onOpenVisionSettings={() => { setSettingsTab('vision'); setPage('settings'); }} />
               )}
-              {page === 'expiry' && !unavailable && (
-                <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} accountId={accountId} onEntry={initial => startEntry(initial)} onSettled={saved} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')} />
-              )}
-              {page === 'calendar' && !unavailable && (
-                <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign} />
+              {(page === 'expiry' || page === 'calendar') && !unavailable && (
+                <>
+                  <ViewSwitch
+                    label="到期视图"
+                    value={page as 'expiry' | 'calendar'}
+                    onChange={value => setPage(value)}
+                    options={[{ value: 'expiry', label: '到期处理' }, { value: 'calendar', label: '到期日历' }]}
+                  />
+                  {page === 'expiry' && (
+                    <ExpiryCenter positions={positions} leadDays={leadDays} asOf={asOf} accountId={accountId} onEntry={initial => startEntry(initial)} onSettled={saved} onOpenCampaign={openCampaign} onOpenCalendar={() => setPage('calendar')} />
+                  )}
+                  {page === 'calendar' && (
+                    <ExpiryCalendar asOf={asOf} positions={positions} onOpenCampaign={openCampaign} />
+                  )}
+                </>
               )}
 
               {page === 'reports' && !unavailable && (
@@ -735,7 +861,8 @@ export default function App() {
                   </div>
                   {detail ? (
                     <>
-                      <CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)} variant="panel" />
+                      <CampaignCard campaign={detail.campaign} quote={latestPrice(prices, detail.campaign.symbol)} note={notes[detail.campaign.id]?.note} variant="panel" />
+                      <CampaignNotes note={notes[detail.campaign.id]} onSave={text => saveNote(detail.campaign.id, text)} />
                       <CostChart points={detail.campaign.costPoints} prices={prices.filter(price => price.symbol === detail.campaign.symbol)} symbol={detail.campaign.symbol} callStrike={detail.positions.filter(position => position.right === 'C').sort((left, right) => left.expiry.localeCompare(right.expiry))[0]?.strike} />
                       <CallAssignmentScenarios scenarios={detail.callScenarios} />
                       <CampaignTimeline events={detail.events} onUndo={setPendingDelete} />
@@ -802,6 +929,14 @@ export default function App() {
             </div>
           </SidebarInset>
         </SidebarProvider>
+
+        <CommandPalette
+          open={searchOpen}
+          onOpenChange={setSearchOpen}
+          campaigns={data?.campaigns ?? []}
+          onOpenCampaign={openCampaign}
+          onStartEntry={symbol => startEntry({ symbol })}
+        />
 
         {desktop && (
           <OnboardingGuide
@@ -897,7 +1032,7 @@ function CostRuler({ campaign: c }: { campaign: Campaign }) {
   );
 }
 
-function CampaignCard({ campaign: c, quote, onOpen, variant = 'row' }: { campaign: Campaign; quote?: Price; onOpen?: () => void; variant?: 'row' | 'panel' }) {
+function CampaignCard({ campaign: c, quote, note, onOpen, variant = 'row' }: { campaign: Campaign; quote?: Price; note?: string; onOpen?: () => void; variant?: 'row' | 'panel' }) {
   return (
     <article className={`campaign-card rounded-2xl border bg-card p-4 shadow-xs/5 transition-colors${variant === 'panel' ? ' panel-card' : ''}`}>
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -947,6 +1082,12 @@ function CampaignCard({ campaign: c, quote, onOpen, variant = 'row' }: { campaig
         )}
       </div>
 
+      {note && (
+        <p className="campaign-note mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <StickyNote className="mt-0.5 size-3.5 shrink-0" />
+          <span className="line-clamp-2">{note}</span>
+        </p>
+      )}
       <div className="card-bottom mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
         <span className="text-xs text-muted-foreground">
           {c.nextOption ? `${c.nextOption.openQty} 手 ${c.nextOption.strike}${c.nextOption.right} · ${c.nextOption.expiry} 到期` : `${c.startedAt} 开始 · ${c.cycles} 次了结`}
