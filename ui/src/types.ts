@@ -195,6 +195,24 @@ export interface AnnualSymbol { symbol: string; premium: number; sharePnl: numbe
 export interface AnnualTotal { premium: number; sharePnl: number; dividends: number; fees: number; adjustments: number; total: number; closedEntries: number; shareEvents: number }
 export interface AnnualYear { year: number; months: AnnualMonth[]; symbols: AnnualSymbol[]; total: AnnualTotal }
 export interface AnnualReport { availableYears: number[]; years: AnnualYear[] }
+export interface AccountReport { accountId: string; accountName: string; monthly: MonthlyIncome; annual: AnnualReport }
+export interface AllAccountsReports { asOf: string; accounts: AccountReport[]; monthly: MonthlyIncome; annual: AnnualReport }
+export interface AuditSnapshot {
+  date: string; kind: string; symbol: string;
+  expiry: string | null; strike: number | null; right: string | null; multiplier: number | null;
+  qty: number; price: number; fees: number; amount: number; note: string;
+}
+export type AuditAction = 'insert' | 'update' | 'delete';
+export interface AuditEntry {
+  id: number; eventId: string; accountId: string; accountName: string;
+  action: AuditAction; recordedAt: string;
+  before: AuditSnapshot | null; after: AuditSnapshot | null;
+}
+export interface AuditLog { entries: AuditEntry[] }
+export interface BrokerPreset { id: string; name: string; note: string }
+export interface OnboardingStatus {
+  needed: boolean; hasEvents: boolean; accountCount: number; demoAccountId: string | null;
+}
 export interface Price { symbol: string; date: string; close: number; source: string; quotedAt: string | null }
 export interface SymbolMatch { symbol: string; name: string; exchange: string }
 export interface MarketQuote { symbol: string; name: string; price: number; previousClose: number | null; changePercent: number | null; quotedAt: string; source: string; currency: string }
@@ -217,7 +235,7 @@ export interface CandidateEvent { date: string; kind: string; symbol: string; qt
 export type RowStatus = 'ok' | 'warning' | 'duplicate' | 'error';
 export interface CandidateRow { rowNumber: number; line: number; status: RowStatus; messages: string[]; cells: string[]; raw: string; event: CandidateEvent | null; selectedByDefault: boolean }
 export interface ImportCounts { total: number; ok: number; warning: number; duplicate: number; error: number; selected: number }
-export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'vision'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
+export interface ImportPreview { headers: string[]; signature: string; delimiter: string; headerLine: number; mapping: ColumnMapping; mappingSource: 'detected' | 'saved' | 'manual' | 'vision' | 'preset'; rows: CandidateRow[]; counts: ImportCounts; warnings: string[] }
 export interface ImportSummary { imported: number; eventIds: string[]; accountId: string; notePrefix: string; duplicateCount: number; batchId: string | null; batchSaved: boolean }
 export interface ImportBatch { id: string; origin: string; createdAt: string; imported: number; remaining: number; undoneAt: string | null; undoneCount: number }
 

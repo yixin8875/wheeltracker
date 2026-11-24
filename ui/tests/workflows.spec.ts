@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 // UI request-contract tests use synthetic IPC. Rust tests verify SQLite and replay.
-async function setup(page: Page) {
+async function setup(page: Page, options: { onboarding?: boolean } = {}) {
   await page.addInitScript(() => {
     const campaign = { id: 'campaign', symbol: 'TEST', status: 'active', shares: 100, costA: 150, costB: 148, costC: 147, premiumRealized: 200, premiumOpen: 100, dividends: 0, adjustments: 0, price: 160, safetyMargin: 12 / 148, nextOption: null, realizedPnl: null, sharePnl: 0, startedAt: '2026-01-02', endedAt: null, cycles: 1, costPoints: [{ at: '2026-01-02', shares: 100, premiumRealized: 0, premiumOpen: 0, costA: 150, costB: 150, costC: 150 }, { at: '2026-02-20', shares: 100, premiumRealized: 200, premiumOpen: 0, costA: 150, costB: 148, costC: 148 }] };
     const position = { campaignId: 'campaign', symbol: 'TEST', contract: 'TEST 2026-02-20 150P', right: 'P', strike: 150, expiry: '2026-02-20', daysLeft: -256, openQty: 1, multiplier: 100, avgCredit: 2, openedAt: '2026-01-02', mark: null, chainStatus: 'missing', chainFetchedAt: null, closeCost: null, unrealizedPnl: null, unrealizedPct: null, collateralReturnPct: null };
@@ -10,6 +10,7 @@ async function setup(page: Page) {
     const state = window as any;
     state.isTauri = true; state.testCalls = []; state.testReject = false;
     state.testAccounts = [{ id: 'main', name: '默认账户', broker: null, currency: 'USD', createdAt: '2026-01-01', archivedAt: null, eventCount: 1 }];
+    state.testOnboarding = state.testOnboarding ?? { needed: false, hasEvents: true, accountCount: 1, demoAccountId: null };
     state.testRejectSettings = false; state.testPartial = false;
     state.testRejectMetadata = false; state.testRejectDashboard = false;
     state.testVision = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', hasKey: true, keyHint: '1234', enabled: true, consent: true };
@@ -226,10 +227,11 @@ async function setup(page: Page) {
             { rowNumber: 3, line: 4, status: 'duplicate', messages: ['与账本中的记录重复。'], cells: ['2026-01-02', '卖出开仓', 'AAPL', '1', '2.00'], raw: 'synthetic row', event: { date: '2026-01-02', kind: 'option_open_short', symbol: 'AAPL', qty: 1, price: 2, fees: 1, amount: 0, expiry: '2026-02-20', strike: 150, right: 'P', note: null }, selectedByDefault: false },
             { rowNumber: 4, line: 5, status: 'error', messages: ['缺少交易日期。'], cells: ['', '卖出开仓', 'AAPL', '1', '2.00'], raw: 'synthetic row', event: null, selectedByDefault: false },
           ];
+          const preset = (args.req as any).preset;
           return { headers: ['日期', '方向', '代码', '数量', '价格'], signature: '0123456789abcdef', delimiter: 'comma', headerLine: 1,
-            mapping, mappingSource: (args.req as any).mapping ? 'manual' : 'detected', rows,
+            mapping, mappingSource: (args.req as any).mapping ? 'manual' : preset ? 'preset' : 'detected', rows,
             counts: { total: 4, ok: 1, warning: 1, duplicate: 1, error: 1, selected: 2 },
-            warnings: ['已自动识别 5 个字段；请确认列映射后再导入。'] };
+            warnings: [preset ? `已应用${preset === 'futu' ? '富途' : preset}预设识别列名；请确认列映射后再导入。` : '已自动识别 5 个字段；请确认列映射后再导入。'] };
         }
         case 'import_commit': return { imported: (args.req as any).rows.length, eventIds: (args.req as any).rows.map((row: any) => `import-${row.rowNumber}`), accountId: 'main', notePrefix: '导入:粘贴文本', duplicateCount: 1, batchId: 'batch-import-1', batchSaved: true };
         case 'list_import_batches': return [...(state.testImportBatches ?? [])];
@@ -242,6 +244,28 @@ async function setup(page: Page) {
           return { ...batch };
         }
         case 'import_save_mapping': return true;
+        case 'import_presets': return state.testPresets ?? [
+          { id: 'ibkr', name: 'Interactive Brokers', note: '识别 T. Price、Comm/Fee 等 IBKR 表头。' },
+          { id: 'futu', name: '富途', note: '识别 成交时间、证券代码、方向等富途表头。' },
+          { id: 'tiger', name: '老虎证券', note: '识别老虎证券导出表头。' },
+          { id: 'schwab', name: '嘉信理财', note: '识别 Schwab 的 Fees & Comm 等表头。' },
+          { id: 'firstrade', name: 'Firstrade', note: '识别 Firstrade 导出表头。' },
+        ];
+        case 'onboarding_status': return { ...state.testOnboarding };
+        case 'complete_onboarding': state.testOnboarding = { ...state.testOnboarding, needed: false }; return null;
+        case 'create_demo_account': state.testDemoAccount = 'demo-test'; state.testAccounts = [...state.testAccounts, { id: 'demo-test', name: '演示账户', broker: null, currency: 'USD', createdAt: '2026-11-04', archivedAt: null, eventCount: 8 }]; return 'demo-test';
+        case 'all_accounts_reports': return state.testAllReports ?? {
+          asOf: '2026-11-03',
+          accounts: [],
+          monthly: { months: [], total: { premium: 0, dividends: 0, fees: 0, adjustments: 0, total: 0, closedEntries: 0, monthCount: 0 } },
+          annual: { availableYears: [], years: [] },
+        };
+        case 'audit_log': {
+          let entries = [...(state.testAudit ?? [])];
+          if (args.action) entries = entries.filter((entry: any) => entry.action === args.action);
+          if (args.accountId) entries = entries.filter((entry: any) => entry.accountId === args.accountId);
+          return { entries: entries.slice(0, Number(args.limit ?? 200)) };
+        }
         case 'get_vision_settings': return { ...state.testVision };
         case 'set_vision_settings': {
           const req = args.req as any;
@@ -277,7 +301,9 @@ async function setup(page: Page) {
       }
     } };
   });
-  await page.goto('/'); await expect(page.getByRole('heading', { name: 'TEST', exact: true })).toBeVisible();
+  await page.goto('/');
+  if (options.onboarding) await expect(page.getByRole('dialog')).toBeVisible();
+  else await expect(page.getByRole('heading', { name: 'TEST', exact: true })).toBeVisible();
 }
 async function pickKind(page: Page, kind: string) {
   const mode = ['shares_buy', 'shares_sell', 'stock_split'].includes(kind) ? '股票'
@@ -603,6 +629,27 @@ test('CSV import wizard maps columns, blocks duplicates and commits selected row
   expect(commit.args.req.rows[0].event.expiry).toBeNull();
 });
 
+test('broker CSV presets apply vendor header aliases and stay editable in the mapping step', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '导入', exact: true }).click();
+  const preset = page.getByLabel('券商 CSV 预设');
+  await expect(preset.locator('option')).toHaveCount(6);
+  await preset.selectOption('futu');
+  await expect(page.getByText('识别 成交时间、证券代码、方向等富途表头。')).toBeVisible();
+  await page.getByLabel('粘贴 CSV 文本').fill('成交时间,方向,证券代码,数量,价格\n2026-01-02,卖出开仓,AAPL,1,2.00');
+  await page.getByRole('button', { name: '解析预览', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '确认列映射' })).toBeVisible();
+  await expect(page.getByText('券商预设 · 签名 0123456789abcdef')).toBeVisible();
+  await expect(page.getByText('已应用富途预设识别列名；请确认列映射后再导入。')).toBeVisible();
+  const preview = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'import_preview').at(-1).args.req);
+  expect(preview.preset).toBe('futu');
+  expect(preview.mapping).toBeUndefined();
+  await page.getByLabel('标的代码').selectOption('2');
+  await page.getByRole('button', { name: '重新预览', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'import_preview').at(-1).args.req.preset)).toBeUndefined();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'import_preview').at(-1).args.req.mapping.fields.symbol)).toBe(2);
+});
+
 test('import batch list can undo a whole batch with confirmation', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => {
@@ -622,6 +669,38 @@ test('import batch list can undo a whole batch with confirmation', async ({ page
   expect(call.args.batchId).toBe('batch-import-1');
   await expect(page.getByText('已整批撤销', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '整批撤销', exact: true })).toBeDisabled();
+});
+
+test('first-run guide records the opening deposit and hands off to the entry form', async ({ page }) => {
+  await page.addInitScript(() => { (window as any).testOnboarding = { needed: true, hasEvents: false, accountCount: 0, demoAccountId: null }; });
+  await setup(page, { onboarding: true });
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '欢迎使用 Wheel Tracker' })).toBeVisible();
+  await expect(dialog).toContainText('当前账户：默认账户');
+  await expect(dialog).toContainText('记录期初入金');
+  await dialog.getByRole('button', { name: '下一步' }).click();
+  await dialog.getByLabel('期初入金金额').fill('12000');
+  await dialog.getByRole('button', { name: '记录期初入金' }).click();
+  await expect(dialog).toContainText('期初入金已记录');
+  const deposit = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === 'add_event'));
+  expect(deposit.args.req).toMatchObject({ accountId: 'main', kind: 'cash_deposit', amount: 12000, note: '期初入金' });
+  await dialog.getByRole('button', { name: '记第一笔交易' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === 'complete_onboarding'))).toBe(true);
+  await expect(page.getByLabel('交易类型')).toBeVisible();
+});
+
+test('first-run guide can open a seeded demo account instead of manual entry', async ({ page }) => {
+  await page.addInitScript(() => { (window as any).testOnboarding = { needed: true, hasEvents: false, accountCount: 0, demoAccountId: null }; });
+  await setup(page, { onboarding: true });
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '下一步' }).click();
+  await dialog.getByRole('button', { name: '暂时跳过' }).click();
+  await dialog.getByRole('button', { name: '查看演示账户' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === 'create_demo_account'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === 'complete_onboarding'))).toBe(true);
+  await expect(page.getByRole('button', { name: '记一笔', exact: true })).toBeVisible();
 });
 
 test('AI screenshot import skips text editing and commits through the vision preview', async ({ page }) => {
@@ -939,6 +1018,64 @@ test('monthly income report accumulates rent by month and filters by year', asyn
   await expect(page.getByRole('img', { name: /收租月报图/ })).toBeVisible();
 });
 
+test('all-accounts reports list each account beside merged totals in monthly and annual views', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const mainMonthly = { months: [{ month: '2026-02', premium: 148, dividends: 0, fees: 0, adjustments: 20, total: 168, cumulative: 168, closedEntries: 1 }] };
+    const secondMonthly = { months: [{ month: '2026-02', premium: 52, dividends: 10, fees: 2, adjustments: 0, total: 60, cumulative: 60, closedEntries: 0 }] };
+    const mainAnnual = { availableYears: [2026], years: [{ year: 2026,
+      months: [{ month: '2026-02', premium: 148, sharePnl: 0, dividends: 0, fees: 0, adjustments: 20, total: 168, cumulative: 168, closedEntries: 1, shareEvents: 0 }],
+      symbols: [{ symbol: 'AAPL', premium: 148, sharePnl: 0, dividends: 0, fees: 0, adjustments: 20, total: 168 }],
+      total: { premium: 148, sharePnl: 0, dividends: 0, fees: 0, adjustments: 20, total: 168, closedEntries: 1, shareEvents: 0 } }] };
+    const secondAnnual = { availableYears: [2026], years: [{ year: 2026,
+      months: [{ month: '2026-02', premium: 52, sharePnl: 0, dividends: 10, fees: 2, adjustments: 0, total: 60, cumulative: 60, closedEntries: 0, shareEvents: 0 }],
+      symbols: [{ symbol: 'MSFT', premium: 52, sharePnl: 0, dividends: 10, fees: 2, adjustments: 0, total: 60 }],
+      total: { premium: 52, sharePnl: 0, dividends: 10, fees: 2, adjustments: 0, total: 60, closedEntries: 0, shareEvents: 0 } }] };
+    (window as any).testAllReports = {
+      asOf: '2026-11-03',
+      accounts: [
+        { accountId: 'main', accountName: '默认账户', monthly: mainMonthly, annual: mainAnnual },
+        { accountId: 'second', accountName: '第二账户', monthly: secondMonthly, annual: secondAnnual },
+      ],
+      monthly: { months: [{ month: '2026-02', premium: 200, dividends: 10, fees: 2, adjustments: 20, total: 228, cumulative: 228, closedEntries: 1 }],
+        total: { premium: 200, dividends: 10, fees: 2, adjustments: 20, total: 228, closedEntries: 1, monthCount: 1 } },
+      annual: { availableYears: [2026], years: [{ year: 2026,
+        months: [{ month: '2026-02', premium: 200, sharePnl: 0, dividends: 10, fees: 2, adjustments: 20, total: 228, cumulative: 228, closedEntries: 1, shareEvents: 0 }],
+        symbols: [
+          { symbol: 'AAPL', premium: 148, sharePnl: 0, dividends: 0, fees: 0, adjustments: 20, total: 168 },
+          { symbol: 'MSFT', premium: 52, sharePnl: 0, dividends: 10, fees: 2, adjustments: 0, total: 60 },
+        ],
+        total: { premium: 200, sharePnl: 0, dividends: 10, fees: 2, adjustments: 20, total: 228, closedEntries: 1, shareEvents: 0 } }] },
+    };
+  });
+  await page.locator('nav').getByRole('button', { name: '报告', exact: true }).click();
+  await page.getByRole('button', { name: '全部账户', exact: true }).click();
+  await expect(page.locator('.report-basis').first()).toContainText('仅已实现');
+  const accounts = page.locator('.account-income-breakdown');
+  await expect(accounts.getByRole('heading', { name: '按账户列示' })).toBeVisible();
+  await expect(accounts.locator('tbody tr')).toHaveCount(2);
+  await expect(accounts.locator('tbody tr').filter({ hasText: '默认账户' })).toContainText('$168.00');
+  await expect(accounts.locator('tbody tr').filter({ hasText: '第二账户' })).toContainText('$60.00');
+  await expect(accounts.locator('tfoot')).toContainText('$228.00');
+  await expect(page.locator('.income-summary')).toContainText('$228.00');
+  expect(await page.locator('[role="note"]').count()).toBeGreaterThan(0);
+  const call = await page.evaluate(() => (window as any).testCalls.filter((item: any) => item.command === 'all_accounts_reports').length);
+  expect(call).toBe(1);
+
+  await page.getByRole('button', { name: '年度报表', exact: true }).click();
+  const annual = page.locator('.account-annual-breakdown');
+  await expect(annual.getByRole('heading', { name: '按账户列示' })).toBeVisible();
+  await expect(annual.locator('tbody tr')).toHaveCount(2);
+  await expect(annual.locator('tbody tr').filter({ hasText: '第二账户' })).toContainText('$60.00');
+  await expect(annual.locator('tfoot')).toContainText('$228.00');
+  await expect(page.locator('.annual-summary')).toContainText('$228.00');
+
+  await page.getByRole('button', { name: '当前账户', exact: true }).click();
+  await expect(page.locator('.account-annual-breakdown')).toHaveCount(0);
+  await page.getByRole('button', { name: '收租月报', exact: true }).click();
+  await expect(page.locator('.account-income-breakdown')).toHaveCount(0);
+});
+
 test('renaming the current account updates the switcher and header', async ({ page }) => {
   await setup(page);
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -1118,6 +1255,47 @@ test('split ratio appears in the event log and campaign timeline', async ({ page
   await expect(timeline.getByRole('listitem')).toHaveCount(4);
   await expect(timeline).toContainText('2 : 1');
   await expect(timeline).toContainText('零股补偿 $3.25');
+});
+
+test('audit log shows inserted, edited and undone snapshots with account and action filters', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const before = { date: '2026-01-02', kind: 'option_open_short', symbol: 'TEST', expiry: '2026-02-20', strike: 150, right: 'P', multiplier: 100, qty: 1, price: 2, fees: 1, amount: 0, note: null };
+    (window as any).testAudit = [
+      { id: 3, eventId: 'ev-3', accountId: 'main', accountName: '默认账户', action: 'update', recordedAt: '2026-11-04T09:00:00+00:00',
+        before, after: { ...before, price: 2.5, note: '修正权利金' } },
+      { id: 2, eventId: 'ev-2', accountId: 'main', accountName: '默认账户', action: 'delete', recordedAt: '2026-11-04T08:00:00+00:00',
+        before: { date: '2026-01-02', kind: 'cash_deposit', symbol: '', expiry: null, strike: null, right: null, multiplier: null, qty: 0, price: 0, fees: 0, amount: 20000, note: '期初入金' }, after: null },
+      { id: 1, eventId: 'ev-1', accountId: 'main', accountName: '默认账户', action: 'insert', recordedAt: '2026-11-04T07:00:00+00:00',
+        before: null, after: { date: '2026-01-02', kind: 'shares_buy', symbol: 'TEST', expiry: null, strike: null, right: null, multiplier: null, qty: 100, price: 150, fees: 0, amount: 0, note: '本轮买入' } },
+    ];
+  });
+  await page.locator('nav').getByRole('button', { name: '审计日志', exact: true }).click();
+  const log = page.locator('.audit-log');
+  await expect(log.getByRole('heading', { name: '审计日志' })).toBeVisible();
+  await expect(log.locator('tbody tr')).toHaveCount(3);
+  await expect(log.locator('tbody tr').nth(0)).toContainText('2026-11-04 09:00:00');
+  await expect(log.locator('tbody tr').nth(0)).toContainText('修改');
+  await expect(log.locator('tbody tr').nth(0)).toContainText('TEST 2026-02-20 150P');
+  await expect(log.locator('tbody tr').nth(0)).toContainText('$2.50 × 1');
+  await expect(log.locator('tbody tr').nth(0)).toContainText('价格 2 → 2.5');
+  await expect(log.locator('tbody tr').nth(0)).toContainText('备注 — → 修正权利金');
+  await expect(log.locator('tbody tr').nth(1)).toContainText('撤销前 · 期初入金');
+  await expect(log.locator('tbody tr').nth(1)).toContainText('$20,000.00');
+  await expect(log.locator('tbody tr').nth(2)).toContainText('新增 · 本轮买入');
+  await expect(log.locator('tbody tr').nth(2)).toContainText('$150.00 × 100 股');
+
+  const firstCall = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'audit_log').at(-1).args);
+  expect(firstCall.accountId).toBe('main');
+  expect(firstCall.limit).toBe(200);
+
+  await page.getByLabel('审计动作筛选').selectOption('update');
+  await expect(log.locator('tbody tr')).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'audit_log').at(-1).args.action)).toBe('update');
+
+  await page.getByLabel('审计范围').selectOption('all');
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.filter((call: any) => call.command === 'audit_log').at(-1).args.accountId)).toBeUndefined();
+  await expect(log.locator('.footnote')).toContainText('只读的追加记录');
 });
 
 test('open contract multiplier drives entry prefill and reminder premium', async ({ page }) => {

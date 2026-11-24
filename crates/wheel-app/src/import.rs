@@ -577,16 +577,126 @@ const ALIASES: &[(Field, &[&str])] = &[
     ),
 ];
 
-fn alias_fields(header: &str) -> Vec<Field> {
+/// Broker export presets. Presets only add header aliases that are specific
+/// to a broker's export; the generic alias table remains the fallback.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokerPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub note: &'static str,
+}
+
+const PRESETS: &[BrokerPreset] = &[
+    BrokerPreset {
+        id: "ibkr",
+        name: "盈透 IBKR",
+        note: "识别 Transaction Type、Commission、Description 等 Activity Statement 表头。",
+    },
+    BrokerPreset {
+        id: "futu",
+        name: "富途",
+        note: "识别 成交时间 / 证券代码 / 方向 / 成交数量 / 交易费用 等表头。",
+    },
+    BrokerPreset {
+        id: "tiger",
+        name: "老虎",
+        note: "识别 成交时间 / 代码 / 交易方向 / 成交数量 / 佣金 等表头。",
+    },
+    BrokerPreset {
+        id: "schwab",
+        name: "嘉信 Schwab",
+        note: "识别 Date / Action / Description / Fees & Comm 等表头。",
+    },
+    BrokerPreset {
+        id: "firstrade",
+        name: "Firstrade",
+        note: "识别 Date / Action / Description / Fees 等表头。",
+    },
+];
+
+pub fn presets() -> &'static [BrokerPreset] {
+    PRESETS
+}
+
+fn preset_aliases(id: &str) -> Option<&'static [(Field, &'static [&'static str])]> {
+    match id {
+        "ibkr" => Some(&[
+            (Field::Date, &["trade date", "settle date"]),
+            (Field::Action, &["transaction type"]),
+            (Field::Symbol, &["symbol"]),
+            (Field::OptionSymbol, &["description"]),
+            (Field::Qty, &["quantity"]),
+            (Field::Price, &["price", "t. price"]),
+            (Field::Fees, &["commission", "comm/fee"]),
+            (Field::Amount, &["amount"]),
+        ]),
+        "futu" => Some(&[
+            (Field::Date, &["成交时间", "成交日期"]),
+            (Field::Action, &["方向", "买卖方向"]),
+            (Field::Symbol, &["证券代码", "代码"]),
+            (Field::Qty, &["成交数量"]),
+            (Field::Price, &["成交价格", "成交价"]),
+            (Field::Fees, &["交易费用", "费用"]),
+            (Field::Amount, &["总金额", "成交金额"]),
+            (Field::Note, &["名称"]),
+        ]),
+        "tiger" => Some(&[
+            (Field::Date, &["成交时间", "成交日期"]),
+            (Field::Action, &["交易方向", "方向"]),
+            (Field::Symbol, &["代码", "证券代码"]),
+            (Field::Qty, &["成交数量"]),
+            (Field::Price, &["成交价格", "成交价"]),
+            (Field::Fees, &["佣金", "费用"]),
+            (Field::Amount, &["交易金额", "成交金额"]),
+            (Field::Note, &["名称"]),
+        ]),
+        "schwab" => Some(&[
+            (Field::Date, &["date"]),
+            (Field::Action, &["action"]),
+            (Field::Symbol, &["symbol"]),
+            (Field::OptionSymbol, &["description"]),
+            (Field::Qty, &["quantity"]),
+            (Field::Price, &["price"]),
+            (Field::Fees, &["fees & comm", "fees & commissions"]),
+            (Field::Amount, &["amount"]),
+        ]),
+        "firstrade" => Some(&[
+            (Field::Date, &["date", "trade date"]),
+            (Field::Action, &["action", "type"]),
+            (Field::Symbol, &["symbol"]),
+            (Field::OptionSymbol, &["description"]),
+            (Field::Qty, &["quantity"]),
+            (Field::Price, &["price"]),
+            (Field::Fees, &["fees", "commission"]),
+            (Field::Amount, &["amount"]),
+        ]),
+        _ => None,
+    }
+}
+
+fn alias_fields(header: &str, preset: Option<&[(Field, &[&str])]>) -> Vec<Field> {
     let normalized = normalize_header(header);
     if normalized.is_empty() {
         return Vec::new();
     }
     let mut matched = Vec::new();
+    if let Some(aliases) = preset {
+        for (field, names) in aliases {
+            if names
+                .iter()
+                .any(|alias| normalize_header(alias) == normalized)
+                && !matched.contains(field)
+            {
+                matched.push(*field);
+            }
+        }
+    }
     for (field, aliases) in ALIASES {
         if aliases
             .iter()
             .any(|alias| normalize_header(alias) == normalized)
+            && !matched.contains(field)
         {
             matched.push(*field);
         }
@@ -595,10 +705,19 @@ fn alias_fields(header: &str) -> Vec<Field> {
 }
 
 pub fn auto_map(headers: &[String]) -> (ColumnMapping, Vec<String>) {
+    auto_map_with_preset(headers, None)
+}
+
+pub fn auto_map_with_preset(
+    headers: &[String],
+    preset: Option<&str>,
+) -> (ColumnMapping, Vec<String>) {
+    let preset_name = preset.and_then(|id| presets().iter().find(|item| item.id == id));
+    let aliases = preset.and_then(preset_aliases);
     let mut mapping = ColumnMapping::default();
     let mut warnings = Vec::new();
     for (index, header) in headers.iter().enumerate() {
-        let matched = alias_fields(header);
+        let matched = alias_fields(header, aliases);
         if matched.is_empty() {
             continue;
         }
@@ -620,6 +739,17 @@ pub fn auto_map(headers: &[String]) -> (ColumnMapping, Vec<String>) {
         }
     }
     mapping.has_header = Some(true);
+    match preset {
+        Some(id) if preset_name.is_none() => {
+            warnings.push(format!("未知的券商预设“{id}”，已改用通用表头识别。"));
+        }
+        Some(_) => warnings.push(format!(
+            "已应用{}预设，识别 {} 个字段；请确认列映射。",
+            preset_name.map(|item| item.name).unwrap_or("券商"),
+            mapping.fields.len()
+        )),
+        None => {}
+    }
     (mapping, warnings)
 }
 
@@ -969,7 +1099,10 @@ fn looks_like_header(cells: &[String]) -> bool {
     if cells.is_empty() || is_blank(cells) {
         return false;
     }
-    if cells.iter().any(|cell| !alias_fields(cell).is_empty()) {
+    if cells
+        .iter()
+        .any(|cell| !alias_fields(cell, None).is_empty())
+    {
         return true;
     }
     let first = cells.first().map(String::as_str).unwrap_or("");
@@ -2052,5 +2185,47 @@ mod tests {
         mapping.fields.insert(Field::Action, 2);
         assert!(validate_mapping(&mapping, 3).is_ok());
         assert!(validate_mapping(&mapping, 2).is_err());
+    }
+
+    #[test]
+    fn broker_presets_map_vendor_specific_headers() {
+        assert_eq!(presets().len(), 5);
+
+        let ibkr = row(&[
+            "Trade Date",
+            "Transaction Type",
+            "Symbol",
+            "Description",
+            "Quantity",
+            "T. Price",
+            "Comm/Fee",
+            "Amount",
+        ]);
+        let (mapping, warnings) = auto_map_with_preset(&ibkr, Some("ibkr"));
+        assert_eq!(mapping.fields.get(&Field::Date), Some(&0));
+        assert_eq!(mapping.fields.get(&Field::Action), Some(&1));
+        assert_eq!(mapping.fields.get(&Field::Symbol), Some(&2));
+        assert_eq!(mapping.fields.get(&Field::OptionSymbol), Some(&3));
+        assert_eq!(mapping.fields.get(&Field::Fees), Some(&6));
+        assert!(warnings.iter().any(|warning| warning.contains("盈透")));
+
+        let futu = row(&[
+            "成交时间",
+            "证券代码",
+            "名称",
+            "方向",
+            "成交数量",
+            "成交价格",
+            "总金额",
+            "交易费用",
+        ]);
+        let (mapping, _) = auto_map_with_preset(&futu, Some("futu"));
+        assert_eq!(mapping.fields.get(&Field::Note), Some(&2));
+        assert_eq!(mapping.fields.get(&Field::Fees), Some(&7));
+
+        let (_, warnings) = auto_map_with_preset(&ibkr, Some("unknown"));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("未知的券商预设")));
     }
 }

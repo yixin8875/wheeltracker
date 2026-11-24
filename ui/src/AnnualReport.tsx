@@ -10,7 +10,8 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { NativeSelect } from '@/components/native-select';
 import { downloadCsv, money } from './lib';
 import { exportAnnualReport } from './export';
-import type { AnnualReport, AnnualYear } from './types';
+import { GlossaryTerm } from './glossary';
+import type { AccountReport, AnnualReport, AnnualYear } from './types';
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
@@ -21,13 +22,26 @@ const LINE = 'rgba(24, 24, 27, .18)';
 const GRID = 'rgba(24, 24, 27, .07)';
 const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
-export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
+export function AnnualReportPage({ report, accounts, scope = 'account' }: {
+  report: AnnualReport | null;
+  accounts?: AccountReport[];
+  scope?: 'account' | 'all';
+}) {
   const years = useMemo(() => [...(report?.availableYears ?? [])].sort((left, right) => right - left), [report]);
   const [year, setYear] = useState<number | null>(null);
   useEffect(() => {
     if (years.length && (year === null || !years.includes(year))) setYear(years[0]);
   }, [years, year]);
   const current: AnnualYear | null = report?.years.find(item => item.year === year) ?? null;
+  const accountRows = useMemo(() => {
+    if (!current || !accounts?.length) return [];
+    return accounts.flatMap(account => {
+      const yearReport = account.annual.years.find(item => item.year === current.year);
+      return yearReport
+        ? [{ accountId: account.accountId, accountName: account.accountName, total: yearReport.total }]
+        : [];
+    });
+  }, [accounts, current]);
   const element = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +96,14 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
       ]),
       ['年度合计', current.total.premium, current.total.sharePnl, current.total.dividends, current.total.fees,
         current.total.adjustments, current.total.total, '', current.total.closedEntries, current.total.shareEvents],
+      ...(scope === 'all' && accountRows.length ? [
+        ['按账户'],
+        ['账户', '净收租', '股票已实现盈亏', '分红', '费用（含账户级）', '调整 / 利息', '合计'],
+        ...accountRows.map(row => [row.accountName, row.total.premium, row.total.sharePnl, row.total.dividends,
+          row.total.fees, row.total.adjustments, row.total.total]),
+        ['账户合计', current.total.premium, current.total.sharePnl, current.total.dividends,
+          current.total.fees, current.total.adjustments, current.total.total],
+      ] : []),
       ['标的归因'],
       ['标的', '净收租', '股票已实现盈亏', '分红', '费用（含账户级）', '调整 / 利息', '合计'],
       ...current.symbols.map(symbol => [symbol.symbol, symbol.premium, symbol.sharePnl, symbol.dividends, symbol.fees, symbol.adjustments, symbol.total]),
@@ -95,6 +117,9 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
         <CardDescription>已实现口径 · 美东交易日按年</CardDescription>
       </CardHeader>
       <CardPanel className="space-y-4">
+        <p className="report-basis rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          口径：仅已实现 · 净收租按平仓日 · 股票盈亏按卖出 / 指派日 · 分红、费用与调整按事件日 · 入金 / 出金不计入收益
+        </p>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             年份
@@ -105,17 +130,65 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
           <Button variant="outline" size="sm" onClick={exportRows} disabled={!current}>导出 CSV</Button>
           <Button variant="outline" size="sm" onClick={() => current && exportAnnualReport(current)} disabled={!current}>导出 Excel</Button>
         </div>
+        {scope === 'all' && accounts && current && (
+          <div className="account-annual-breakdown space-y-2">
+            <h3 className="font-heading text-sm font-semibold">按账户列示</h3>
+            {accountRows.length ? (
+              <div className="overflow-hidden rounded-xl border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>账户</TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="netPremium" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="sharePnl" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="dividends" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="adjustments" /></TableHead>
+                      <TableHead className="text-right">合计</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accountRows.map(row => (
+                      <TableRow key={row.accountId}>
+                        <TableCell className="font-medium">{row.accountName}</TableCell>
+                        <TableCell className="num text-right">{money(row.total.premium)}</TableCell>
+                        <TableCell className="num text-right">{money(row.total.sharePnl)}</TableCell>
+                        <TableCell className="num text-right">{money(row.total.dividends)}</TableCell>
+                        <TableCell className="num text-right">{money(row.total.fees)}</TableCell>
+                        <TableCell className="num text-right">{money(row.total.adjustments)}</TableCell>
+                        <TableCell className={`num text-right ${row.total.total < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(row.total.total)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell>合计</TableCell>
+                      <TableCell className="num text-right">{money(current.total.premium)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.sharePnl)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.dividends)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.fees)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.adjustments)}</TableCell>
+                      <TableCell className="num text-right">{money(current.total.total)}</TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">所选年份没有账户收益。</p>
+            )}
+          </div>
+        )}
         {!report?.years.length ? (
           <p className="text-sm text-muted-foreground">有了结的期权、股票卖出、分红或拆股零股补偿后，这里会按年度汇总已实现收益。</p>
         ) : current && (
           <>
             <div className="annual-summary grid gap-4 rounded-xl border bg-muted/40 p-4 sm:grid-cols-3 xl:grid-cols-6">
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">年度合计</span><strong className={`num text-xl font-semibold ${current.total.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(current.total.total)}</strong><small className="text-xs text-muted-foreground">{current.months.length} 个月 · 已实现口径</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">净收租</span><strong className="num text-xl font-semibold">{money(current.total.premium)}</strong><small className="text-xs text-muted-foreground">按平仓日计入</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">股票已实现盈亏</span><strong className="num text-xl font-semibold">{money(current.total.sharePnl)}</strong><small className="text-xs text-muted-foreground">卖出、Call 指派、零股补偿</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">分红</span><strong className="num text-xl font-semibold">{money(current.total.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">费用（含账户级）</span><strong className="num text-xl font-semibold">{money(current.total.fees)}</strong><small className="text-xs text-muted-foreground">已从合计扣除</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">调整 / 利息</span><strong className="num text-xl font-semibold">{money(current.total.adjustments)}</strong><small className="text-xs text-muted-foreground">计入合计</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="annualTotal" /></span><strong className={`num text-xl font-semibold ${current.total.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(current.total.total)}</strong><small className="text-xs text-muted-foreground">{current.months.length} 个月 · 已实现口径</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="netPremium" /></span><strong className="num text-xl font-semibold">{money(current.total.premium)}</strong><small className="text-xs text-muted-foreground">按平仓日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="sharePnl" /></span><strong className="num text-xl font-semibold">{money(current.total.sharePnl)}</strong><small className="text-xs text-muted-foreground">卖出、Call 指派、零股补偿</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="dividends" /></span><strong className="num text-xl font-semibold">{money(current.total.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></span><strong className="num text-xl font-semibold">{money(current.total.fees)}</strong><small className="text-xs text-muted-foreground">已从合计扣除</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="adjustments" /></span><strong className="num text-xl font-semibold">{money(current.total.adjustments)}</strong><small className="text-xs text-muted-foreground">计入合计</small></div>
             </div>
             <div ref={element} className="income-chart chart-surface" role="img" aria-label="年度已实现收益图：柱形为月度合计，折线为年度累计" />
             <div className="space-y-2">
@@ -125,11 +198,11 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
                   <TableHeader>
                     <TableRow>
                       <TableHead>月份</TableHead>
-                      <TableHead className="text-right">净收租</TableHead>
-                      <TableHead className="text-right">股票已实现盈亏</TableHead>
-                      <TableHead className="text-right">分红</TableHead>
-                      <TableHead className="text-right">费用（含账户级）</TableHead>
-                      <TableHead className="text-right">调整 / 利息</TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="netPremium" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="sharePnl" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="dividends" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="adjustments" /></TableHead>
                       <TableHead className="text-right">合计</TableHead>
                       <TableHead className="text-right">年度累计</TableHead>
                       <TableHead className="text-right">了结合约</TableHead>
@@ -176,11 +249,11 @@ export function AnnualReportPage({ report }: { report: AnnualReport | null }) {
                   <TableHeader>
                     <TableRow>
                       <TableHead>标的</TableHead>
-                      <TableHead className="text-right">净收租</TableHead>
-                      <TableHead className="text-right">股票已实现盈亏</TableHead>
-                      <TableHead className="text-right">分红</TableHead>
-                      <TableHead className="text-right">费用（含账户级）</TableHead>
-                      <TableHead className="text-right">调整 / 利息</TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="netPremium" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="sharePnl" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="dividends" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="adjustments" /></TableHead>
                       <TableHead className="text-right">合计</TableHead>
                     </TableRow>
                   </TableHeader>

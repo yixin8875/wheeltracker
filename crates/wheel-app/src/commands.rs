@@ -1084,6 +1084,10 @@ fn monthly_income_for(
         }
     }
 
+    Ok(monthly_view_from(buckets))
+}
+
+fn monthly_view_from(buckets: BTreeMap<String, MonthBucket>) -> views::MonthlyIncomeView {
     let mut cumulative = 0.0;
     let months: Vec<views::MonthIncomeView> = buckets
         .into_iter()
@@ -1121,7 +1125,7 @@ fn monthly_income_for(
         total.closed_entries += month.closed_entries;
     }
 
-    Ok(views::MonthlyIncomeView { months, total })
+    views::MonthlyIncomeView { months, total }
 }
 
 #[tauri::command]
@@ -1277,6 +1281,10 @@ fn annual_report_for(
         }
     }
 
+    Ok(annual_report_from(by_year))
+}
+
+fn annual_report_from(by_year: BTreeMap<i32, AnnualYearAccumulator>) -> views::AnnualReportView {
     let mut reports = Vec::with_capacity(by_year.len());
     for (year_number, year) in by_year {
         let mut cumulative = 0.0;
@@ -1328,10 +1336,128 @@ fn annual_report_for(
     }
 
     let available_years = reports.iter().map(|report| report.year).collect();
-    Ok(views::AnnualReportView {
+    views::AnnualReportView {
         available_years,
         years: reports,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountReportView {
+    pub account_id: String,
+    pub account_name: String,
+    pub monthly: views::MonthlyIncomeView,
+    pub annual: views::AnnualReportView,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllAccountsReportsView {
+    pub as_of: String,
+    pub accounts: Vec<AccountReportView>,
+    pub monthly: views::MonthlyIncomeView,
+    pub annual: views::AnnualReportView,
+}
+
+#[tauri::command]
+pub fn all_accounts_reports(state: State<'_, AppState>) -> Result<AllAccountsReportsView, String> {
+    all_accounts_reports_for(&state.conn())
+}
+
+/// Per-account monthly and annual reports plus a merged view. Each account's
+/// history is replayed on its own, so combined premium never crosses accounts.
+fn all_accounts_reports_for(conn: &rusqlite::Connection) -> Result<AllAccountsReportsView, String> {
+    let mut accounts = Vec::new();
+    for account in store::list_accounts(conn).map_err(|error| format!("{error:#}"))? {
+        if account.archived_at.is_some() {
+            continue;
+        }
+        accounts.push(AccountReportView {
+            monthly: monthly_income_for(conn, &account.id)?,
+            annual: annual_report_for(conn, &account.id)?,
+            account_id: account.id,
+            account_name: account.name,
+        });
+    }
+    accounts.sort_by(|left, right| {
+        left.account_name
+            .cmp(&right.account_name)
+            .then_with(|| left.account_id.cmp(&right.account_id))
+    });
+    let monthly = merge_monthly(accounts.iter().map(|account| &account.monthly));
+    let annual = merge_annual(accounts.iter().map(|account| &account.annual));
+    Ok(AllAccountsReportsView {
+        as_of: store::today().to_string(),
+        accounts,
+        monthly,
+        annual,
     })
+}
+
+fn merge_monthly<'a>(
+    reports: impl Iterator<Item = &'a views::MonthlyIncomeView>,
+) -> views::MonthlyIncomeView {
+    let mut buckets: BTreeMap<String, MonthBucket> = BTreeMap::new();
+    for report in reports {
+        for month in &report.months {
+            let bucket = buckets.entry(month.month.clone()).or_default();
+            bucket.premium += month.premium;
+            bucket.dividends += month.dividends;
+            bucket.fees += month.fees;
+            bucket.adjustments += month.adjustments;
+            bucket.closed_entries += month.closed_entries;
+        }
+    }
+    monthly_view_from(buckets)
+}
+
+fn merge_annual<'a>(
+    reports: impl Iterator<Item = &'a views::AnnualReportView>,
+) -> views::AnnualReportView {
+    let mut by_year: BTreeMap<i32, AnnualYearAccumulator> = BTreeMap::new();
+    for report in reports {
+        for year in &report.years {
+            let accumulator = by_year.entry(year.year).or_default();
+            for month in &year.months {
+                let Some(month_number) = month
+                    .month
+                    .rsplit('-')
+                    .next()
+                    .and_then(|value| value.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                let bucket = accumulator.months.entry(month_number).or_default();
+                bucket.premium += month.premium;
+                bucket.share_pnl += month.share_pnl;
+                bucket.dividends += month.dividends;
+                bucket.fees += month.fees;
+                bucket.adjustments += month.adjustments;
+                bucket.closed_entries += month.closed_entries;
+                bucket.share_events += month.share_events;
+            }
+            for symbol in &year.symbols {
+                let bucket = accumulator
+                    .symbols
+                    .entry(symbol.symbol.clone())
+                    .or_default();
+                bucket.premium += symbol.premium;
+                bucket.share_pnl += symbol.share_pnl;
+                bucket.dividends += symbol.dividends;
+                bucket.fees += symbol.fees;
+                bucket.adjustments += symbol.adjustments;
+            }
+            accumulator.total.premium += year.total.premium;
+            accumulator.total.share_pnl += year.total.share_pnl;
+            accumulator.total.dividends += year.total.dividends;
+            accumulator.total.fees += year.total.fees;
+            accumulator.total.adjustments += year.total.adjustments;
+            accumulator.total.closed_entries += year.total.closed_entries;
+            accumulator.total.share_events += year.total.share_events;
+        }
+    }
+    annual_report_from(by_year)
 }
 
 #[tauri::command]
@@ -1451,6 +1577,47 @@ pub fn delete_event(state: State<'_, AppState>, event_id: String) -> Result<bool
     ensure_no_pending_restore(&state)?;
     let conn = state.conn();
     store::delete_event(&conn, &event_id).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditLogView {
+    pub entries: Vec<store::AuditEntry>,
+}
+
+/// Read the append-only event audit trail. `account_id` empty means every
+/// account; `action` may be insert, update or delete.
+#[tauri::command]
+pub fn audit_log(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    action: Option<String>,
+    limit: Option<u32>,
+) -> Result<AuditLogView, String> {
+    audit_log_for(&state.conn(), account_id, action, limit)
+}
+
+fn audit_log_for(
+    conn: &rusqlite::Connection,
+    account_id: Option<String>,
+    action: Option<String>,
+    limit: Option<u32>,
+) -> Result<AuditLogView, String> {
+    let account_id = account_id.filter(|value| !value.trim().is_empty());
+    let action = action.filter(|value| !value.trim().is_empty());
+    if let Some(value) = action.as_deref() {
+        if !matches!(value, "insert" | "update" | "delete") {
+            return Err(format!("未知的审计动作 `{value}`"));
+        }
+    }
+    let entries = store::list_audit(
+        conn,
+        account_id.as_deref(),
+        action.as_deref(),
+        limit.unwrap_or(200),
+    )
+    .map_err(|error| format!("{error:#}"))?;
+    Ok(AuditLogView { entries })
 }
 
 #[tauri::command]
@@ -2187,6 +2354,9 @@ pub struct ImportPreviewReq {
     pub has_header: Option<bool>,
     #[serde(default)]
     pub account_id: Option<String>,
+    /// Optional broker preset id; only used when an explicit mapping is absent.
+    #[serde(default)]
+    pub preset: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2246,21 +2416,35 @@ fn preview_for(
             (mapping, "manual")
         }
         None => {
-            let key = crate::import::mapping_key(&document.signature);
-            let saved = store::get_setting_value(conn, &key)
-                .map_err(|error| error.to_string())?
-                .and_then(|json| serde_json::from_str::<crate::import::ColumnMapping>(&json).ok())
-                .filter(|mapping| crate::import::validate_mapping(mapping, columns).is_ok());
-            match saved {
-                Some(mapping) => (mapping, "saved"),
-                None => {
-                    let (mapping, warnings) = crate::import::auto_map(&document.headers);
-                    document.warnings.extend(warnings);
-                    document.warnings.push(format!(
-                        "已自动识别 {} 个字段；请确认列映射后再导入。",
-                        mapping.fields.len()
-                    ));
-                    (mapping, "detected")
+            let preset = req
+                .preset
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if preset.is_some() {
+                let (mapping, warnings) =
+                    crate::import::auto_map_with_preset(&document.headers, preset);
+                document.warnings.extend(warnings);
+                (mapping, "preset")
+            } else {
+                let key = crate::import::mapping_key(&document.signature);
+                let saved = store::get_setting_value(conn, &key)
+                    .map_err(|error| error.to_string())?
+                    .and_then(|json| {
+                        serde_json::from_str::<crate::import::ColumnMapping>(&json).ok()
+                    })
+                    .filter(|mapping| crate::import::validate_mapping(mapping, columns).is_ok());
+                match saved {
+                    Some(mapping) => (mapping, "saved"),
+                    None => {
+                        let (mapping, warnings) = crate::import::auto_map(&document.headers);
+                        document.warnings.extend(warnings);
+                        document.warnings.push(format!(
+                            "已自动识别 {} 个字段；请确认列映射后再导入。",
+                            mapping.fields.len()
+                        ));
+                        (mapping, "detected")
+                    }
                 }
             }
         }
@@ -2532,6 +2716,11 @@ pub fn undo_import_batch(
 }
 
 #[tauri::command]
+pub fn import_presets() -> Vec<crate::import::BrokerPreset> {
+    crate::import::presets().to_vec()
+}
+
+#[tauri::command]
 pub fn import_save_mapping(
     state: State<'_, AppState>,
     signature: String,
@@ -2575,6 +2764,7 @@ fn extraction_preview_for(
         mapping: Some(text_mapping()),
         has_header: Some(true),
         account_id,
+        preset: None,
     };
     let mut preview = preview_for(conn, csv_req)?;
     let mut warnings = extraction.warnings;
@@ -2914,6 +3104,183 @@ pub fn set_alert_rules(
     ensure_no_pending_restore(&state)?;
     let conn = state.conn();
     insights::save_rules(&conn, rules).map_err(|error| format!("{error:#}"))
+}
+
+// ---------------------------------------------------------------------------
+// P2: first-run onboarding and demo account
+// ---------------------------------------------------------------------------
+
+const ONBOARDING_KEY: &str = "onboardingDone";
+const DEMO_ACCOUNT_PREFIX: &str = "demo-";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingStatusView {
+    /// True only before the guide is completed and the ledger is still empty.
+    pub needed: bool,
+    pub has_events: bool,
+    pub account_count: usize,
+    pub demo_account_id: Option<String>,
+}
+
+#[tauri::command]
+pub fn onboarding_status(state: State<'_, AppState>) -> Result<OnboardingStatusView, String> {
+    onboarding_status_for(&state.conn())
+}
+
+fn onboarding_status_for(conn: &rusqlite::Connection) -> Result<OnboardingStatusView, String> {
+    let accounts = store::list_accounts(conn).map_err(|error| format!("{error:#}"))?;
+    let mut events = 0;
+    let mut active_accounts = 0;
+    let mut demo_account_id = None;
+    for account in &accounts {
+        if account.archived_at.is_some() {
+            continue;
+        }
+        active_accounts += 1;
+        events += store::count_events(conn, &account.id).map_err(|error| format!("{error:#}"))?;
+        if account.id.starts_with(DEMO_ACCOUNT_PREFIX) {
+            demo_account_id = Some(account.id.clone());
+        }
+    }
+    let done = store::get_setting_value(conn, ONBOARDING_KEY)
+        .map_err(|error| format!("{error:#}"))?
+        .is_some_and(|value| value == "true");
+    Ok(OnboardingStatusView {
+        needed: !done && events == 0,
+        has_events: events > 0,
+        account_count: active_accounts,
+        demo_account_id,
+    })
+}
+
+#[tauri::command]
+pub fn complete_onboarding(state: State<'_, AppState>) -> Result<bool, String> {
+    ensure_no_pending_restore(&state)?;
+    store::set_setting_value(&state.conn(), ONBOARDING_KEY, "true")
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn create_demo_account(state: State<'_, AppState>) -> Result<String, String> {
+    ensure_no_pending_restore(&state)?;
+    create_demo_account_for(&state.conn())
+}
+
+/// Seed a readable demo: a deposit, one open CSP, one closed put, shares,
+/// a dividend and account-level fee/interest. Reuses the normal write path so
+/// the same replay validation applies to demo history.
+fn create_demo_account_for(conn: &rusqlite::Connection) -> Result<String, String> {
+    if let Some(existing) = store::list_accounts(conn)
+        .map_err(|error| format!("{error:#}"))?
+        .into_iter()
+        .find(|account| account.id.starts_with(DEMO_ACCOUNT_PREFIX))
+    {
+        return Ok(existing.id);
+    }
+    let today = store::today();
+    let id = format!(
+        "{DEMO_ACCOUNT_PREFIX}{}",
+        OffsetDateTime::now_utc().unix_timestamp_nanos()
+    );
+    store::insert_account(conn, &id, "演示账户", &today.to_string())
+        .map_err(|error| format!("{error:#}"))?;
+
+    let closed = wheel_core::OptionContract::new(
+        "AAPL",
+        today - time::Duration::days(14),
+        175.0,
+        Right::Put,
+    );
+    let open = wheel_core::OptionContract::new(
+        "AAPL",
+        today + time::Duration::days(21),
+        185.0,
+        Right::Put,
+    );
+    let event = |seq: u64, suffix: &str| format!("{id}-{suffix}-{seq}");
+    let events = vec![
+        Event::cash_deposit(
+            &id,
+            &event(1, "deposit"),
+            1,
+            today - time::Duration::days(120),
+            50_000.0,
+        )
+        .note("演示：期初入金"),
+        Event::buy_shares(
+            &id,
+            &event(2, "buy"),
+            2,
+            today - time::Duration::days(110),
+            "AAPL",
+            100,
+            180.0,
+            1.0,
+        )
+        .note("演示：买入 100 股"),
+        Event::sell_option(
+            &id,
+            &event(3, "open-old"),
+            3,
+            today - time::Duration::days(75),
+            closed.clone(),
+            1,
+            2.8,
+            1.0,
+        ),
+        Event::close_option(
+            &id,
+            &event(4, "close-old"),
+            4,
+            today - time::Duration::days(30),
+            closed,
+            1,
+            0.9,
+            1.0,
+        ),
+        Event::sell_option(
+            &id,
+            &event(5, "open-live"),
+            5,
+            today - time::Duration::days(40),
+            open,
+            1,
+            4.2,
+            1.0,
+        ),
+        Event::dividend(
+            &id,
+            &event(6, "dividend"),
+            6,
+            today - time::Duration::days(10),
+            "AAPL",
+            0.25,
+            100,
+        ),
+        Event::fee(
+            &id,
+            &event(7, "fee"),
+            7,
+            today - time::Duration::days(5),
+            "",
+            2.0,
+        )
+        .note("演示：账户级费用"),
+        Event::interest(
+            &id,
+            &event(8, "interest"),
+            8,
+            today - time::Duration::days(3),
+            1.5,
+        )
+        .note("演示：利息收入"),
+    ];
+    store::insert_events(conn, &events).map_err(|error| format!("{error:#}"))?;
+    store::upsert_price(conn, "AAPL", today, 190.0).map_err(|error| format!("{error:#}"))?;
+    store::set_setting_value(conn, ONBOARDING_KEY, "true").map_err(|error| format!("{error:#}"))?;
+    Ok(id)
 }
 
 const WATCHLIST_KEY: &str = "watchlist";
@@ -4892,5 +5259,125 @@ mod tests {
         assert_eq!(outcome.candidates.len(), 1);
         assert_eq!(outcome.candidates[0].qty, 2);
         assert_eq!(outcome.candidates[0].cash_required, 18_000.0);
+    }
+
+    #[test]
+    fn all_accounts_reports_list_each_account_and_merge_totals() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_account(&conn, "second", "长期账户", "2026-01-01").unwrap();
+        let at = |value: &str| store::parse_date(value).unwrap();
+        let contract = OptionContract::new("AAPL", at("2026-02-20"), 150.0, Right::Put);
+        store::insert_events(
+            &conn,
+            &[
+                Event::sell_option(
+                    "main",
+                    "sto",
+                    1,
+                    at("2026-01-05"),
+                    contract.clone(),
+                    1,
+                    2.0,
+                    1.0,
+                ),
+                Event::close_option("main", "btc", 2, at("2026-02-20"), contract, 1, 0.5, 1.0),
+                Event::buy_shares("second", "buy", 1, at("2026-03-01"), "MSFT", 10, 300.0, 0.0),
+                Event::dividend("second", "div", 2, at("2026-03-10"), "MSFT", 2.0, 10),
+            ],
+        )
+        .unwrap();
+
+        let view = all_accounts_reports_for(&conn).unwrap();
+        assert_eq!(view.accounts.len(), 2);
+        let premium: f64 = view
+            .accounts
+            .iter()
+            .map(|account| account.monthly.total.premium)
+            .sum();
+        assert!((view.monthly.total.premium - premium).abs() < 1e-9);
+        assert_eq!(view.monthly.total.dividends, 20.0);
+        assert_eq!(
+            view.monthly
+                .months
+                .iter()
+                .map(|month| month.month.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-02", "2026-03"]
+        );
+        assert_eq!(view.annual.available_years, vec![2026]);
+        let year = &view.annual.years[0];
+        assert_eq!(year.months.len(), 2);
+        assert_eq!(year.symbols.len(), 2);
+        let account_total: f64 = view
+            .accounts
+            .iter()
+            .map(|account| {
+                account
+                    .annual
+                    .years
+                    .iter()
+                    .map(|year| year.total.total)
+                    .sum::<f64>()
+            })
+            .sum();
+        let merged_total: f64 = view.annual.years.iter().map(|year| year.total.total).sum();
+        assert!((merged_total - account_total).abs() < 1e-9);
+
+        store::set_account_archived(&conn, "second", true).unwrap();
+        let view = all_accounts_reports_for(&conn).unwrap();
+        assert_eq!(view.accounts.len(), 1);
+        assert_eq!(view.monthly.total.dividends, 0.0);
+    }
+
+    #[test]
+    fn audit_log_filters_by_account_action_and_limit() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        store::insert_event(
+            &conn,
+            &Event::buy_shares("main", "buy", 1, date(), "AAPL", 10, 150.0, 0.0),
+        )
+        .unwrap();
+        let corrected = Event::buy_shares("main", "buy", 1, date(), "AAPL", 10, 149.0, 0.0);
+        store::update_event(&conn, &corrected).unwrap();
+        store::delete_event(&conn, "buy").unwrap();
+
+        let all = audit_log_for(&conn, None, None, None).unwrap();
+        assert_eq!(all.entries.len(), 3);
+        assert_eq!(all.entries[0].action, "delete");
+        assert_eq!(all.entries[0].account_name, "默认账户");
+
+        let updates =
+            audit_log_for(&conn, Some("main".into()), Some("update".into()), Some(1)).unwrap();
+        assert_eq!(updates.entries.len(), 1);
+        assert_eq!(updates.entries[0].before.as_ref().unwrap().price, 150.0);
+        assert_eq!(updates.entries[0].after.as_ref().unwrap().price, 149.0);
+        assert!(audit_log_for(&conn, None, Some("bogus".into()), None).is_err());
+    }
+
+    #[test]
+    fn onboarding_starts_empty_and_demo_account_seeds_a_readable_ledger() {
+        let conn = db();
+        store::ensure_account(&conn, "main", "默认账户").unwrap();
+        let status = onboarding_status_for(&conn).unwrap();
+        assert!(status.needed);
+        assert!(!status.has_events);
+        assert_eq!(status.account_count, 1);
+        assert!(status.demo_account_id.is_none());
+
+        let demo = create_demo_account_for(&conn).unwrap();
+        assert!(demo.starts_with(DEMO_ACCOUNT_PREFIX));
+        let status = onboarding_status_for(&conn).unwrap();
+        assert!(!status.needed);
+        assert!(status.has_events);
+        assert_eq!(status.demo_account_id.as_deref(), Some(demo.as_str()));
+        assert_eq!(create_demo_account_for(&conn).unwrap(), demo);
+
+        let derived = derive(&conn, &demo).unwrap();
+        assert!(!derived.positions.is_empty());
+        let reports = all_accounts_reports_for(&conn).unwrap();
+        assert!(reports.monthly.total.premium > 0.0);
+        assert!(reports.monthly.total.dividends > 0.0);
     }
 }

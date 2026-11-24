@@ -9,7 +9,8 @@ import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/compo
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { NativeSelect } from '@/components/native-select';
 import { downloadCsv, money } from './lib';
-import type { MonthlyIncome } from './types';
+import { GlossaryTerm } from './glossary';
+import type { AccountReport, MonthlyIncome } from './types';
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
@@ -20,7 +21,11 @@ const LINE = 'rgba(24, 24, 27, .18)';
 const GRID = 'rgba(24, 24, 27, .07)';
 const FONT = 'Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif';
 
-export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }) {
+export function MonthlyIncomeReport({ report, accounts, scope = 'account' }: {
+  report: MonthlyIncome | null;
+  accounts?: AccountReport[];
+  scope?: 'account' | 'all';
+}) {
   const element = useRef<HTMLDivElement>(null);
   const months = report?.months ?? [];
   const years = useMemo(() => [...new Set(months.map(month => month.month.slice(0, 4)))].sort().reverse(), [months]);
@@ -43,6 +48,29 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
     total: sum.total + month.total,
     closedEntries: sum.closedEntries + month.closedEntries,
   }), { premium: 0, dividends: 0, fees: 0, adjustments: 0, total: 0, closedEntries: 0 }), [rows]);
+
+  const accountRows = useMemo(() => {
+    if (!accounts?.length) return [];
+    return accounts
+      .map(account => {
+        const months = account.monthly.months.filter(month => year === 'all' || month.month.startsWith(year));
+        return months.reduce((sum, month) => ({
+          accountId: account.accountId,
+          accountName: account.accountName,
+          premium: sum.premium + month.premium,
+          dividends: sum.dividends + month.dividends,
+          fees: sum.fees + month.fees,
+          adjustments: sum.adjustments + month.adjustments,
+          total: sum.total + month.total,
+          closedEntries: sum.closedEntries + month.closedEntries,
+        }), {
+          accountId: account.accountId,
+          accountName: account.accountName,
+          premium: 0, dividends: 0, fees: 0, adjustments: 0, total: 0, closedEntries: 0,
+        });
+      })
+      .filter(row => row.premium !== 0 || row.dividends !== 0 || row.fees !== 0 || row.adjustments !== 0 || row.closedEntries > 0);
+  }, [accounts, year]);
 
   useEffect(() => {
     if (!element.current || !chartRows.length) return;
@@ -103,6 +131,9 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
         <CardDescription>已落袋口径 · 美东交易日按月</CardDescription>
       </CardHeader>
       <CardPanel className="space-y-4">
+        <p className="report-basis rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          口径：仅已实现 · 期权净收租按平仓日 · 分红、费用与调整按事件日 · 入金 / 出金不计入收益
+        </p>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             年份
@@ -113,14 +144,62 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
           </label>
           <Button variant="outline" size="sm" onClick={exportRows} disabled={!rows.length}>导出 CSV</Button>
         </div>
+        {scope === 'all' && accounts && (
+          <div className="account-income-breakdown space-y-2">
+            <h3 className="font-heading text-sm font-semibold">按账户列示</h3>
+            {accountRows.length ? (
+              <div className="overflow-hidden rounded-xl border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>账户</TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="netPremium" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="dividends" /></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></TableHead>
+                      <TableHead className="text-right"><GlossaryTerm id="adjustments" /></TableHead>
+                      <TableHead className="text-right">合计</TableHead>
+                      <TableHead className="text-right">了结合约</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accountRows.map(row => (
+                      <TableRow key={row.accountId}>
+                        <TableCell className="font-medium">{row.accountName}</TableCell>
+                        <TableCell className="num text-right">{money(row.premium)}</TableCell>
+                        <TableCell className="num text-right">{money(row.dividends)}</TableCell>
+                        <TableCell className="num text-right">{money(row.fees)}</TableCell>
+                        <TableCell className="num text-right">{money(row.adjustments)}</TableCell>
+                        <TableCell className={`num text-right ${row.total < 0 ? 'negative text-destructive-foreground' : 'positive text-success-foreground'}`}>{money(row.total)}</TableCell>
+                        <TableCell className="num text-right">{row.closedEntries}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell>合计</TableCell>
+                      <TableCell className="num text-right">{money(totals.premium)}</TableCell>
+                      <TableCell className="num text-right">{money(totals.dividends)}</TableCell>
+                      <TableCell className="num text-right">{money(totals.fees)}</TableCell>
+                      <TableCell className="num text-right">{money(totals.adjustments)}</TableCell>
+                      <TableCell className="num text-right">{money(totals.total)}</TableCell>
+                      <TableCell className="num text-right">{totals.closedEntries}</TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">所选年份没有账户收益。</p>
+            )}
+          </div>
+        )}
         {!months.length ? (
           <p className="text-sm text-muted-foreground">了结第一笔卖出开仓后，这里会按月份累计净收租、分红与现金调整。</p>
         ) : (
           <>
             <div className="income-summary grid gap-4 rounded-xl border bg-muted/40 p-4 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">区间合计</span><strong className={`num text-xl font-semibold ${totals.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(totals.total)}</strong><small className="text-xs text-muted-foreground">{rows.length} 个月 · 净收租减费用加调整</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">已落袋净收租</span><strong className="num text-xl font-semibold">{money(totals.premium)}</strong><small className="text-xs text-muted-foreground">已扣开仓与平仓费用</small></div>
-              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">分红</span><strong className="num text-xl font-semibold">{money(totals.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="realizedTotal" /></span><strong className={`num text-xl font-semibold ${totals.total < 0 ? 'negative text-destructive-foreground' : ''}`}>{money(totals.total)}</strong><small className="text-xs text-muted-foreground">{rows.length} 个月 · 净收租减费用加调整</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="netPremium" /></span><strong className="num text-xl font-semibold">{money(totals.premium)}</strong><small className="text-xs text-muted-foreground">已扣开仓与平仓费用</small></div>
+              <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="dividends" /></span><strong className="num text-xl font-semibold">{money(totals.dividends)}</strong><small className="text-xs text-muted-foreground">按派发日计入</small></div>
               <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">了结合约</span><strong className="num text-xl font-semibold">{totals.closedEntries}<em className="text-xs font-normal not-italic text-muted-foreground"> 笔</em></strong><small className="text-xs text-muted-foreground">未平仓权利金不计入</small></div>
             </div>
             <div ref={element} className="income-chart chart-surface" role="img" aria-label="收租月报图：柱形为月度合计，折线为所选区间累计" />
@@ -129,10 +208,10 @@ export function MonthlyIncomeReport({ report }: { report: MonthlyIncome | null }
                 <TableHeader>
                   <TableRow>
                     <TableHead>月份</TableHead>
-                    <TableHead className="text-right">净收租</TableHead>
-                    <TableHead className="text-right">分红</TableHead>
-                    <TableHead className="text-right">费用（含账户级）</TableHead>
-                    <TableHead className="text-right">调整 / 利息</TableHead>
+                    <TableHead className="text-right"><GlossaryTerm id="netPremium" /></TableHead>
+                    <TableHead className="text-right"><GlossaryTerm id="dividends" /></TableHead>
+                    <TableHead className="text-right"><GlossaryTerm id="fees">费用（含账户级）</GlossaryTerm></TableHead>
+                    <TableHead className="text-right"><GlossaryTerm id="adjustments" /></TableHead>
                     <TableHead className="text-right">合计</TableHead>
                     <TableHead className="text-right">区间累计</TableHead>
                     <TableHead className="text-right">了结合约</TableHead>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, Radar } from 'lucide-react';
+import { LayoutDashboard, Layers, BookOpen, Plus, AlarmClock, RefreshCw, ArrowLeft, ChevronRight, Activity, Upload, CalendarDays, ChartColumn, Wallet, Table2, TrendingDown, Radar, History } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -22,7 +22,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Footnote, Stat, StatGrid } from '@/components/page-kit';
 import { MarketPage, usePortfolioQuotes, latestPrice, quoteTime } from './MarketData';
-import type { Account, AllAccountsOverview, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, InsightItem, Ledger, MonthlyIncome, NewEvent, Position, Price, RestoreStatus, TodoView } from './types';
+import type { Account, AllAccountsOverview, AllAccountsReports, AllHoldings, AnnualReport, AppInfo, Campaign, Dashboard, Detail, EventRow, InsightItem, Ledger, MonthlyIncome, NewEvent, OnboardingStatus, Position, Price, RestoreStatus, TodoView } from './types';
 import { api, chainStatusLabel, chainTime, desktop, labels, money, percent, pnlLabel, pnlTone, today } from './lib';
 import { CostChart } from './CostChart';
 import { LedgerTable } from './LedgerTable';
@@ -49,10 +49,13 @@ import { AboutPanel } from './AboutPanel';
 import { CostReduction } from './CostReduction';
 import { TodoCard } from './TodoCard';
 import { WatchlistScan } from './WatchlistScan';
+import { AuditLogPage } from './AuditLog';
+import { GlossaryTerm } from './glossary';
+import { OnboardingGuide } from './Onboarding';
 import { useOptionQuotes } from './hooks/useOptionQuotes';
 
 const ACCOUNT_KEY = 'wheel.account';
-type Page = 'dashboard' | 'positions' | 'cost' | 'watchlist' | 'ledger' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
+type Page = 'dashboard' | 'positions' | 'cost' | 'watchlist' | 'ledger' | 'audit' | 'entry' | 'import' | 'overview' | 'holdings' | 'expiry' | 'calendar' | 'reports' | 'market' | 'settings' | 'detail';
 type ReportTab = 'income' | 'annual' | 'compare';
 const navigation: NavGroup[] = [
   { id: 'daily', title: '日常', items: [
@@ -63,6 +66,7 @@ const navigation: NavGroup[] = [
   ] },
   { id: 'books', title: '账本', items: [
     { id: 'ledger', label: '收租台账', icon: BookOpen },
+    { id: 'audit', label: '审计日志', icon: History },
     { id: 'import', label: '导入', icon: Upload },
   ] },
   { id: 'review', title: '复盘', items: [
@@ -99,6 +103,12 @@ export default function App() {
   const [holdingsError, setHoldingsError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [todos, setTodos] = useState<TodoView | null>(null);
+  const [allReports, setAllReports] = useState<AllAccountsReports | null>(null);
+  const [allReportsBusy, setAllReportsBusy] = useState(false);
+  const [allReportsError, setAllReportsError] = useState('');
+  const [reportScope, setReportScope] = useState<'account' | 'all'>('account');
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [scanCampaign, setScanCampaign] = useState<string | null>(null);
@@ -170,6 +180,34 @@ export default function App() {
       .catch(() => { if (!cancelled) setTodos(null); });
     return () => { cancelled = true; };
   }, [accountId, data]);
+  useEffect(() => {
+    if (!desktop) return;
+    let cancelled = false;
+    api<OnboardingStatus>('onboarding_status')
+      .then(status => {
+        if (cancelled) return;
+        setOnboarding(status);
+        setOnboardingOpen(status.needed);
+      })
+      .catch(() => { /* older builds have no guide; the app still loads */ });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!desktop || page !== 'reports' || reportScope !== 'all') return;
+    let cancelled = false;
+    setAllReportsBusy(true);
+    setAllReportsError('');
+    api<AllAccountsReports>('all_accounts_reports')
+      .then(result => { if (!cancelled) setAllReports(result); })
+      .catch(failure => {
+        if (!cancelled) {
+          setAllReports(null);
+          setAllReportsError(String(failure));
+        }
+      })
+      .finally(() => { if (!cancelled) setAllReportsBusy(false); });
+    return () => { cancelled = true; };
+  }, [page, reportScope, data]);
   useEffect(() => { if (page === 'overview') void loadOverview(); }, [page, data, accounts, loadOverview]);
   useEffect(() => { if (page === 'holdings') void loadHoldings(); }, [page, data, accounts, loadHoldings]);
   useEffect(() => {
@@ -438,9 +476,9 @@ export default function App() {
               {page === 'dashboard' && !unavailable && (
                 <>
                   <StatGrid>
-                    <Stat label="已落袋净收租" value={money(data?.summary.premiumRealized ?? 0)} hint="已经了结的期权净收入" />
-                    <Stat label="未平仓净权利金" value={money(data?.summary.premiumOpen ?? 0)} hint={`${data?.summary.openContracts ?? 0} 手合约仍待了结`} />
-                    <Stat label="Put 资金义务" value={money(data?.summary.collateral ?? 0)} hint="按行权价计算" />
+                    <Stat label={<GlossaryTerm id="premiumRealized" />} value={money(data?.summary.premiumRealized ?? 0)} hint="已经了结的期权净收入" />
+                    <Stat label={<GlossaryTerm id="premiumOpen" />} value={money(data?.summary.premiumOpen ?? 0)} hint={`${data?.summary.openContracts ?? 0} 手合约仍待了结`} />
+                    <Stat label={<GlossaryTerm id="collateral" />} value={money(data?.summary.collateral ?? 0)} hint="按行权价计算" />
                     <Stat
                       label="进行中的战役"
                       value={<>{data?.summary.activeCampaigns ?? 0}<span className="ml-1 text-base font-normal text-muted-foreground">个</span></>}
@@ -500,6 +538,7 @@ export default function App() {
                 </>
               )}
 
+              {page === 'audit' && <AuditLogPage accountId={accountId} />}
               {page === 'cost' && !unavailable && (
                 <CostReduction accountId={accountId} campaigns={data?.campaigns ?? []} positions={positions} initialCampaignId={scanCampaign} cashTracked={data?.summary.cashTracked ?? false} onEntry={prefill => startEntry(prefill)} />
               )}
@@ -521,14 +560,40 @@ export default function App() {
 
               {page === 'reports' && !unavailable && (
                 <>
-                  <ViewSwitch
-                    label="报告分类"
-                    value={reportTab}
-                    onChange={setReportTab}
-                    options={[{ value: 'income', label: '收租月报' }, { value: 'annual', label: '年度报表' }, { value: 'compare', label: '战役对比' }]}
-                  />
-                  {reportTab === 'income' && <MonthlyIncomeReport report={income} />}
-                  {reportTab === 'annual' && <AnnualReportPage report={annual} />}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <ViewSwitch
+                      label="报告范围"
+                      value={reportScope}
+                      onChange={setReportScope}
+                      options={[{ value: 'account', label: '当前账户' }, { value: 'all', label: '全部账户' }]}
+                    />
+                    <ViewSwitch
+                      label="报告分类"
+                      value={reportTab}
+                      onChange={setReportTab}
+                      options={[{ value: 'income', label: '收租月报' }, { value: 'annual', label: '年度报表' }, { value: 'compare', label: '战役对比' }]}
+                    />
+                  </div>
+                  {reportScope === 'all' && allReportsError && (
+                    <Alert variant="error">
+                      <AlertDescription>全部账户汇总读取失败：{allReportsError}</AlertDescription>
+                    </Alert>
+                  )}
+                  {reportScope === 'all' && allReportsBusy && <p role="status" className="text-sm text-muted-foreground">正在汇总全部账户的已实现收益…</p>}
+                  {reportTab === 'income' && (
+                    <MonthlyIncomeReport
+                      report={reportScope === 'all' ? allReports?.monthly ?? null : income}
+                      accounts={reportScope === 'all' ? allReports?.accounts : undefined}
+                      scope={reportScope}
+                    />
+                  )}
+                  {reportTab === 'annual' && (
+                    <AnnualReportPage
+                      report={reportScope === 'all' ? allReports?.annual ?? null : annual}
+                      accounts={reportScope === 'all' ? allReports?.accounts : undefined}
+                      scope={reportScope}
+                    />
+                  )}
                   {reportTab === 'compare' && <CampaignCompare campaigns={data?.campaigns ?? []} entries={ledger?.entries ?? []} asOf={asOf} />}
                 </>
               )}
@@ -738,6 +803,21 @@ export default function App() {
           </SidebarInset>
         </SidebarProvider>
 
+        {desktop && (
+          <OnboardingGuide
+            open={onboardingOpen}
+            accountId={accountId}
+            accountName={currentAccount?.name ?? '默认账户'}
+            onDeposited={() => reload()}
+            onFinished={() => {
+              setOnboardingOpen(false);
+              setOnboarding(status => (status ? { ...status, needed: false } : status));
+            }}
+            onStartEntry={() => startEntry()}
+            onOpenAccount={id => { switchAccount(id); setPage('dashboard'); }}
+          />
+        )}
+
         <AlertDialog open={!!pendingDelete} onOpenChange={open => { if (!open && !deleting) setPendingDelete(null); }}>
           <AlertDialogPopup>
             <AlertDialogHeader>
@@ -845,7 +925,11 @@ function CampaignCard({ campaign: c, quote, onOpen, variant = 'row' }: { campaig
       <div className="campaign-cost mt-4">
         <div className="cost-focus">
           <span className="cost-label text-xs text-muted-foreground">
-            {c.status === 'closed' ? '本轮总收益' : c.shares ? '已落袋有效成本 / 股' : '累计已落袋净收租'}
+            {c.status === 'closed'
+              ? <GlossaryTerm id="realizedPnl" />
+              : c.shares
+                ? <GlossaryTerm id="costB">已落袋有效成本 / 股</GlossaryTerm>
+                : <GlossaryTerm id="premiumRealized">累计已落袋净收租</GlossaryTerm>}
           </span>
           <strong className="num mt-0.5 block text-2xl font-semibold tracking-tight">
             {money(c.status === 'closed' ? c.realizedPnl : c.shares ? c.costB : c.premiumRealized)}
@@ -855,10 +939,10 @@ function CampaignCard({ campaign: c, quote, onOpen, variant = 'row' }: { campaig
         {c.status !== 'closed' && <CostRuler campaign={c} />}
         {variant === 'row' && (
           <div className="cost-breakdown mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">纯股票成本</span><strong className="num text-sm font-medium">{money(c.costA)}</strong></div>
-            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">含未平仓成本</span><strong className="num text-sm font-medium">{money(c.costC)}</strong></div>
-            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">已落袋权利金</span><strong className="num text-sm font-medium">{money(c.premiumRealized)}</strong></div>
-            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground">未平仓权利金</span><strong className="num text-sm font-medium">{money(c.premiumOpen)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="costA" /></span><strong className="num text-sm font-medium">{money(c.costA)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="costC" /></span><strong className="num text-sm font-medium">{money(c.costC)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="premiumRealized" /></span><strong className="num text-sm font-medium">{money(c.premiumRealized)}</strong></div>
+            <div className="grid gap-0.5"><span className="text-xs text-muted-foreground"><GlossaryTerm id="premiumOpen" /></span><strong className="num text-sm font-medium">{money(c.premiumOpen)}</strong></div>
           </div>
         )}
       </div>

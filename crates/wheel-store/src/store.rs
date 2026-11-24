@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use serde::{Deserialize, Serialize};
 use time::macros::format_description;
 use time::Date;
 use wheel_core::{
@@ -97,6 +98,19 @@ CREATE TABLE IF NOT EXISTS option_quotes (
   PRIMARY KEY (symbol, expiry, strike, right)
 );
 CREATE INDEX IF NOT EXISTS idx_option_quotes_symbol ON option_quotes (symbol, expiry, strike);
+
+-- Append-only trail of event inserts, edits and soft deletes. The events table
+-- only keeps the current row plus a tombstone, so edits would otherwise vanish.
+CREATE TABLE IF NOT EXISTS event_audit (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    TEXT NOT NULL,
+  account_id  TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  before_json TEXT,
+  after_json  TEXT,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_audit_account ON event_audit (account_id, id);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -631,6 +645,135 @@ pub fn get_event(conn: &Connection, event_id: &str) -> Result<Option<Event>> {
     }
 }
 
+/// A field snapshot kept in `event_audit`. Edits replace the live row, so the
+/// before/after values are the only record of what changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditSnapshot {
+    pub date: String,
+    pub kind: String,
+    pub symbol: String,
+    pub expiry: Option<String>,
+    pub strike: Option<f64>,
+    pub right: Option<String>,
+    pub multiplier: Option<u32>,
+    pub qty: u32,
+    pub price: f64,
+    pub fees: f64,
+    pub amount: f64,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub id: i64,
+    pub event_id: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub action: String,
+    pub recorded_at: String,
+    pub before: Option<AuditSnapshot>,
+    pub after: Option<AuditSnapshot>,
+}
+
+fn audit_snapshot(event: &Event) -> AuditSnapshot {
+    let (expiry, strike, right, multiplier) = contract_columns(event);
+    AuditSnapshot {
+        date: format_date(event.occurred_at),
+        kind: kind_to_str(event.kind).to_string(),
+        symbol: event.symbol.clone(),
+        expiry,
+        strike,
+        right,
+        multiplier: multiplier.map(|value| value as u32),
+        qty: event.qty,
+        price: event.price,
+        fees: event.fees,
+        amount: event.amount,
+        note: event.note.clone(),
+    }
+}
+
+fn write_audit(
+    conn: &Connection,
+    event_id: &str,
+    account_id: &str,
+    action: &str,
+    before: Option<&AuditSnapshot>,
+    after: Option<&AuditSnapshot>,
+) -> Result<()> {
+    let before = before.map(serde_json::to_string).transpose()?;
+    let after = after.map(serde_json::to_string).transpose()?;
+    conn.execute(
+        "INSERT INTO event_audit (event_id, account_id, action, before_json, after_json, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            event_id,
+            account_id,
+            action,
+            before,
+            after,
+            time::OffsetDateTime::now_utc().to_string(),
+        ],
+    )
+    .context("写入审计记录")?;
+    Ok(())
+}
+
+/// Newest-first audit entries, optionally scoped to one account and action.
+pub fn list_audit(
+    conn: &Connection,
+    account_id: Option<&str>,
+    action: Option<&str>,
+    limit: u32,
+) -> Result<Vec<AuditEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.event_id, a.account_id,
+                COALESCE(acc.name, a.account_id), a.action, a.recorded_at,
+                a.before_json, a.after_json
+         FROM event_audit a
+         LEFT JOIN accounts acc ON acc.id = a.account_id
+         WHERE (?1 IS NULL OR a.account_id = ?1)
+           AND (?2 IS NULL OR a.action = ?2)
+         ORDER BY a.id DESC
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(
+        params![account_id, action, i64::from(limit.clamp(1, 500))],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        },
+    )?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (id, event_id, account_id, account_name, action, recorded_at, before, after) = row?;
+        let parse = |raw: Option<String>| {
+            raw.and_then(|json| serde_json::from_str::<AuditSnapshot>(&json).ok())
+        };
+        entries.push(AuditEntry {
+            id,
+            event_id,
+            account_id,
+            account_name,
+            action,
+            recorded_at,
+            before: parse(before),
+            after: parse(after),
+        });
+    }
+    Ok(entries)
+}
+
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
     insert_events(conn, std::slice::from_ref(event))
 }
@@ -715,6 +858,15 @@ fn write_event(conn: &Connection, event: &Event) -> Result<()> {
         ],
     )
     .context("写入交易")?;
+    let snapshot = audit_snapshot(event);
+    write_audit(
+        conn,
+        &event.id,
+        &event.account_id,
+        "insert",
+        None,
+        Some(&snapshot),
+    )?;
     Ok(())
 }
 
@@ -741,6 +893,7 @@ pub fn update_event(conn: &Connection, event: &Event) -> Result<bool> {
     let Some(current) = events.iter_mut().find(|current| current.id == event.id) else {
         return Ok(false);
     };
+    let before = audit_snapshot(current);
     *current = event.clone();
     replay_checked(&account_id, &events, get_settings(&tx)?)
         .context("修改后的事件历史无效；如果后续交易依赖这条记录，请先撤销后续交易")?;
@@ -774,6 +927,15 @@ pub fn update_event(conn: &Connection, event: &Event) -> Result<bool> {
         ],
     )
     .context("修改交易")?;
+    let after = audit_snapshot(event);
+    write_audit(
+        &tx,
+        &event.id,
+        &event.account_id,
+        "update",
+        Some(&before),
+        Some(&after),
+    )?;
     tx.commit()?;
     Ok(true)
 }
@@ -813,8 +975,14 @@ pub fn delete_events(conn: &Connection, event_ids: &[String]) -> Result<usize> {
         return Ok(0);
     }
     let found_set: std::collections::BTreeSet<String> = found.iter().cloned().collect();
+    let mut removed: HashMap<String, (String, AuditSnapshot)> = HashMap::new();
     for account in &accounts {
         let mut remaining = list_events(&tx, account)?;
+        for event in &remaining {
+            if found_set.contains(&event.id) {
+                removed.insert(event.id.clone(), (account.clone(), audit_snapshot(event)));
+            }
+        }
         remaining.retain(|event| !found_set.contains(&event.id));
         replay_checked(account, &remaining, get_settings(&tx)?).context("撤销后的事件历史无效")?;
     }
@@ -824,6 +992,9 @@ pub fn delete_events(conn: &Connection, event_ids: &[String]) -> Result<usize> {
             "UPDATE events SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
             params![id, &stamp],
         )?;
+        if let Some((account, snapshot)) = removed.get(id) {
+            write_audit(&tx, id, account, "delete", Some(snapshot), None)?;
+        }
     }
     tx.commit()?;
     Ok(found.len())
@@ -1334,6 +1505,39 @@ mod tests {
         assert_eq!(list_events(&conn, "main").unwrap(), vec![corrected]);
         assert_eq!(next_seq(&conn, "main").unwrap(), 2);
         assert!(!update_event(&conn, &buy("missing", 2)).unwrap());
+    }
+
+    #[test]
+    fn audit_trail_records_insert_update_and_delete_snapshots() {
+        let conn = db();
+        let original = buy("buy", 1);
+        insert_event(&conn, &original).unwrap();
+
+        let entries = list_audit(&conn, None, None, 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "insert");
+        assert_eq!(entries[0].account_name, "main");
+        assert!(entries[0].before.is_none());
+        assert_eq!(entries[0].after.as_ref().unwrap().price, 150.0);
+
+        let mut corrected = original.clone();
+        corrected.price = 149.5;
+        corrected.note = "修正成交价".to_string();
+        update_event(&conn, &corrected).unwrap();
+        let entries = list_audit(&conn, Some("main"), Some("update"), 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].before.as_ref().unwrap().price, 150.0);
+        assert_eq!(entries[0].after.as_ref().unwrap().price, 149.5);
+        assert_eq!(entries[0].after.as_ref().unwrap().note, "修正成交价");
+
+        delete_event(&conn, "buy").unwrap();
+        let entries = list_audit(&conn, None, None, 10).unwrap();
+        assert_eq!(entries[0].action, "delete");
+        assert_eq!(entries[0].before.as_ref().unwrap().price, 149.5);
+        assert!(entries[0].after.is_none());
+        assert!(list_audit(&conn, Some("other"), None, 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

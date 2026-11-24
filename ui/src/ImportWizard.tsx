@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { decodeCsvFile } from './csv';
 import { api, desktop, labels } from './lib';
 import type {
+  BrokerPreset,
   CandidateEvent,
   CandidateRow,
   ColumnMapping,
@@ -101,7 +102,8 @@ const MAPPING_SOURCE = {
   detected: '自动识别',
   saved: '已保存的映射',
   manual: '手动映射',
-  vision: 'AI 截图'
+  vision: 'AI 截图',
+  preset: '券商预设'
 } as const;
 
 /** Label wrapper used across the wizard forms. */
@@ -141,6 +143,17 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
   const [batchError, setBatchError] = useState('');
   const [batchBusy, setBatchBusy] = useState(false);
   const [pendingBatch, setPendingBatch] = useState<ImportBatch | null>(null);
+  const [presets, setPresets] = useState<BrokerPreset[]>([]);
+  const [preset, setPreset] = useState('');
+
+  useEffect(() => {
+    if (!desktop) return;
+    let cancelled = false;
+    api<BrokerPreset[]>('import_presets')
+      .then(list => { if (!cancelled) setPresets(list); })
+      .catch(() => { /* presets are optional; generic detection still works */ });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => () => {
     if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
@@ -184,7 +197,7 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setStep(nextStep);
   }
 
-  async function runPreview(text: string, nextMapping?: ColumnMapping) {
+  async function runPreview(text: string, nextMapping?: ColumnMapping, nextPreset?: string) {
     if (!desktop) {
       setError('当前是浏览器预览，请通过桌面应用导入本地账本。');
       return;
@@ -194,7 +207,12 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
     setInfo('');
     try {
       const result = await api<ImportPreview>('import_preview', {
-        req: { text, mapping: nextMapping ?? undefined, accountId }
+        req: {
+          text,
+          mapping: nextMapping ?? undefined,
+          accountId,
+          preset: nextMapping ? undefined : (nextPreset ?? preset) || undefined,
+        }
       });
       applyPreview(result, 'map');
     } catch (failure) {
@@ -555,6 +573,26 @@ export function ImportWizard({ accountId, onCommitted, onOpenVisionSettings }: {
                     {encodingWarning && <> · {encodingWarning}</>}
                   </p>
                 )}
+                <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                  券商 CSV 预设
+                  <NativeSelect
+                    aria-label="券商 CSV 预设"
+                    className="max-w-64"
+                    value={preset}
+                    disabled={!desktop || busy}
+                    onChange={event => {
+                      const next = event.target.value;
+                      setPreset(next);
+                      if (paste.trim()) void runPreview(paste, undefined, next);
+                    }}
+                  >
+                    <option value="">通用自动识别</option>
+                    {presets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </NativeSelect>
+                  <span className="font-normal leading-relaxed text-muted-foreground">
+                    {presets.find(item => item.id === preset)?.note ?? '按表头自动识别；选择券商可提高特殊表头的识别率，映射仍可在下一步手动修改。'}
+                  </span>
+                </label>
                 <label className="full import-paste grid gap-1.5 text-xs font-medium text-muted-foreground">
                   粘贴 CSV 文本
                   <Textarea
